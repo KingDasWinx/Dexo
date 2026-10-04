@@ -12,6 +12,7 @@ allow = [
     "CDLA-Permissive-2.0",
     "BSL-1.0",
     "NCSA",
+    "CC0-1.0",
 ]
 
 [advisories]

@@ -1,0 +1,48 @@
+{
+  "query": "/* select#1 */ select `d`.`c`.`id` AS `id`,(/* select#2 */ select count(0) from `d`.`o` where (`d`.`o`.`customer_id` = `d`.`c`.`id`)) AS `n` from `d`.`c`",
+  "covering": true,
+  "operation": "Covering index scan on c using PRIMARY",
+  "index_name": "PRIMARY",
+  "query_type": "select",
+  "table_name": "c",
+  "access_type": "index",
+  "schema_name": "d",
+  "used_columns": [
+    "id"
+  ],
+  "estimated_rows": 3.0,
+  "index_access_type": "index_scan",
+  "estimated_total_cost": 0.55,
+  "inputs_from_select_list": [
+    {
+      "inputs": [
+        {
+          "covering": true,
+          "operation": "Covering index lookup on o using customer_id (customer_id=c.id)",
+          "index_name": "customer_id",
+          "table_name": "o",
+          "access_type": "index",
+          "schema_name": "d",
+          "used_columns": [
+            "customer_id"
+          ],
+          "estimated_rows": 1.3333333730697632,
+          "lookup_condition": "customer_id=c.id",
+          "index_access_type": "index_lookup",
+          "estimated_total_cost": 0.3834248118879505
+        }
+      ],
+      "heading": "Select #2 (subquery in projection; dependent)",
+      "subquery": true,
+      "dependent": true,
+      "functions": [
+        "count(0)"
+      ],
+      "operation": "Aggregate: count(0)",
+      "access_type": "aggregate",
+      "estimated_rows": 1.0,
+      "subquery_location": "projection",
+      "estimated_total_cost": 0.5167581491949269
+    }
+  ]
+}

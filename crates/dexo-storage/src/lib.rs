@@ -8,10 +8,12 @@ mod layout;
 mod mcp;
 mod mcp_profile;
 mod migrations;
+mod object_note;
 mod object_usage;
 mod project;
 mod recent;
 mod recovery;
+mod saved_query;
 mod schema_snapshot;
 mod session_recovery;
 mod snippet;
@@ -19,25 +21,27 @@ pub mod sql_files;
 
 pub use catalog_cache::{CatalogCache, CatalogSnapshotMetadata};
 pub use connection::{
-    ConnectionRepository, ImportPreview, ImportReport, ImportResolution, export_portable,
-    import_portable, import_portable_resolved, preview_import,
+    ConnectionRepository, ImportPreview, ImportReport, ImportResolution, commands_of,
+    export_portable, import_portable, import_portable_resolved, preview_import,
 };
 pub use database::{AppPaths, Database};
 pub use document::{DocumentRepository, FileFingerprint, StoredDocument, has_external_conflict};
 pub use explain_plan::{ExplainPlanRepository, SavedExplainPlan};
-pub use history::HistoryRepository;
+pub use history::{HistoryOutcome, HistoryRepository, HistoryRow, NewHistoryEntry};
 pub use layout::{LAYOUT_VERSION, LayoutRepository, Preferences, WorkbenchLayout};
-pub use mcp::SqliteGrantLedger;
+pub use mcp::{SqliteGrantLedger, waiting_approvals};
 pub use mcp_profile::McpProfileRepository;
 pub use migrations::{
     LATEST_SCHEMA_VERSION, MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5,
     MIGRATION_6, MIGRATION_7, MIGRATION_8, MIGRATION_9, MIGRATION_10, MIGRATION_11, apply_pending,
     read_schema_version,
 };
+pub use object_note::ObjectNoteRepository;
 pub use object_usage::{ObjectUsage, ObjectUsageRepository};
 pub use project::{ProjectDeletePreview, ProjectRepository};
 pub use recent::RecentItemsRepository;
 pub use recovery::{RecoveryDocument, RecoveryRepository};
-pub use schema_snapshot::SchemaSnapshotStore;
+pub use saved_query::{SavedQuery, SavedQueryRepository};
+pub use schema_snapshot::{SchemaSnapshotStore, SnapshotInfo};
 pub use session_recovery::{SessionRecoveryRepository, SessionRecoveryState};
 pub use snippet::SnippetRepository;

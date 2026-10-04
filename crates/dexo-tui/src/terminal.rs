@@ -47,6 +47,10 @@ pub trait TerminalControl {
     fn keyboard_enhancement(&self, _on: bool) -> Result<bool, TuiError> {
         Ok(false)
     }
+    /// A block caret, a bar, or (`None`) the shape the user's terminal is set to.
+    fn cursor_shape(&self, _block: Option<bool>) -> Result<(), TuiError> {
+        Ok(())
+    }
 }
 
 pub struct TerminalGuard<B: TerminalControl> {
@@ -55,6 +59,8 @@ pub struct TerminalGuard<B: TerminalControl> {
     raw: bool,
     mouse: bool,
     keyboard_enhanced: bool,
+    /// The caret shape asked for: block or bar. `None` leaves the terminal's own.
+    shape: Option<bool>,
     caret: Option<(u8, u8, u8)>,
     background: Option<(u8, u8, u8)>,
     paste: bool,
@@ -75,10 +81,17 @@ impl<B: TerminalControl> TerminalGuard<B> {
             raw: false,
             mouse: false,
             keyboard_enhanced: false,
+            shape: None,
             caret: None,
             background: None,
             paste: false,
         })
+    }
+
+    /// Whether keys arrive unambiguously (the kitty keyboard protocol), so Ctrl+H is not
+    /// also what Ctrl+Backspace sends.
+    pub fn keyboard_enhanced(&self) -> bool {
+        self.keyboard_enhanced
     }
 
     pub fn enable_paste(&mut self) -> Result<(), TuiError> {
@@ -122,6 +135,16 @@ impl<B: TerminalControl> TerminalGuard<B> {
         Ok(())
     }
 
+    /// Offered every frame like the colours; only a change reaches the terminal.
+    pub fn set_cursor_shape(&mut self, shape: Option<bool>) -> Result<(), TuiError> {
+        if self.shape == shape {
+            return Ok(());
+        }
+        self.backend.cursor_shape(shape)?;
+        self.shape = shape;
+        Ok(())
+    }
+
     /// Idempotent like `set_mouse`: the loop offers the theme's caret colour every
     /// frame and only a change reaches the terminal.
     pub fn set_cursor_color(&mut self, rgb: Option<(u8, u8, u8)>) -> Result<(), TuiError> {
@@ -143,6 +166,23 @@ impl<B: TerminalControl> TerminalGuard<B> {
         Ok(())
     }
 
+    /// Hands the terminal to another program -- the external editor -- as `restore`
+    /// would, but the guard stays usable: `resume` takes it back.
+    pub fn suspend(&mut self) -> Suspended {
+        let suspended = Suspended { mouse: self.mouse };
+        self.restore();
+        suspended
+    }
+
+    /// Back to the alternate screen, raw mode and the keyboard protocol after `suspend`.
+    /// The caret and background colours are offered again by the next frame.
+    pub fn resume(&mut self, suspended: Suspended) -> Result<(), TuiError> {
+        self.backend.enter()?;
+        self.restored = false;
+        self.enable_raw()?;
+        self.set_mouse(suspended.mouse)
+    }
+
     pub fn restore(&mut self) {
         if self.restored {
             return;
@@ -158,6 +198,10 @@ impl<B: TerminalControl> TerminalGuard<B> {
         if self.caret.is_some() {
             let _ = self.backend.cursor_color(None);
             self.caret = None;
+        }
+        if self.shape.is_some() {
+            let _ = self.backend.cursor_shape(None);
+            self.shape = None;
         }
         if self.mouse {
             let _ = self.backend.mouse_capture(false);
@@ -177,6 +221,11 @@ impl<B: TerminalControl> TerminalGuard<B> {
     }
 }
 
+/// What `TerminalGuard::suspend` turned off and `resume` turns back on.
+pub struct Suspended {
+    mouse: bool,
+}
+
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -189,6 +238,7 @@ pub fn install_panic_hook() {
         let _ = write!(io::stdout(), "\x1b]112\x1b\\\x1b]111\x1b\\");
         let _ = execute!(
             io::stdout(),
+            crossterm::cursor::SetCursorStyle::DefaultUserShape,
             DisableBracketedPaste,
             DisableMouseCapture,
             LeaveAlternateScreen,
@@ -237,6 +287,17 @@ impl TerminalControl for CrosstermTerminal {
             None => write!(out, "\x1b]111\x1b\\")?,
         }
         out.flush()?;
+        Ok(())
+    }
+
+    fn cursor_shape(&self, block: Option<bool>) -> Result<(), TuiError> {
+        use crossterm::cursor::SetCursorStyle;
+        let style = match block {
+            Some(true) => SetCursorStyle::SteadyBlock,
+            Some(false) => SetCursorStyle::SteadyBar,
+            None => SetCursorStyle::DefaultUserShape,
+        };
+        execute!(io::stdout(), style)?;
         Ok(())
     }
 

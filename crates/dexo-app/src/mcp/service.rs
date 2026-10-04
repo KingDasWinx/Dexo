@@ -104,6 +104,25 @@ impl McpService {
         }
     }
 
+    /// Whether `object` may be shown, given the relation its `parent` id names. An index,
+    /// a constraint or a trigger has a name of its own (`secrets_pkey` is not `secrets`),
+    /// so its name alone would show what a hidden table has: these, and columns, are
+    /// visible only when their relation is.
+    pub fn visible_under(&self, object: &CatalogObject, parent: Option<&CatalogObject>) -> bool {
+        if !self.visible(object) {
+            return false;
+        }
+        if !matches!(
+            object.kind,
+            ObjectKind::Column | ObjectKind::Index | ObjectKind::Constraint | ObjectKind::Trigger
+        ) {
+            return true;
+        }
+        parent.is_some_and(|parent| {
+            object.parent.as_ref() == Some(&parent.id) && self.visible(parent)
+        })
+    }
+
     pub fn policy(&self) -> ObjectPolicy {
         ObjectPolicy::new(self.profile.selectors.clone())
     }
@@ -124,6 +143,13 @@ impl McpService {
             ));
         }
         let inspection = inspect_read(sql, connection.dialect).map_err(guard_error)?;
+        self.authorize_relations(connection, &inspection.relations)
+            .map(|_| ())
+    }
+
+    /// A hypothetical index: a `CREATE INDEX` on a table the agent may read.
+    pub fn authorize_index(&self, connection: &McpConnection, index: &str) -> Result<(), AppError> {
+        let inspection = dexo_sql::inspect_index(index, connection.dialect).map_err(guard_error)?;
         self.authorize_relations(connection, &inspection.relations)
             .map(|_| ())
     }
@@ -250,6 +276,7 @@ impl McpService {
         let page =
             Page::new(offset, limit.unwrap_or(100).clamp(1, cap)).map_err(map_driver_error)?;
         let request = DataRequest {
+            clauses: Default::default(),
             object: connection.qualified_name(target),
             columns: Vec::new(),
             filter: None,
@@ -285,17 +312,23 @@ impl McpService {
         Ok(result)
     }
 
+    /// The estimated plan of `sql`, with `indexes` as if they were built: each must be a
+    /// `CREATE INDEX` on a table the grant lets the agent read, and none is built.
     pub async fn explain(
         &self,
         session: &dyn Session,
         connection: &McpConnection,
         sql: &str,
+        indexes: &[String],
     ) -> Result<ExplainPlan, AppError> {
         self.authorize_read_sql(connection, sql)?;
+        for index in indexes {
+            self.authorize_index(connection, index)?;
+        }
         session
             .explain()
             .ok_or_else(|| AppError::new(ErrorCategory::Capability, "explain is unavailable"))?
-            .explain(ExplainRequest::estimated(sql))
+            .explain(ExplainRequest::with_indexes(sql, indexes.to_vec()))
             .await
             .map_err(map_driver_error)
     }
@@ -370,6 +403,23 @@ mod tests {
     use dexo_test_support::FakeSession;
     use tokio_util::sync::CancellationToken;
 
+    /// A hypothetical index must be an index definition on a table the agent may read.
+    #[test]
+    fn a_hypothetical_index_is_on_a_readable_table() {
+        let service = raw_service(10, 1024);
+        assert!(
+            service
+                .authorize_index(&pg(), "CREATE INDEX ON orders (customer_id)")
+                .is_ok()
+        );
+        assert!(
+            service
+                .authorize_index(&pg(), "CREATE INDEX ON secrets (owner)")
+                .is_err()
+        );
+        assert!(service.authorize_index(&pg(), "DROP TABLE orders").is_err());
+    }
+
     fn raw_service(max_rows: u64, max_bytes: u64) -> McpService {
         let mut profile = McpProfile::new("assistant");
         profile.query_mode = QueryMode::RawReadSql;
@@ -417,6 +467,36 @@ mod tests {
             QualifiedName::new(Some("db"), Some("other"), "other"),
             None,
         )));
+    }
+
+    #[test]
+    fn a_denied_tables_index_and_constraint_stay_hidden() {
+        use dexo_driver_api::ObjectKind::{Constraint, Index, Table};
+        use dexo_driver_api::{CatalogObject, ObjectId, QualifiedName};
+        let service = raw_service(10, 1024);
+        let object = |kind, name: &str, parent: Option<&str>| {
+            CatalogObject::new(
+                ObjectId::new(name),
+                kind,
+                QualifiedName::new(Some("db"), Some("public"), name),
+                parent.map(ObjectId::new),
+            )
+        };
+        let secrets = object(Table, "secrets", None);
+        let users = object(Table, "users", None);
+        let hidden_index = object(Index, "secrets_pkey", Some("secrets"));
+        let hidden_constraint = object(Constraint, "secrets_owner_fk", Some("secrets"));
+        assert!(service.visible(&hidden_index), "its own name is allowed");
+        assert!(!service.visible_under(&hidden_index, Some(&secrets)));
+        assert!(!service.visible_under(&hidden_constraint, Some(&secrets)));
+        assert!(!service.visible_under(&hidden_index, None));
+        let shown = object(Index, "users_pkey", Some("users"));
+        assert!(service.visible_under(&shown, Some(&users)));
+        assert!(
+            !service.visible_under(&shown, Some(&secrets)),
+            "not its parent"
+        );
+        assert!(service.visible_under(&users, None));
     }
 
     #[test]

@@ -101,14 +101,15 @@ pub fn render_sidebar(
         None,
         0,
         &mut tree,
-        connected,
-        offline,
+        (connected, offline),
+        active_connection,
     );
     let mut body = chrome_lines(state, false);
     body.extend(
         tree.into_iter()
             .skip(layout.offset)
-            .take(layout.nodes.len()),
+            .take(layout.nodes.len())
+            .map(|line| fit_badge(line, width)),
     );
     if body.is_empty() {
         body.push(if active_connection.is_empty() {
@@ -118,7 +119,29 @@ pub fn render_sidebar(
         });
     }
     lines.extend(body);
+    // A label wider than the pane ends in an ellipsis rather than at the border.
     lines
+        .into_iter()
+        .map(|line| crate::model::truncate_cell(&line, width))
+        .collect()
+}
+
+/// A row too long for the sidebar gives up the end of its name, not its badge: `[temporary]`
+/// and `[offline]` were cut to `[tempor` and `[off`, which says nothing.
+fn fit_badge(line: String, width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    if width == 0 || line.width() <= width {
+        return line;
+    }
+    let Some(at) = line.rfind(" [").filter(|_| line.ends_with(']')) else {
+        return line;
+    };
+    let (head, badge) = line.split_at(at);
+    let room = width.saturating_sub(badge.width());
+    if room < 4 {
+        return line;
+    }
+    format!("{}{badge}", crate::model::truncate_cell(head, room))
 }
 
 pub fn render_visible(state: &ExplorerState, viewport_rows: Option<usize>) -> Vec<String> {
@@ -133,13 +156,22 @@ fn chrome_lines(state: &ExplorerState, show_offline_chrome: bool) -> Vec<String>
     if !state.search.is_empty() {
         lines.push(format!("search:{}", state.search));
     }
-    if !state.filter_name.is_empty() || state.filter_kind.is_some() || state.favorites_only {
-        lines.push(format!(
-            "filter:{} kind:{} fav:{}",
-            state.filter_name,
-            state.filter_kind.as_deref().unwrap_or("-"),
-            state.favorites_only
-        ));
+    // In words, with the way back: the filter used to read `filter: kind:- fav:true`.
+    let mut shown = Vec::new();
+    if state.favorites_only {
+        shown.push("favorites only".to_string());
+    }
+    if !state.filter_name.is_empty() {
+        shown.push(format!("name \"{}\"", state.filter_name));
+    }
+    if let Some(kind) = &state.filter_kind {
+        shown.push(format!("kind {kind}"));
+    }
+    if !shown.is_empty() {
+        lines.push(format!("showing {}", shown.join(", ")));
+    }
+    if state.include_system {
+        lines.push("system objects shown".into());
     }
     lines
 }
@@ -151,7 +183,7 @@ fn render_visible_inner(
 ) -> Vec<String> {
     let header = chrome_lines(state, show_offline_chrome);
     let mut tree = Vec::new();
-    collect(&state.roots, state, &[], None, 0, &mut tree, "●", "○");
+    collect(&state.roots, state, &[], None, 0, &mut tree, ("●", "○"), "");
     let tree = window_tree(state, &tree, viewport_rows, header.len());
     let mut lines = header;
     lines.extend(tree);
@@ -183,6 +215,9 @@ fn connection_sessions(profiles: &[ConnectionRow], name: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// `marks` are the connected and the offline marker. The `[offline]` badge goes on the
+/// one connection whose catalog is a saved snapshot -- the active one, with no session --
+/// where it used to go on every connection once any catalog was.
 #[allow(clippy::too_many_arguments)]
 fn collect(
     nodes: &[ExplorerNode],
@@ -191,9 +226,10 @@ fn collect(
     owner: Option<&str>,
     depth: usize,
     lines: &mut Vec<String>,
-    connected: &str,
-    offline: &str,
+    marks: (&str, &str),
+    active: &str,
 ) {
+    let (connected, offline) = marks;
     for node in nodes {
         let owner = crate::screens::explorer::connection_name(&node.id).or(owner);
         if state.matches(node) {
@@ -209,12 +245,23 @@ fn collect(
             };
             let badge = match node.state {
                 NodeState::Loading(_) => " [loading]",
-                NodeState::Restricted => " [restricted]",
+                // The reason is too long for the pane: Inspect shows it.
+                NodeState::Restricted => " [no access]",
                 NodeState::Error { .. } => " [error]",
                 NodeState::Stale => " [stale]",
                 NodeState::Collapsed | NodeState::Expanded => {
-                    if is_connection_node(node) && state.offline {
+                    if is_connection_node(node)
+                        && state.offline
+                        && node.label == active
+                        && connection_sessions(profiles, &node.label) == 0
+                    {
                         " [offline]"
+                    } else if is_connection_node(node)
+                        && profiles
+                            .iter()
+                            .any(|row| row.temporary && row.profile.name == node.label)
+                    {
+                        " [temporary]"
                     } else {
                         ""
                     }
@@ -244,22 +291,35 @@ fn collect(
                 } else {
                     offline
                 };
-                format!("{marker} {label}{twistie}{fav}{badge}", label = node.label)
+                // A connection in a group is shown under its folder's name, as Browse
+                // Connections shows it; the sidebar is flat and had no trace of groups.
+                let group = profiles
+                    .iter()
+                    .find(|row| row.profile.name == node.label)
+                    .and_then(|row| row.profile.group_path.as_deref())
+                    .map(|group| format!("{group}/"))
+                    .unwrap_or_default();
+                format!(
+                    "{marker} {group}{label}{twistie}{fav}{badge}",
+                    label = node.label
+                )
             } else {
                 format!("{twistie}{fav}{}{detail}{badge}", node.label)
             };
             lines.push(format!("{cursor} {}{label}", "  ".repeat(depth)));
         }
-        if node.expanded {
+        // Favorites only reads the whole tree: a starred table in a closed schema is listed,
+        // and the closed parents that are not starred take no indent.
+        if node.expanded || state.favorites_only {
             collect(
                 &node.children,
                 state,
                 profiles,
                 owner,
-                depth + 1,
+                depth + usize::from(!state.favorites_only || state.matches(node)),
                 lines,
-                connected,
-                offline,
+                marks,
+                active,
             );
         }
     }
@@ -394,6 +454,7 @@ mod tests {
 
     fn connection_row(name: &str, sessions: usize) -> ConnectionRow {
         ConnectionRow {
+            temporary: false,
             profile: profile(name),
             sessions,
         }
@@ -439,6 +500,25 @@ mod tests {
         assert!(text.contains("○ prod"), "{text}");
         assert!(text.contains('▸'), "{text}");
         assert!(!text.contains("Catalog"), "{text}");
+    }
+
+    #[test]
+    fn a_label_wider_than_the_pane_ends_in_an_ellipsis() {
+        let mut explorer = ExplorerState::default();
+        explorer.sync_connection_roots(&[connection_row("a-very-long-connection-name", 0)], "");
+        let lines = super::render_sidebar(
+            &explorer,
+            &[connection_row("a-very-long-connection-name", 0)],
+            "",
+            true,
+            8,
+            12,
+        );
+        assert!(lines[1].ends_with('…'), "{lines:?}");
+        assert!(
+            lines.iter().all(|line| line.chars().count() <= 12),
+            "{lines:?}"
+        );
     }
 
     #[test]

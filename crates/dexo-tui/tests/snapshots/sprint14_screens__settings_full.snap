@@ -2,7 +2,7 @@
 source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
-default  no connection  —                                                                                                                                       
+[Workbench] Connections  Agents  Server  History   default  no connection  —                                                                                    
 ┌  Sidebar─────────────────┐ scratch.sql ×  +                                                                                                                   
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │No connections — press n  ││   1                                                                                                                              │
@@ -10,12 +10,9 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
 │                          ││                   ┌Settings──────────────────────────────────────────────────────┐                                               │
-│                          ││                   │> Mode       [Dark]  Light   Low color                        │                                               │
+│                          ││                   │> Theme      [1/6  Dexo]                                      │                                               │
+│                          ││                   │  Mode       [Dark]  Light   Low color                        │                                               │
 │                          ││                   │  Accent     [Cyan]  Blue   Violet   Green   Amber   Rose     │                                               │
 │                          ││                   │  Keymap     [Default]  Vim   Emacs                           │                                               │
 │                          ││                   │  Mouse      [On]  Off                                        │                                               │
@@ -24,7 +21,7 @@ default  no connection  —
 │                          ││                   │  Updates    [On]  Off                                        │                                               │
 │                          ││                   │                                                              │                                               │
 │                          ││                   │  [Reset to defaults]                                         │                                               │
-│                          ││                   │  up/down field  left/right change  r reset  esc close        │                                               │
+│                          ││                   │  Up/Down row  Left/Right change  e theme  r reset  Esc close │                                               │
 │                          ││                   └──────────────────────────────────────────────────────────────┘                                               │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
@@ -38,8 +35,11 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-│                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                          │┌  Results─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                          ││[Grid] Explain  Messages                                                                                                          │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
@@ -51,4 +51,4 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-disconnected  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                                                                            Ctrl+P  F1
+disconnected                                                                                                                                          Ctrl+P  F1

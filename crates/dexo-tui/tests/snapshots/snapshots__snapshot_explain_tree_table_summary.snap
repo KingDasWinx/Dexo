@@ -2,12 +2,12 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
-demo  local  public                                                                                                                                             
-┌  Sidebar─────────────────┐ scratch.sql ×  +                                                                                                                   
+[Workbench] Connections  Agents  Server  History   demo  local  public                                                                                          
+┌  Sidebar─────────────────┐ local·scratch.sql ×  +                                                                                                             
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ● local▾  [offline]     ││   1▸select 1                                                                                                                     │
-│>   ▸ public              ││                                                                                                                                  │
-│      mysql.users [restric││                                                                                                                                  │
+│> ● local▾                ││   1▸select 1                                                                                                                     │
+│    ▸ public              ││                                                                                                                                  │
+│      mysql.u… [no access]││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
@@ -39,16 +39,16 @@ demo  local  public
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-│                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                          │┌  Results─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                          ││ Grid [Explain] Messages  │ Tree                                                                                                  │
-│                          ││explain captured_at=1710000000 paused=false analyze=true confirmed=true                                                           │
-│                          ││planning_ms=0.04 execution_ms=0.21                                                                                                │
-│                          ││Seq Scan rel=items cost=22.5 rows=10/1000 time_ms=0.18 loops=1 actual rows >> estimate (heuristic)                                │
-│                          ││raw_bytes=59                                                                                                                      │
+│                          ││Analyzed · 0.21 ms execution · 0.04 ms planning                                                     rows est → act     time  loops│
+│                          ││Seq Scan on items  rows off x100                                                                         10 → 1000  0.18 ms      1│
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-local  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                                                                                   Ctrl+P  F1
+local  Ctrl+J run  Ctrl+N new sql  Ctrl+W close                                                                                                       Ctrl+P  F1

@@ -128,3 +128,113 @@ fn without_a_selection_copy_and_cut_take_the_whole_line() {
     assert_eq!(copied(&effects), Some("select 2;\n"));
     assert_eq!(model.active_document().text(), "select 1;\nselect 3;");
 }
+
+/// Each line edit is one undo step and counts in chars, so accented text survives.
+#[test]
+fn line_edits_comment_duplicate_and_move_in_one_undo_step() {
+    let text = "select ação\n  from t\nwhere x";
+    let mut model = editor_with(text, 2);
+    update(&mut model, Action::EditorToggleComment);
+    assert_eq!(
+        model.active_document().text(),
+        "-- select ação\n  from t\nwhere x"
+    );
+    assert_eq!(model.active_document().cursor(), 5);
+    update(&mut model, Action::EditorToggleComment);
+    assert_eq!(model.active_document().text(), text);
+
+    // A block: every touched line, the dashes at its shallowest indent.
+    let mut model = editor_with(text, 0);
+    model.active_document_mut().anchor = Some(3);
+    model.active_document_mut().sql.set_cursor(15).unwrap();
+    update(&mut model, Action::EditorToggleComment);
+    assert_eq!(
+        model.active_document().text(),
+        "-- select ação\n--   from t\nwhere x"
+    );
+    press(&mut model, KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(model.active_document().text(), text);
+
+    let mut model = editor_with(text, 14);
+    update(&mut model, Action::EditorDuplicateLine);
+    assert_eq!(
+        model.active_document().text(),
+        "select ação\n  from t\n  from t\nwhere x"
+    );
+    update(&mut model, Action::EditorMoveLine { up: true });
+    update(&mut model, Action::EditorMoveLine { up: true });
+    assert_eq!(
+        model.active_document().text(),
+        "  from t\nselect ação\n  from t\nwhere x"
+    );
+    // Nothing above the first line to trade with.
+    update(&mut model, Action::EditorMoveLine { up: true });
+    assert_eq!(model.active_document().cursor(), 2);
+    press(&mut model, KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(
+        model.active_document().text(),
+        "select ação\n  from t\n  from t\nwhere x"
+    );
+}
+
+/// What the external editor saved replaces the document as one undo step, without the
+/// line break editors add at the end; a failed edit leaves it alone.
+#[test]
+fn an_external_edit_is_one_undo_step() {
+    let mut model = editor_with("select 1;", 9);
+    let document = model.active_document().id.clone();
+    update(
+        &mut model,
+        Action::ExternalEditFinished {
+            document: document.clone(),
+            text: Err("vi exited with 1".into()),
+        },
+    );
+    assert_eq!(model.active_document().text(), "select 1;");
+    update(
+        &mut model,
+        Action::ExternalEditFinished {
+            document,
+            text: Ok("-- ação\nselect 1;\n".into()),
+        },
+    );
+    assert_eq!(model.active_document().text(), "-- ação\nselect 1;");
+    press(&mut model, KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(model.active_document().text(), "select 1;");
+}
+
+/// A cursor in the indentation stays there when the line is commented.
+#[test]
+fn toggling_a_comment_leaves_a_cursor_in_the_indent() {
+    let mut model = editor_with("    select 1", 1);
+    update(&mut model, Action::EditorToggleComment);
+    assert_eq!(model.active_document().text(), "    -- select 1");
+    assert_eq!(model.active_document().cursor(), 1);
+    update(&mut model, Action::EditorToggleComment);
+    assert_eq!(model.active_document().cursor(), 1);
+}
+
+/// A letter with Alt or Ctrl is a command: where nothing is bound to it, it does nothing
+/// instead of being typed (Alt+J, Alt+Z and Alt+F left `jzf` in the document).
+#[test]
+fn an_unbound_alt_letter_is_not_typed() {
+    let mut model = editor_with("select 1", 8);
+    for letter in ['j', 'z', 'f'] {
+        press(&mut model, KeyCode::Char(letter), KeyModifiers::ALT);
+    }
+    assert_eq!(model.active_document().text(), "select 1");
+    press(&mut model, KeyCode::Char('j'), KeyModifiers::NONE);
+    assert_eq!(model.active_document().text(), "select 1j");
+}
+
+/// Select All on an empty document left a selection that began with the first letter
+/// typed, and the second letter replaced it: `abc` came out as `bc`.
+#[test]
+fn select_all_in_an_empty_document_does_not_eat_the_first_letter() {
+    let mut model = editor_with("", 0);
+    press(&mut model, KeyCode::Char('a'), KeyModifiers::CONTROL);
+    for letter in ['a', 'b', 'c'] {
+        press(&mut model, KeyCode::Char(letter), KeyModifiers::NONE);
+    }
+    assert_eq!(model.active_document().text(), "abc");
+}

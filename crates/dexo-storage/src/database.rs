@@ -9,14 +9,12 @@ use crate::migrations::{self, LATEST_SCHEMA_VERSION};
 pub struct AppPaths {
     pub data_dir: PathBuf,
     pub database: PathBuf,
-    pub config: PathBuf,
 }
 
 impl AppPaths {
     pub fn from_data_home(data_dir: PathBuf) -> Self {
         Self {
             database: data_dir.join("dexo.db"),
-            config: data_dir.join("config.toml"),
             data_dir,
         }
     }
@@ -65,6 +63,25 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// An existing database opened only to be read, by a process that must leave it as
+    /// it is -- the language server an editor keeps running: nothing is created, migrated
+    /// or archived, and a lock another process holds is an error at once rather than a
+    /// wait. A database at a schema version other than this build's is refused, since
+    /// its tables may not read the way this build expects.
+    pub fn open_read_only(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(std::time::Duration::from_millis(50))?;
+        let version = migrations::read_schema_version(&conn);
+        anyhow::ensure!(
+            version == LATEST_SCHEMA_VERSION,
+            "the database is at schema version {version}, and this build reads {LATEST_SCHEMA_VERSION}"
+        );
+        Ok(Self { conn })
+    }
+
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
@@ -76,6 +93,12 @@ impl Database {
 
 fn prepare_connection(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    // Readers do not wait for a writer: the MCP server writing its audit, a catalog
+    // snapshot being saved, another Dexo. With the rollback journal each read waited out
+    // the write, up to the five-second busy timeout.
+    conn.query_row("PRAGMA journal_mode = WAL", [], |row| {
+        row.get::<_, String>(0)
+    })?;
     Ok(())
 }
 
@@ -172,7 +195,13 @@ fn backup_before_destructive_migration(path: &Path) -> anyhow::Result<()> {
     if version < LATEST_SCHEMA_VERSION {
         // ponytail: copy the whole file before any pending migration; skip when already current.
         // Ceiling: no per-migration destructive flag. Add one when a later sprint ships a breaking schema.
-        fs::copy(path, backup_path(path))?;
+        // Copied by SQLite, the write-ahead log included: a write another process has
+        // open -- the MCP server -- is in the log, not yet in the file a plain copy took.
+        let backup = backup_path(path);
+        if backup.exists() {
+            fs::remove_file(&backup)?;
+        }
+        Connection::open(path)?.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
     }
     Ok(())
 }
@@ -199,7 +228,7 @@ mod tests {
         }
 
         let db = Database::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 13);
+        assert_eq!(db.schema_version().unwrap(), 18);
         assert!(unsupported_archive_path(&path, 23).exists());
     }
 
@@ -218,15 +247,76 @@ mod tests {
         }
 
         let db = Database::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 13);
+        assert_eq!(db.schema_version().unwrap(), 18);
         assert!(unsupported_archive_path(&path, 23).exists());
+    }
+
+    /// Opening to read never creates, migrates or archives anything, and does not wait
+    /// on a lock another connection holds.
+    #[test]
+    fn open_read_only_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("none/dexo.db");
+        assert!(Database::open_read_only(&missing).is_err());
+        assert!(!missing.parent().unwrap().exists());
+
+        let path = dir.path().join("dexo.db");
+        Database::open(&path).unwrap();
+        let db = Database::open_read_only(&path).unwrap();
+        assert!(
+            db.connection()
+                .execute("DELETE FROM schema_migrations", [])
+                .is_err()
+        );
+        drop(db);
+
+        // A writer holding the database is not waited for: in WAL a reader reads past it.
+        let writer = rusqlite::Connection::open(&path).unwrap();
+        writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let started = std::time::Instant::now();
+        let _ = Database::open_read_only(&path);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        writer.execute_batch("ROLLBACK").unwrap();
+
+        writer
+            .execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES(23, datetime('now'))",
+                [],
+            )
+            .unwrap();
+        assert!(Database::open_read_only(&path).is_err());
+        assert!(path.exists());
+        assert!(!unsupported_archive_path(&path, 23).exists());
+    }
+
+    /// A reader is not held up by a write in progress on another connection.
+    #[test]
+    fn a_read_does_not_wait_for_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dexo.db");
+        Database::open(&path).unwrap();
+        let writer = Database::open(&path).unwrap();
+        writer
+            .connection()
+            .execute_batch("BEGIN EXCLUSIVE; DELETE FROM sql_history;")
+            .unwrap();
+        let reader = Database::open(&path).unwrap();
+        let started = std::time::Instant::now();
+        let count: i64 = reader
+            .connection()
+            .query_row("SELECT count(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(count > 0);
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        writer.connection().execute_batch("COMMIT;").unwrap();
     }
 
     #[test]
     fn explicit_data_home_wins() {
         let paths = AppPaths::from_data_home("C:/tmp/dexo-test".into());
         assert_eq!(paths.database.file_name().unwrap(), "dexo.db");
-        assert_eq!(paths.config.file_name().unwrap(), "config.toml");
     }
 
     #[test]
@@ -239,8 +329,36 @@ mod tests {
                 .unwrap();
         }
         let db = Database::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 13);
+        assert_eq!(db.schema_version().unwrap(), 18);
         assert!(backup_path(&path).exists());
+    }
+
+    /// The backup holds what is still in the write-ahead log: another process has the
+    /// database open, so nothing was checkpointed into the file.
+    #[test]
+    fn the_backup_before_a_migration_has_what_the_log_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dexo.db");
+        let keeper = rusqlite::Connection::open(&path).unwrap();
+        keeper
+            .execute_batch(crate::migrations::MIGRATION_1)
+            .unwrap();
+        keeper
+            .query_row("PRAGMA journal_mode = WAL", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap();
+        keeper
+            .execute_batch("CREATE TABLE marker(x INTEGER); INSERT INTO marker VALUES(42);")
+            .unwrap();
+
+        Database::open(&path).unwrap();
+
+        let backup = rusqlite::Connection::open(backup_path(&path)).unwrap();
+        let kept: i64 = backup
+            .query_row("SELECT x FROM marker", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(kept, 42);
     }
 
     #[test]

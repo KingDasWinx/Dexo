@@ -94,11 +94,18 @@ fn render_fetch(request: &DataRequest) -> (String, Binder) {
             .join(", ")
     };
     let mut sql = format!("SELECT {cols} FROM {}", qualify(&request.object));
-    if let Some(filter) = &request.filter {
+    let typed = request
+        .filter
+        .as_ref()
+        .map(|filter| render_filter(filter, &mut binder));
+    if let Some(condition) = request.clauses.condition(typed) {
         sql.push_str(" WHERE ");
-        sql.push_str(&render_filter(filter, &mut binder));
+        sql.push_str(&condition);
     }
-    if !request.sort.is_empty() {
+    if let Some(order) = request.clauses.order() {
+        sql.push_str(" ORDER BY ");
+        sql.push_str(order);
+    } else if !request.sort.is_empty() {
         sql.push_str(" ORDER BY ");
         sql.push_str(
             &request
@@ -115,8 +122,9 @@ fn render_fetch(request: &DataRequest) -> (String, Binder) {
                 .join(", "),
         );
     }
+    // On a line of its own: a comment ending the ORDER BY text would take it otherwise.
     sql.push_str(&format!(
-        " LIMIT {} OFFSET {}",
+        "\nLIMIT {} OFFSET {}",
         request.page.limit.saturating_add(1),
         request.page.offset
     ));
@@ -232,6 +240,26 @@ fn cap_value(value: DbValue) -> DbValue {
 
 #[async_trait::async_trait]
 impl DataMutator for MysqlSession {
+    async fn estimate_rows(&self, target: &QualifiedName) -> Result<Option<u64>, DriverError> {
+        // InnoDB's TABLE_ROWS is a sampled estimate; that is what is asked for.
+        let schema = target
+            .schema()
+            .or(target.catalog())
+            .unwrap_or_default()
+            .to_string();
+        let object = target.object().to_string();
+        let mut conn = self.conn.lock().await;
+        let rows: Option<Option<u64>> = conn
+            .exec_first(
+                "SELECT TABLE_ROWS FROM information_schema.TABLES
+                 WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ?",
+                (schema, object),
+            )
+            .await
+            .map_err(map_error)?;
+        Ok(rows.flatten())
+    }
+
     async fn table_columns(
         &self,
         target: &QualifiedName,
@@ -276,11 +304,23 @@ impl DataMutator for MysqlSession {
         let _ = Page::new(request.page.offset, request.page.limit)?;
         request.validate()?;
         let (sql, binder) = render_fetch(&request);
-        let mut conn = self.conn.lock().await;
-        let rows: Vec<mysql_async::Row> = conn
-            .exec(sql, Params::Positional(binder.values))
-            .await
-            .map_err(map_error)?;
+        // Text typed in the bars runs where it cannot write.
+        let typed = request.clauses.where_sql.is_some() || request.clauses.order_by.is_some();
+        let guard = if typed {
+            Some(crate::session::ReadOnly::start(&self.conn).await?)
+        } else {
+            None
+        };
+        let rows: Result<Vec<mysql_async::Row>, DriverError> = {
+            let mut conn = self.conn.lock().await;
+            conn.exec(sql, Params::Positional(binder.values))
+                .await
+                .map_err(map_error)
+        };
+        if let Some(guard) = guard {
+            guard.end(&self.conn).await;
+        }
+        let rows = rows?;
         let columns = rows
             .first()
             .map(|row| row.columns_ref().iter().map(column_meta).collect())
@@ -333,14 +373,16 @@ impl DataMutator for MysqlSession {
     async fn apply(&self, mutations: &[Mutation]) -> Result<(), DriverError> {
         let mut conn = self.conn.lock().await;
         conn.query_drop("BEGIN").await.map_err(map_error)?;
-        for mutation in mutations {
+        for (index, mutation) in mutations.iter().enumerate() {
             let (sql, binder) = render_mutation(mutation);
             let result = conn.exec_iter(sql, Params::Positional(binder.values)).await;
             let result = match result {
                 Ok(result) => result,
                 Err(error) => {
                     let _ = conn.query_drop("ROLLBACK").await;
-                    return Err(map_error(error));
+                    // The row's place in the batch goes with the error: an import says
+                    // which line.
+                    return Err(map_error(error).with_row(index as u32 + 1));
                 }
             };
             let affected = result.affected_rows();
@@ -359,6 +401,8 @@ impl DataMutator for MysqlSession {
     }
 }
 
+/// A batch goes in as INSERTs of many rows each -- a round trip for up to `MAX_PARAMS`
+/// values, not one for each row -- in a transaction of its own: all of it or none.
 #[async_trait::async_trait]
 impl dexo_driver_api::BulkWriter for MysqlSession {
     async fn insert_batch(
@@ -367,18 +411,53 @@ impl dexo_driver_api::BulkWriter for MysqlSession {
         columns: &[String],
         rows: &[Vec<DbValue>],
     ) -> Result<u64, DriverError> {
-        let mutations: Vec<Mutation> = rows
+        let width = columns.len().max(1);
+        let per_statement = (MAX_PARAMS / width).max(1);
+        let names = columns
             .iter()
-            .map(|values| Mutation::Insert {
-                table: table.clone(),
-                columns: columns.iter().cloned().map(ColumnId).collect(),
-                values: values.clone(),
-            })
-            .collect();
-        self.apply(&mutations).await?;
+            .map(|column| quote(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut conn = self.conn.lock().await;
+        conn.query_drop("BEGIN").await.map_err(map_error)?;
+        for (index, chunk) in rows.chunks(per_statement).enumerate() {
+            let mut binder = Binder::new();
+            let values = chunk
+                .iter()
+                .map(|row| {
+                    let slots = row
+                        .iter()
+                        .map(|value| binder.push(value))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("({slots})")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!("INSERT INTO {} ({names}) VALUES {values}", qualify(table));
+            if let Err(error) = conn.exec_drop(sql, Params::Positional(binder.values)).await {
+                let _ = conn.query_drop("ROLLBACK").await;
+                let mapped = map_error(error);
+                // `... at row 2` is the row of this statement: the batch's is further on
+                // by the rows the statements before it took.
+                let row = mapped
+                    .to_string()
+                    .rsplit_once(" at row ")
+                    .and_then(|(_, row)| row.parse::<usize>().ok())
+                    .and_then(|row| u32::try_from(index * per_statement + row).ok());
+                return Err(match row {
+                    Some(row) => mapped.with_row(row),
+                    None => mapped,
+                });
+            }
+        }
+        conn.query_drop("COMMIT").await.map_err(map_error)?;
         Ok(rows.len() as u64)
     }
 }
+
+/// The most placeholders one statement takes.
+const MAX_PARAMS: usize = u16::MAX as usize;
 
 #[cfg(test)]
 mod tests {

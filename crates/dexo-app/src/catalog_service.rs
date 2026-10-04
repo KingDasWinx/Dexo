@@ -32,10 +32,39 @@ impl CatalogService {
         reader.object(id).await.map_err(map_driver_error)
     }
 
+    /// Every object under `parent` (the whole connection when `None`): the databases,
+    /// their schemas, and each table's or view's columns, keys and indexes. What a schema
+    /// snapshot is made of, for the command line and the workbench alike.
+    pub async fn collect_objects(
+        reader: &dyn CatalogReader,
+        parent: Option<&ObjectId>,
+    ) -> Result<Vec<CatalogObject>, AppError> {
+        let page = Self::list_children(reader, parent, &CatalogListOptions::default()).await?;
+        let mut objects = page.objects;
+        let children = objects.clone();
+        for child in children {
+            if matches!(
+                child.kind,
+                ObjectKind::Catalog
+                    | ObjectKind::Schema
+                    | ObjectKind::Table
+                    | ObjectKind::View
+                    | ObjectKind::MaterializedView
+            ) {
+                objects.extend(Box::pin(Self::collect_objects(reader, Some(&child.id))).await?);
+            }
+        }
+        Ok(objects)
+    }
+
     pub async fn ddl(reader: &dyn CatalogReader, id: &ObjectId) -> Result<ObjectDdl, AppError> {
         reader.ddl(id).await.map_err(map_driver_error)
     }
 
+    /// The object `qualified` names: in full, `shop.public.orders`, or by its last parts,
+    /// `public.orders` or `orders`, in any database the connection lists (an attached
+    /// one too) and any schema. A name of the right case wins over one that differs only
+    /// in case.
     pub async fn find_by_qualified_name(
         reader: &dyn CatalogReader,
         qualified: &str,
@@ -43,46 +72,40 @@ impl CatalogService {
     ) -> Result<Option<CatalogObject>, AppError> {
         let parsed = parse_qualified(qualified);
         let roots = Self::list_children(reader, None, options).await?;
-        let Some(catalog) = roots.objects.into_iter().next() else {
-            return Ok(None);
-        };
-        if matches_name(&catalog, qualified) {
-            return Ok(Some(catalog));
-        }
-        let children = Self::list_children(reader, Some(&catalog.id), options).await?;
-        if !children.restrictions.is_empty()
-            && children.objects.is_empty()
-            && matches_restricted(qualified, &children.restrictions)
-        {
-            return Err(AppError::new(
-                crate::error::ErrorCategory::Permission,
-                "object is restricted",
-            ));
-        }
-        if let Some(object) = children
-            .objects
-            .iter()
-            .find(|object| matches_name(object, qualified))
-        {
-            return Ok(Some(object.clone()));
-        }
-        let schema = children.objects.iter().find(|object| {
-            object.kind == ObjectKind::Schema
-                && parsed
-                    .schema()
-                    .is_some_and(|schema| object.qualified_name.object() == schema)
-        });
-        if let Some(schema) = schema {
-            let schema_children = Self::list_children(reader, Some(&schema.id), options).await?;
-            if let Some(object) = schema_children
-                .objects
-                .into_iter()
-                .find(|object| matches_name(object, qualified))
+        let mut seen: Vec<CatalogObject> = Vec::new();
+        for (index, catalog) in roots.objects.into_iter().enumerate() {
+            let children = Self::list_children(reader, Some(&catalog.id), options).await?;
+            if index == 0
+                && !children.restrictions.is_empty()
+                && children.objects.is_empty()
+                && matches_restricted(qualified, &children.restrictions)
             {
-                return Ok(Some(object));
+                return Err(AppError::new(
+                    crate::error::ErrorCategory::Permission,
+                    "object is restricted",
+                ));
+            }
+            seen.push(catalog);
+            for child in children.objects {
+                let descend = child.kind == ObjectKind::Schema
+                    && parsed.schema().is_none_or(|schema| {
+                        child.qualified_name.object().eq_ignore_ascii_case(schema)
+                    });
+                if descend {
+                    let objects = Self::list_children(reader, Some(&child.id), options).await?;
+                    seen.extend(objects.objects);
+                }
+                seen.push(child);
             }
         }
-        Ok(None)
+        let exact = seen
+            .iter()
+            .position(|object| matches_name(object, qualified, true));
+        let any_case = || {
+            seen.iter()
+                .position(|object| matches_name(object, qualified, false))
+        };
+        Ok(exact.or_else(any_case).map(|index| seen.swap_remove(index)))
     }
 
     pub fn refresh_required_after_ddl(outcome: DdlOutcome, target: &QualifiedName) -> bool {
@@ -90,9 +113,32 @@ impl CatalogService {
     }
 }
 
-fn matches_name(object: &CatalogObject, qualified: &str) -> bool {
-    object.qualified_name.display_unquoted() == qualified
-        || object.qualified_name.object() == qualified
+/// The name in full, `shop.public.orders`, or its last parts, `public.orders` or
+/// `orders`, compared part by part: `orders` is not `a.orders`, a table whose name has a
+/// dot in it, which its whole name still finds.
+fn matches_name(object: &CatalogObject, qualified: &str, exact_case: bool) -> bool {
+    let same = |a: &str, b: &str| {
+        if exact_case {
+            a == b
+        } else {
+            a.eq_ignore_ascii_case(b)
+        }
+    };
+    let name = &object.qualified_name;
+    let have: Vec<&str> = name
+        .catalog()
+        .into_iter()
+        .chain(name.schema())
+        .chain([name.object()])
+        .collect();
+    let wanted: Vec<&str> = qualified.split('.').collect();
+    same(name.object(), qualified)
+        || same(&name.display_unquoted(), qualified)
+        || wanted.len() <= have.len()
+            && have[have.len() - wanted.len()..]
+                .iter()
+                .zip(&wanted)
+                .all(|(have, wanted)| same(have, wanted))
 }
 
 fn matches_restricted(
@@ -106,6 +152,34 @@ fn matches_restricted(
             || restriction.capability.contains("user")
             || restriction.capability.contains("role")
     })
+}
+
+/// What the diagnostics know of a catalog: whatever a FROM can name, and the columns,
+/// by the schema they are in -- MySQL names its databases as catalogs, the others as
+/// schemas.
+pub fn known_objects(objects: &[CatalogObject]) -> dexo_sql::KnownObjects {
+    let mut known = dexo_sql::KnownObjects::default();
+    for object in objects {
+        let name = &object.qualified_name;
+        let schema = name.schema().or(name.catalog()).unwrap_or("");
+        match &object.kind {
+            // Sequences and partitions read like tables.
+            ObjectKind::Table
+            | ObjectKind::View
+            | ObjectKind::MaterializedView
+            | ObjectKind::Sequence => known.add_table(schema, name.object()),
+            ObjectKind::DriverSpecific(kind) if kind == "partition" => {
+                known.add_table(schema, name.object())
+            }
+            ObjectKind::Column => {
+                if let Some((table, column)) = name.object().rsplit_once('.') {
+                    known.add_column(schema, table, column);
+                }
+            }
+            _ => {}
+        }
+    }
+    known
 }
 
 pub struct SnapshotCatalog {
@@ -289,6 +363,20 @@ fn foreign_key(object: &CatalogObject) -> Option<ForeignKey> {
     })
 }
 
+/// What `object` is, where the catalog lists it as what it reads like: a Postgres
+/// foreign table is listed as a table, but `DROP TABLE` refuses it and `\dt` should
+/// say what it is.
+pub(crate) fn exact_kind(object: &CatalogObject) -> dexo_driver_api::ObjectKind {
+    match object
+        .attributes
+        .get("driver.postgres.relkind")
+        .and_then(|relkind| relkind.as_str())
+    {
+        Some("f") => dexo_driver_api::ObjectKind::DriverSpecific("foreign_table".into()),
+        _ => object.kind.clone(),
+    }
+}
+
 pub fn parse_qualified(input: &str) -> QualifiedName {
     let parts: Vec<&str> = input.split('.').collect();
     match parts.as_slice() {
@@ -304,6 +392,94 @@ mod tests {
     use super::SnapshotCatalog;
     use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
     use dexo_sql::{Catalog, Dialect, complete, labels};
+
+    /// `inspect --object t2` found nothing: only the first database was looked in, and
+    /// a schema's tables only when the schema was named.
+    #[tokio::test]
+    async fn an_object_is_found_in_any_database_and_schema() {
+        use dexo_driver_api::CatalogListOptions;
+        let object = |id: &str, kind, name: QualifiedName, parent: Option<&str>| {
+            CatalogObject::new(ObjectId::new(id), kind, name, parent.map(ObjectId::new))
+        };
+        let session =
+            dexo_test_support::FakeSession::with_rows(&[], Vec::new()).with_catalog(vec![
+                object(
+                    "db1",
+                    ObjectKind::Catalog,
+                    QualifiedName::new(None::<String>, None::<String>, "shop"),
+                    None,
+                ),
+                object(
+                    "db2",
+                    ObjectKind::Catalog,
+                    QualifiedName::new(None::<String>, None::<String>, "other"),
+                    None,
+                ),
+                object(
+                    "s2",
+                    ObjectKind::Schema,
+                    QualifiedName::new(Some("other"), None::<String>, "main"),
+                    Some("db2"),
+                ),
+                object(
+                    "t2",
+                    ObjectKind::Table,
+                    QualifiedName::new(Some("other"), Some("main"), "T2"),
+                    Some("s2"),
+                ),
+                object(
+                    "t3",
+                    ObjectKind::Table,
+                    QualifiedName::new(Some("other"), Some("main"), "t2"),
+                    Some("s2"),
+                ),
+            ]);
+        let find = |name: &'static str| {
+            let session = &session;
+            async move {
+                super::CatalogService::find_by_qualified_name(
+                    session,
+                    name,
+                    &CatalogListOptions::default(),
+                )
+                .await
+                .unwrap()
+                .map(|found| found.id.as_str().to_string())
+            }
+        };
+        assert_eq!(find("t2").await.as_deref(), Some("t3"));
+        assert_eq!(find("T2").await.as_deref(), Some("t2"));
+        assert!(find("MAIN.t3").await.is_none());
+        assert!(find("MAIN.t2").await.is_some());
+        assert_eq!(find("other.main.T2").await.as_deref(), Some("t2"));
+        assert_eq!(find("nope").await, None);
+    }
+
+    #[test]
+    fn an_object_is_found_by_its_last_name_parts() {
+        let table = CatalogObject::new(
+            ObjectId::new("t1"),
+            ObjectKind::Table,
+            QualifiedName::new(Some("shop"), Some("public"), "orders"),
+            None,
+        );
+        for name in ["shop.public.orders", "public.orders", "orders"] {
+            assert!(super::matches_name(&table, name, true), "{name}");
+        }
+        assert!(super::matches_name(&table, "Public.ORDERS", false));
+        assert!(!super::matches_name(&table, "Public.ORDERS", true));
+        for name in ["lic.orders", "hop.public.orders", "public"] {
+            assert!(!super::matches_name(&table, name, false), "{name}");
+        }
+        let dotted = CatalogObject::new(
+            ObjectId::new("t2"),
+            ObjectKind::Table,
+            QualifiedName::new(Some("shop"), Some("main"), "a.orders"),
+            None,
+        );
+        assert!(!super::matches_name(&dotted, "orders", false));
+        assert!(super::matches_name(&dotted, "a.orders", true));
+    }
 
     #[test]
     fn offline_snapshot_powers_autocomplete() {

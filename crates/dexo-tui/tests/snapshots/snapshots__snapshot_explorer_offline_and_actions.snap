@@ -2,10 +2,10 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 100, 30)"
 ---
-demo  local  public                                                                                 
+[Workbench] Connections  Agents  Server  History   demo  local  public                              
 ┌  Sidebar─────────────────┐ scratch.sql ×  +                                                       
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
-│filter:public kind:- fav:f││   1▸select 1                                                         │
+│showing name "public"     ││   1▸select 1                                                         │
 │>   ▸ public              ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
@@ -19,7 +19,7 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          │└──────────────────────────────────────────────────────────────────────┘
-│                          │┌  Results (0)─────────────────────────────────────────────────────────┐
+│                          │┌  Results─────────────────────────────────────────────────────────────┐
 │                          ││[Grid] Explain  Messages                                              │
 │                          ││                                                                      │
 │                          ││                                                                      │
@@ -31,4 +31,4 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-local  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                       Ctrl+P  F1
+local  Ctrl+J run  Ctrl+N new sql  Ctrl+W close                                           Ctrl+P  F1

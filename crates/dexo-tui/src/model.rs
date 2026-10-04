@@ -38,6 +38,64 @@ use crate::screens::transaction_prompt::TransactionPrompt;
 use crate::screens::transfer::TransferScreen;
 use crate::theme::Theme;
 
+/// A place in Dexo, drawn over the whole terminal below the header. The workbench is
+/// home; the others are where work that outgrew a dialog lives, and each keeps its state
+/// while Dexo runs.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum Screen {
+    #[default]
+    Workbench,
+    Connections,
+    Agents,
+    Server,
+    Compare,
+    History,
+}
+
+impl Screen {
+    /// In the order the header lists them. Compare is listed only while it is on screen:
+    /// it is opened from the palette or `Ctrl+G d`, now and then.
+    pub const ALL: [Screen; 6] = [
+        Screen::Workbench,
+        Screen::Connections,
+        Screen::Agents,
+        Screen::Server,
+        Screen::History,
+        Screen::Compare,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Screen::Workbench => "Workbench",
+            Screen::Connections => "Connections",
+            Screen::Agents => "Agents",
+            Screen::Server => "Server",
+            Screen::Compare => "Compare",
+            Screen::History => "History",
+        }
+    }
+
+    /// Its place in `ALL`.
+    pub fn index(self) -> usize {
+        Screen::ALL
+            .iter()
+            .position(|screen| *screen == self)
+            .unwrap_or(0)
+    }
+
+    /// The palette and keymap command that goes there.
+    pub fn command(self) -> &'static str {
+        match self {
+            Screen::Workbench => "screen.workbench",
+            Screen::Connections => "screen.connections",
+            Screen::Agents => "screen.agents",
+            Screen::Server => "screen.server",
+            Screen::Compare => "screen.compare",
+            Screen::History => "screen.history",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Focus {
     Explorer,
@@ -54,6 +112,14 @@ pub enum Focus {
 }
 
 impl Model {
+    /// The table Enter in the Security panel grants on: the one that is open, nothing
+    /// while no table is (the data screen's stand-in is called `tbl`).
+    pub fn security_grant_target(&self) -> Option<String> {
+        let target = &self.data.target;
+        (target.schema().is_some() || target.catalog().is_some() || target.object() != "tbl")
+            .then(|| target.display_unquoted())
+    }
+
     /// The pane the stored focus actually points at. Opening a table document moves the
     /// grid into the editor's slot, and closing one takes the console away -- either way
     /// the focus left behind would highlight a pane that is not on screen.
@@ -107,7 +173,7 @@ pub struct ConnectionStatus {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PaletteState {
     pub open: bool,
-    pub query: String,
+    pub query: crate::widgets::text_input::TextInput,
     pub selected: usize,
     pub offset: usize,
     pub origin_focus: Option<Focus>,
@@ -117,7 +183,7 @@ pub struct PaletteState {
 pub struct HelpState {
     pub open: bool,
     pub scroll: u16,
-    pub query: String,
+    pub query: crate::widgets::text_input::TextInput,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -298,6 +364,16 @@ impl ResultBuffer {
             .estimated_bytes
             .saturating_sub(estimated_row_bytes(&removed));
     }
+
+    pub fn set_cell(&mut self, row: usize, col: usize, value: DbValue) {
+        let storage = Arc::make_mut(&mut self.rows);
+        if let Some(cell) = storage.get_mut(row).and_then(|cells| cells.get_mut(col)) {
+            let old = estimated_row_bytes(std::slice::from_ref(cell));
+            let new = estimated_row_bytes(std::slice::from_ref(&value));
+            self.estimated_bytes = self.estimated_bytes.saturating_sub(old).saturating_add(new);
+            *cell = value;
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -324,6 +400,13 @@ impl Default for GridSelection {
     }
 }
 
+/// Rows put on the clipboard, with how many rows and columns they are.
+pub struct Copied {
+    pub text: String,
+    pub rows: usize,
+    pub columns: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GridModel {
     buffer: ResultBuffer,
@@ -335,6 +418,11 @@ pub struct GridModel {
     pub frozen_columns: usize,
     pub hidden_columns: Vec<usize>,
     pub cells: std::collections::BTreeMap<(usize, usize), GridCell>,
+    /// Lines of the record view scrolled off the top, for a record taller than the pane.
+    pub record_scroll: usize,
+    /// The column the cursor starts in when rows arrive: the one it was in before the grid
+    /// was run again, so `s` on a column sorts it again and not the first.
+    pub home_column: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -374,6 +462,25 @@ pub struct ResultTab {
     pub notices: Vec<String>,
     pub source_sql: Option<String>,
     pub local_only: Option<String>,
+    /// Where the statement began in its document, in bytes, and the document's revision
+    /// then: what turns the server's position for a failure into a place in the text.
+    pub source_offset: Option<(usize, u64)>,
+    /// The rows stopped at the row limit with more left.
+    pub truncated: bool,
+    /// A page of the statement run again with the bars (`LIMIT`/`OFFSET`): its rows are
+    /// one page, not the whole result, and n and p turn it.
+    pub paged: bool,
+    /// What History keeps of the statement, for one the user ran.
+    pub history: Option<HistoryRun>,
+}
+
+/// A statement the user ran, as History keeps it once it ends: its text, and since when
+/// it runs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryRun {
+    pub sql: String,
+    pub started: Option<std::time::Instant>,
+    pub recorded: bool,
 }
 
 impl ResultTab {
@@ -387,6 +494,10 @@ impl ResultTab {
             notices: Vec::new(),
             source_sql: None,
             local_only: None,
+            source_offset: None,
+            truncated: false,
+            paged: false,
+            history: None,
         }
     }
 }
@@ -404,13 +515,14 @@ pub enum Severity {
 }
 
 impl Severity {
-    /// Ticks the toast survives. Zero means it stays until dismissed: an error is the one
-    /// thing here you cannot afford to blink and miss.
+    /// Ticks the toast survives, a tick being a second. An error stays the longest, long
+    /// enough to read a sentence; it is in the Messages view after that. One that stayed
+    /// until Esc covered the editor for minutes and outlived the action that fixed it.
     pub fn ticks(self) -> u8 {
         match self {
             Self::Info => 4,
             Self::Warn => 6,
-            Self::Error => 0,
+            Self::Error => 12,
         }
     }
 
@@ -460,7 +572,7 @@ pub fn describe_query_error(
         .and_then(|position| sql_location(sql, position));
     let mut header = Vec::new();
     if let Some(code) = error.native_code() {
-        header.push(format!("SQLSTATE {code}"));
+        header.push(describe_native_code(code));
     }
     if let Some((line, column, _)) = &location {
         header.push(format!("line {line}, column {column}"));
@@ -486,6 +598,32 @@ pub fn describe_query_error(
         lines.push(format!("HINT: {hint}"));
     }
     lines
+}
+
+/// The driver's own code for a failure, named for what it is: Postgres gives a SQLSTATE,
+/// MySQL its error number with the SQLSTATE after it, SQLite a result code, which has no
+/// SQLSTATE, and DuckDB the kind of error.
+fn describe_native_code(code: &str) -> String {
+    let sqlstate = |text: &str| {
+        text.len() == 5
+            && text
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ch.is_ascii_uppercase())
+    };
+    if sqlstate(code) {
+        return format!("SQLSTATE {code}");
+    }
+    if let Some((number, state)) = code.split_once(" (")
+        && let Some(state) = state.strip_suffix(')')
+        && sqlstate(state)
+        && number.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return format!("error {number} · SQLSTATE {state}");
+    }
+    if code.chars().all(|ch| ch.is_ascii_digit()) {
+        return format!("error code {code}");
+    }
+    code.to_string()
 }
 
 /// 1-based line and column of a 1-based character offset, with that line's text (tabs
@@ -600,15 +738,14 @@ impl Notifications {
         self.toast = None;
     }
 
-    /// True while a toast is up that will age out on its own -- the clock runs for those
-    /// only, so a sticky error costs nothing.
+    /// True while a toast is up that will age out on its own -- the clock runs only then.
     pub fn expires(&self) -> bool {
         self.toast
             .as_ref()
             .is_some_and(|toast| toast.ticks_left > 0)
     }
 
-    /// Ages the visible toast. A sticky one (`ticks_left == 0`) is left alone.
+    /// Ages the visible toast.
     pub fn tick(&mut self) {
         match &mut self.toast {
             Some(toast) if toast.ticks_left > 1 => toast.ticks_left -= 1,
@@ -629,6 +766,12 @@ pub struct ResultsState {
     /// that had nothing to do with it.
     pub explain_scroll: u16,
     pub messages_scroll: u16,
+    /// This document's plan. It lived on the model, so every tab showed the last plan
+    /// explained anywhere.
+    pub explain: ExplainScreen,
+    /// The result a sort or clause re-run replaced, until the run answers: kept with the
+    /// document's output, so a failure puts it back in that document and no other.
+    pub derived_backup: Option<DerivedBackup>,
     /// Last size the output pane handed down. Kept so a tab created between two syncs
     /// is born the right size instead of with `GridViewport`'s defaults.
     viewport_size: (u16, u16),
@@ -639,6 +782,14 @@ pub struct ResultsState {
 pub enum ResultsView {
     #[default]
     Grid,
+    /// A table document's columns, keys, indexes, size and note: what Inspect showed in a
+    /// dialog over the grid.
+    Structure,
+    /// A table document's definition.
+    Ddl,
+    /// Who may do what on a table document's table, and a grant made from there: what
+    /// Manage Grants showed in a dialog.
+    Privileges,
     Explain,
     /// The log, which until now had no surface at all: a message got one toast and was
     /// then unreachable.
@@ -647,10 +798,32 @@ pub enum ResultsView {
 
 impl ResultsView {
     pub const ALL: [Self; 3] = [Self::Grid, Self::Explain, Self::Messages];
+    /// A table's document has its table's own views besides.
+    pub const TABLE: [Self; 6] = [
+        Self::Grid,
+        Self::Structure,
+        Self::Ddl,
+        Self::Privileges,
+        Self::Explain,
+        Self::Messages,
+    ];
+
+    /// The views a document's output pane offers.
+    pub fn views(table: bool) -> &'static [Self] {
+        if table { &Self::TABLE } else { &Self::ALL }
+    }
+
+    /// One of the table's own views, which show the table and not a result.
+    pub fn is_object(self) -> bool {
+        matches!(self, Self::Structure | Self::Ddl | Self::Privileges)
+    }
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Grid => "Grid",
+            Self::Structure => "Structure",
+            Self::Ddl => "DDL",
+            Self::Privileges => "Privileges",
             Self::Explain => "Explain",
             Self::Messages => "Messages",
         }
@@ -666,6 +839,8 @@ impl Default for ResultsState {
             view: ResultsView::default(),
             explain_scroll: 0,
             messages_scroll: 0,
+            explain: ExplainScreen::default(),
+            derived_backup: None,
             viewport_size: (empty.width as u16, empty.height as u16),
         }
     }
@@ -759,6 +934,8 @@ impl GridModel {
             frozen_columns: 0,
             hidden_columns: Vec::new(),
             cells: std::collections::BTreeMap::new(),
+            record_scroll: 0,
+            home_column: 0,
         }
     }
 
@@ -828,6 +1005,10 @@ impl GridModel {
         self.viewport.row_offset = 0;
         self.viewport.column_offset = 0;
         self.selection = None;
+        // A column or a range picked in the last result is not one in this.
+        self.kind = GridSelection::default();
+        self.home_column = 0;
+        self.record_scroll = 0;
         self.picked_rows.clear();
         self.column_widths.clear();
     }
@@ -856,6 +1037,12 @@ impl GridModel {
             })
             .collect();
         self.ensure_cursor();
+    }
+
+    /// Shows `value` in a cell: an edit not applied yet, drawn where it will be.
+    pub fn set_cell(&mut self, row: usize, col: usize, value: DbValue) {
+        self.buffer.set_cell(row, col, value);
+        self.recompute_column_widths();
     }
 
     pub fn cell_at(&self, row: usize, col: usize) -> Option<&GridCell> {
@@ -898,9 +1085,12 @@ impl GridModel {
         self.selection = Some((row, col));
     }
 
+    /// The row is selected whole; the column the cursor was on stays, so `s` still sorts
+    /// the column it sorted a moment ago.
     pub fn select_row(&mut self, row: usize) {
+        let col = self.selection.map_or(0, |(_, col)| col);
         self.kind = GridSelection::Row { row };
-        self.selection = Some((row, 0));
+        self.selection = Some((row, col));
     }
 
     pub fn select_column(&mut self, col: usize) {
@@ -919,7 +1109,9 @@ impl GridModel {
             return;
         }
         if self.selection.is_none() {
-            self.select_cell(0, 0);
+            let last = self.buffer.columns.len().saturating_sub(1);
+            self.select_cell(0, self.home_column.min(last));
+            self.ensure_column_visible(self.home_column.min(last));
         }
     }
 
@@ -974,24 +1166,63 @@ impl GridModel {
         self.ensure_row_visible(next);
     }
 
+    /// Left and Right: the current column -- the one `s` sorts and the header marks --
+    /// moves among the shown columns, the view following it. A row cursor or a range
+    /// stays what it is.
     pub fn move_cursor_col(&mut self, delta: i32) {
-        match self.kind {
-            // ponytail: H-scroll is column_offset pan (pre-row-cursor). Ceiling: no sticky column cursor. Add one if cell-edit lands.
-            GridSelection::Row { .. } | GridSelection::Range { .. } => self.scroll_columns(delta),
-            GridSelection::Cell { .. } | GridSelection::Column { .. } => {
-                self.ensure_cursor();
-                let Some((row, col)) = self.selection else {
-                    return;
-                };
-                let last = self.buffer.columns.len().saturating_sub(1);
-                let next = (col as i32 + delta).clamp(0, last as i32) as usize;
-                match &mut self.kind {
-                    GridSelection::Cell { col, .. } | GridSelection::Column { col } => *col = next,
-                    GridSelection::Row { .. } | GridSelection::Range { .. } => {}
-                }
-                self.selection = Some((row, next));
-                self.scroll_columns(delta);
+        self.ensure_cursor();
+        let Some((row, col)) = self.selection else {
+            self.scroll_columns(delta);
+            return;
+        };
+        let shown: Vec<usize> = (0..self.buffer.columns.len())
+            .filter(|index| !self.hidden_columns.contains(index))
+            .collect();
+        let at = shown.iter().position(|index| *index >= col).unwrap_or(0) as i32;
+        let Some(&next) = shown.get((at + delta).clamp(0, shown.len() as i32 - 1) as usize) else {
+            return;
+        };
+        match &mut self.kind {
+            GridSelection::Cell { col, .. } | GridSelection::Column { col } => *col = next,
+            GridSelection::Row { .. } | GridSelection::Range { .. } => {}
+        }
+        self.selection = Some((row, next));
+        self.ensure_column_visible(next);
+    }
+
+    /// Scrolls sideways just enough for column `col` to be on screen, as the widths the
+    /// viewport was last fitted with lay the columns out.
+    fn ensure_column_visible(&mut self, col: usize) {
+        let frozen = self.frozen_columns;
+        if col < frozen {
+            return;
+        }
+        if col < self.viewport.column_offset {
+            self.viewport.column_offset = col;
+            return;
+        }
+        // The grid lays its columns out with `allocate_column_widths`, so the view moves
+        // on until that layout has `col` whole: the same answer the painting will give.
+        loop {
+            let start = self.viewport.column_offset.max(frozen);
+            let shown = self.visible_column_indices();
+            let natural: Vec<u16> = shown
+                .iter()
+                .map(|&index| self.column_widths.get(index).copied().unwrap_or(8))
+                .collect();
+            let (widths, _) = allocate_column_widths(&natural, self.viewport.width);
+            let whole = shown
+                .iter()
+                .position(|&index| index == col)
+                .is_some_and(|at| {
+                    widths.get(at).is_some_and(|&width| {
+                        usize::from(width) >= usize::from(natural[at]).min(self.viewport.width)
+                    })
+                });
+            if whole || start >= col {
+                break;
             }
+            self.viewport.column_offset = start + 1;
         }
     }
 
@@ -1032,8 +1263,41 @@ impl GridModel {
         format: dexo_app::data::CopyFormat,
         dialect: dexo_app::data::SqlDialect,
     ) -> Result<String, String> {
+        self.copy_of(format, dialect, None)
+            .map(|copied| copied.text)
+    }
+
+    /// `copy` for a grid showing `table`'s rows, with what it took: an INSERT names the
+    /// table, and the toast says how many rows and columns went to the clipboard.
+    pub fn copy_of(
+        &self,
+        format: dexo_app::data::CopyFormat,
+        dialect: dexo_app::data::SqlDialect,
+        table: Option<&str>,
+    ) -> Result<Copied, String> {
         let (columns, rows) = self.selected_matrix();
-        dexo_app::data::copy_selection(&columns, &rows, format, dialect)
+        let text = dexo_app::data::copy_selection_of(&columns, &rows, format, dialect, table)?;
+        Ok(Copied {
+            text,
+            rows: rows.len(),
+            columns: columns.len(),
+        })
+    }
+
+    /// What "Copy as ..." takes: the cursor's row, or the rows of a range or of the
+    /// picked ones, with every column. A column selected as a column stays one.
+    pub fn widen_selection_to_rows(&mut self) {
+        if !self.picked_rows.is_empty() {
+            return;
+        }
+        match self.kind {
+            GridSelection::Range { start, end } => {
+                let last_col = self.buffer.columns.len().saturating_sub(1);
+                self.select_range((start.0, 0), (end.0, last_col));
+            }
+            GridSelection::Cell { row, .. } => self.select_row(row),
+            GridSelection::Row { .. } | GridSelection::Column { .. } => {}
+        }
     }
 
     fn selected_matrix(&self) -> (Vec<String>, Vec<Vec<DbValue>>) {
@@ -1162,8 +1426,9 @@ impl GridModel {
                     .map(|row| {
                         row.get(index)
                             .map(|value| {
-                                unicode_width::UnicodeWidthStr::width(format_value(value).as_str())
-                                    as u16
+                                unicode_width::UnicodeWidthStr::width(
+                                    cell_text(value, true).as_str(),
+                                ) as u16
                             })
                             .unwrap_or(0)
                     })
@@ -1192,6 +1457,26 @@ pub fn format_value(value: &DbValue) -> String {
     }
 }
 
+/// What a grid cell draws for `value`: NULL and the empty string marked, a line break
+/// as `↵` (a space without Unicode) and any other control character as a space, one
+/// column each. A character that takes no column moved every cell after it one to the
+/// left, and widths counted from this are the widths that get drawn.
+pub fn cell_text(value: &DbValue, unicode: bool) -> String {
+    let text = match value {
+        DbValue::Null => "NULL".to_string(),
+        DbValue::Text(text) if text.is_empty() => "\"\"".to_string(),
+        other => format_value(other),
+    };
+    let newline = if unicode { '↵' } else { ' ' };
+    text.chars()
+        .map(|ch| match ch {
+            '\n' | '\r' => newline,
+            ch if ch.is_control() => ' ',
+            ch => ch,
+        })
+        .collect()
+}
+
 pub fn wrap_display_text(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![String::new()];
@@ -1207,6 +1492,37 @@ pub fn wrap_display_text(text: &str, width: usize) -> Vec<String> {
         }
         current.push(ch);
         used += char_width;
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// `text` wrapped to `width` columns at the spaces, so a word is not split across two
+/// lines; a word longer than the line is split, as `wrap_display_text` does.
+pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthStr;
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split(' ') {
+        let used = current.width();
+        if !current.is_empty() && used + 1 + word.width() <= width {
+            current.push(' ');
+            current.push_str(word);
+            continue;
+        }
+        if !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+        }
+        if word.width() <= width {
+            current = word.to_string();
+        } else {
+            let mut pieces = wrap_display_text(word, width);
+            current = pieces.pop().unwrap_or_default();
+            lines.extend(pieces);
+        }
     }
     if !current.is_empty() || lines.is_empty() {
         lines.push(current);
@@ -1244,6 +1560,14 @@ pub fn append_field_detail(lines: &mut Vec<String>, name: &str, value: &str, wid
     }
 }
 
+/// `text` cut to `width` display columns and padded to exactly that many: `format!`'s
+/// width counts characters, so a wide one shifted everything after it.
+pub fn fit_cell(text: &str, width: usize) -> String {
+    let cut = truncate_cell(text, width);
+    let used = unicode_width::UnicodeWidthStr::width(cut.as_str());
+    format!("{cut}{}", " ".repeat(width.saturating_sub(used)))
+}
+
 pub fn truncate_cell(text: &str, width: usize) -> String {
     let text_width = unicode_width::UnicodeWidthStr::width(text);
     if text_width <= width {
@@ -1266,62 +1590,126 @@ pub fn truncate_cell(text: &str, width: usize) -> String {
     out
 }
 
+/// `text` in rows of at most `width` columns, broken at a space where there is one and
+/// otherwise inside a word. A continuation row is indented under the first, two columns
+/// further in. For text a dialog must show whole: cut at its border, the end of a long
+/// DDL line was out of reach.
+pub fn wrap_line(text: &str, width: usize) -> Vec<String> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if width < 8 || text.width() <= width {
+        return vec![text.to_string()];
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let indent = chars
+        .iter()
+        .take_while(|ch| **ch == ' ')
+        .count()
+        .min(width / 2);
+    let continuation = " ".repeat(indent + 2);
+    let column = |ch: &char| ch.width().unwrap_or(0);
+    let mut rows = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        let prefix = if rows.is_empty() { "" } else { &continuation };
+        let room = width - prefix.len();
+        let (mut end, mut used) = (start, 0);
+        while end < chars.len() && used + column(&chars[end]) <= room {
+            used += column(&chars[end]);
+            end += 1;
+        }
+        if end < chars.len() {
+            if let Some(space) = (start + 1..end).rev().find(|at| chars[*at] == ' ') {
+                end = space + 1;
+            } else if end == start {
+                end = start + 1;
+            }
+        }
+        let row: String = chars[start..end].iter().collect();
+        rows.push(format!("{prefix}{}", row.trim_end()));
+        start = end;
+        while start < chars.len() && chars[start] == ' ' {
+            start += 1;
+        }
+    }
+    rows
+}
+
 /// Breathing room past the widest value in a column. Sized to the content alone, the
 /// columns sat one space apart with the rest of the pane empty next to them. It is part
 /// of the natural width, so `allocate_column_widths` gives it up like any other
 /// character when the row stops fitting.
 pub const COLUMN_PADDING: u16 = 2;
 
+/// How far a wide column is squeezed so that the columns after it still fit whole.
+const SQUEEZE_FLOOR: u16 = 12;
+
+/// The least a column cut by the pane's edge is worth drawing.
+const EDGE_MIN: usize = 4;
+
 /// Fits `natural` column widths into `available` terminal columns.
 ///
-/// Narrow columns keep their natural width for as long as possible: when the
-/// row doesn't fit, the widest column is shrunk one character at a time
-/// until it does, instead of greedily truncating whichever column happens to
-/// exhaust the remaining space first. If even one character per column
-/// (plus separators) doesn't fit, trailing columns are dropped and the
-/// second return value is `true`, signaling callers to render an overflow
-/// marker.
+/// Narrow columns keep their natural width for as long as possible: when the row
+/// doesn't fit, the widest column is shrunk one character at a time -- down to
+/// `SQUEEZE_FLOOR`, no further -- instead of greedily truncating whichever column
+/// happens to exhaust the remaining space first. When even that does not fit, the
+/// columns keep their natural widths and the pane shows as many as it can, from the
+/// left: the rest are reached by scrolling sideways, and the second return value is
+/// `true`, signaling callers to render an overflow marker.
 pub fn allocate_column_widths(natural: &[u16], available: usize) -> (Vec<u16>, bool) {
-    let mut widths = natural.to_vec();
-    let mut overflowed = false;
-    while !widths.is_empty() {
-        let n = widths.len();
-        let min_required = n + n.saturating_sub(1);
-        if min_required <= available {
-            break;
+    let separators = natural.len().saturating_sub(1);
+    let floors: Vec<u16> = natural
+        .iter()
+        .map(|&width| width.min(SQUEEZE_FLOOR))
+        .collect();
+    let floor_total: usize = floors.iter().map(|&w| usize::from(w)).sum();
+    if floor_total + separators <= available {
+        return (squeeze(natural, &floors, available - separators), false);
+    }
+    // Too wide for the pane. Two columns stay free for the marker and its gap.
+    let budget = available.saturating_sub(2);
+    let mut widths: Vec<u16> = Vec::new();
+    let mut used = 0usize;
+    for &width in natural {
+        let gap = usize::from(!widths.is_empty());
+        let room = budget.saturating_sub(used + gap);
+        if usize::from(width) <= room {
+            widths.push(width);
+            used += gap + usize::from(width);
+            continue;
         }
-        widths.pop();
-        overflowed = true;
+        // The column the edge cuts: drawn cut when there is room to read some of it, and
+        // always when it is the first, so a pane narrower than one column still shows one.
+        if room >= EDGE_MIN || widths.is_empty() {
+            widths.push(room.max(1) as u16);
+        }
+        break;
     }
-    let Some(&widest) = widths.iter().max() else {
-        return (widths, overflowed);
-    };
-    let separators = widths.len().saturating_sub(1);
-    let budget = available.saturating_sub(separators);
-    let total: usize = widths.iter().map(|&w| w as usize).sum();
-    if total <= budget || widest <= 1 {
-        return (widths, overflowed);
-    }
+    (widths, true)
+}
+
+/// `natural` widths shrunk, widest first, until they total `budget`; none goes below
+/// its `floor`.
+fn squeeze(natural: &[u16], floors: &[u16], budget: usize) -> Vec<u16> {
+    let mut widths = natural.to_vec();
+    let mut total: usize = widths.iter().map(|&w| usize::from(w)).sum();
     let mut heap: std::collections::BinaryHeap<(u16, std::cmp::Reverse<usize>)> = widths
         .iter()
         .enumerate()
         .map(|(index, &width)| (width, std::cmp::Reverse(index)))
         .collect();
-    let mut remaining_total = total;
-    while remaining_total > budget {
+    while total > budget {
         let Some((width, std::cmp::Reverse(index))) = heap.pop() else {
             break;
         };
-        if width <= 1 {
-            heap.push((width, std::cmp::Reverse(index)));
+        // The widest is at its floor: so is everything narrower.
+        if width <= floors[index].max(1) {
             break;
         }
-        let shrunk = width - 1;
-        widths[index] = shrunk;
-        remaining_total -= 1;
-        heap.push((shrunk, std::cmp::Reverse(index)));
+        widths[index] = width - 1;
+        total -= 1;
+        heap.push((width - 1, std::cmp::Reverse(index)));
     }
-    (widths, overflowed)
+    widths
 }
 
 fn estimated_row_bytes(row: &[DbValue]) -> usize {
@@ -1435,6 +1823,9 @@ pub struct EditorDocument {
     pub anchor: Option<usize>,
     pub kind: DocumentKind,
     pub console_log: Vec<String>,
+    /// The document a related row was followed from: this one is that hop's own, and
+    /// `b` closes it and goes back there.
+    pub related_from: Option<String>,
     /// The output pane as this document last left it. Parked here while another
     /// document is active, so a query run in one file cannot redraw another's grid.
     pub results: ResultsState,
@@ -1478,6 +1869,7 @@ impl EditorDocument {
             results: ResultsState::default(),
             browse: crate::screens::data::DataScreen::default(),
             console_log: Vec::new(),
+            related_from: None,
         }
     }
 
@@ -1513,6 +1905,7 @@ impl EditorDocument {
             results: ResultsState::default(),
             browse: crate::screens::data::DataScreen::default(),
             console_log: Vec::new(),
+            related_from: None,
         }
     }
 
@@ -1547,6 +1940,7 @@ impl EditorDocument {
             results: ResultsState::default(),
             browse: crate::screens::data::DataScreen::default(),
             console_log: Vec::new(),
+            related_from: None,
         }
     }
 
@@ -1588,6 +1982,38 @@ impl EditorDocument {
     }
 }
 
+/// A run that changes the schema, and the table each of its statements creates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SchemaRun {
+    pub operation: crate::runtime::OperationId,
+    pub created: Vec<Option<String>>,
+    /// The tables each statement drops.
+    pub dropped: Vec<Vec<String>>,
+}
+
+/// What each statement of a running script does to the transaction -- `BEGIN` opens one,
+/// `COMMIT` and `ROLLBACK` close it -- applied as the script reports back. The session
+/// only knew of the transactions Dexo's own commands began.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SqlTransactions {
+    pub operation: crate::runtime::OperationId,
+    pub session: Option<crate::runtime::SessionId>,
+    pub steps: Vec<Option<dexo_driver_api::TransactionState>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DerivedBackup {
+    pub operation: crate::runtime::OperationId,
+    pub tabs: Vec<ResultTab>,
+    pub active: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalEdit {
+    pub document: String,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingDocumentClose {
     pub document: String,
@@ -1596,11 +2022,30 @@ pub struct PendingDocumentClose {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Model {
+    pub screen: Screen,
+    /// Where Esc and `Ctrl+G Ctrl+G` go back to.
+    pub previous_screen: Screen,
+    pub agents_view: crate::screen::agents::AgentsView,
+    pub history_view: crate::screen::history::HistoryView,
+    /// The section of each screen its keys go to -- Alt+1 its list, Alt+2 its detail, as
+    /// on the workbench's panes -- in `Screen::ALL`'s order.
+    pub sections: [crate::screen::Section; 6],
+    /// How far the detail is read on a screen that keeps no scroll of its own; back to
+    /// the top on anything but reading it.
+    pub detail_scroll: u16,
+    /// The detail's button Left and Right have walked to, Enter presses.
+    pub screen_button: usize,
     pub focus: Focus,
     pub width: u16,
     pub height: u16,
     pub layout_mode: LayoutMode,
     pub connection: ConnectionStatus,
+    /// What each open session's driver says it cannot do, and why; the palette disables
+    /// those commands for the active one.
+    pub unavailable: std::collections::HashMap<
+        crate::runtime::SessionId,
+        Vec<(dexo_driver_api::Capability, String)>,
+    >,
     pub transaction: TransactionState,
     /// The output pane on screen. It belongs to `results_owner`; every other document
     /// keeps its own in `EditorDocument::results` until it is activated again.
@@ -1616,7 +2061,23 @@ pub struct Model {
     pub results_menu: ResultsMenuState,
     pub node_menu: NodeMenuState,
     pub pending_execute: Option<PendingExecute>,
+    /// A sidebar menu command waiting for the connection it was picked on to connect,
+    /// with the `connect_token` in flight.
+    pub pending_menu: Option<(u64, crate::palette::PaletteInvocation)>,
     pub close_prompt: Option<ClosePrompt>,
+    /// Asked before EXPLAIN ANALYZE runs the statement under the cursor; the focused
+    /// footer button while it is open.
+    pub explain_prompt: Option<crate::widgets::form::FooterFocus>,
+    /// Asked before quitting drops an open transaction or grid edits not yet applied;
+    /// the focused footer button while it is open.
+    pub quit_prompt: Option<crate::widgets::form::FooterFocus>,
+    /// Asked before the editor runs a write on production or a destructive statement.
+    pub run_prompt: Option<crate::screens::run_prompt::RunPrompt>,
+    /// Asked before any other write reaches production: grid edits, DDL, import,
+    /// restore, EXPLAIN ANALYZE of a write.
+    pub production_prompt: Option<crate::screens::production_prompt::ProductionPrompt>,
+    /// Set for exactly one dispatch once the connection's name was typed.
+    pub production_cleared: bool,
     pub layout_preset: LayoutPreset,
     pub messages: Notifications,
     pub documents: Vec<EditorDocument>,
@@ -1632,6 +2093,8 @@ pub struct Model {
     pub active_task: Option<TaskId>,
     pub active_query: Option<QueryId>,
     pub active_operation: Option<OperationId>,
+    /// When the running operation started, for the status bar's "running 12s".
+    pub active_started: Option<(OperationId, std::time::Instant)>,
     pub active_session: Option<SessionId>,
     pub session_generation: u64,
     pub connect_token: u64,
@@ -1654,9 +2117,10 @@ pub struct Model {
     pub schema_diff: SchemaDiffScreen,
     pub transfer: TransferScreen,
     pub security: SecurityScreen,
-    pub explain: ExplainScreen,
     pub admin: AdminScreen,
     pub mcp_profiles: McpProfilesScreen,
+    /// Agents' Setup view: an agent pointed at Dexo's MCP server.
+    pub mcp_setup: crate::screens::mcp_setup::McpSetup,
     pub connection_form: ConnectionForm,
     pub connections: ConnectionsScreen,
     pub projects: ProjectsScreen,
@@ -1664,12 +2128,50 @@ pub struct Model {
     pub secret_prompt: SecretPrompt,
     pub transaction_prompt: TransactionPrompt,
     pub document_name_prompt: DocumentNamePrompt,
+    pub save_query_prompt: Option<crate::screens::saved_queries::SaveQueryPrompt>,
+    /// The Explain view's Try index dialog, while it is open.
+    pub try_index: Option<crate::screens::explain::TryIndexPrompt>,
+    pub saved_queries: crate::screens::saved_queries::SavedQueriesPicker,
     pub settings: SettingsScreen,
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
     pub editor: EditorState,
+    /// The completion catalog holds the whole database, so a table it does not list
+    /// is one the database does not have.
+    pub catalog_complete: bool,
+    /// The running script changes the schema: once it ends, the catalog is read again.
+    pub schema_run: Option<SchemaRun>,
+    pub sql_transactions: Option<SqlTransactions>,
+    /// Tables this session's runs created, temporary ones included, which no catalog
+    /// lists; with the session and its generation they belong to -- every session's
+    /// generation starts at 1, so the generation alone let them leak to another.
+    pub session_tables: (
+        Option<crate::runtime::SessionId>,
+        u64,
+        std::collections::HashSet<String>,
+    ),
+    /// Vim mode's state, when the keymap profile is `vim`.
+    pub vim: crate::screens::vim::VimState,
+    /// Said once the startup connection is ready, where "Connected" would cover it.
+    /// With the name of the connection it is about: only its connect says it.
+    pub startup_warning: Option<(String, String)>,
+    /// `\x`: the grid shows each row as a record, one field per line, as psql's
+    /// expanded display does. For the session, not one result.
+    pub expanded_records: bool,
+    /// A document waiting to be opened in `$VISUAL` or `$EDITOR`. The event loop owns
+    /// the terminal, so it takes this between frames.
+    pub external_edit: Option<ExternalEdit>,
+    /// Keys arrive through the kitty keyboard protocol. Without it Ctrl+Backspace is sent
+    /// as ^H, the same byte as Ctrl+H.
+    pub keys_disambiguated: bool,
+    /// The find bar at the foot of the editor, Ctrl+F and Ctrl+H.
+    pub find: crate::screens::find::FindState,
     pub theme: Theme,
     pub capabilities: TerminalCapabilities,
+    /// The user's theme files, `<data dir>/themes/*.toml`, read at start.
+    pub user_themes: Vec<crate::theme::UserTheme>,
+    /// The theme files' problems already said, so reopening Settings says only new ones.
+    pub theme_problems: Vec<String>,
     pub keymap: Keymap,
     pub pending_chord: Chord,
     pub panes: PaneLayout,
@@ -1692,6 +2194,13 @@ pub struct Model {
 impl Default for Model {
     fn default() -> Self {
         Self {
+            screen: Screen::Workbench,
+            previous_screen: Screen::Workbench,
+            agents_view: Default::default(),
+            history_view: Default::default(),
+            sections: Default::default(),
+            detail_scroll: 0,
+            screen_button: 0,
             focus: Focus::Editor,
             width: 160,
             height: 50,
@@ -1703,6 +2212,7 @@ impl Default for Model {
                 read_only: false,
                 driver: String::new(),
             },
+            unavailable: std::collections::HashMap::new(),
             theme: crate::theme::builtin_dark(),
             capabilities: TerminalCapabilities {
                 color_depth: crate::capabilities::ColorDepth::TrueColor,
@@ -1710,13 +2220,21 @@ impl Default for Model {
                 mouse: true,
             },
             keymap: Keymap::default_profile(),
+            user_themes: Vec::new(),
+            theme_problems: Vec::new(),
             pending_chord: Chord { keys: Vec::new() },
             help: HelpState::default(),
             onboarding: OnboardingState::default(),
             results_menu: ResultsMenuState::default(),
             node_menu: NodeMenuState::default(),
             pending_execute: None,
+            pending_menu: None,
             close_prompt: None,
+            explain_prompt: None,
+            quit_prompt: None,
+            run_prompt: None,
+            production_prompt: None,
+            production_cleared: false,
             layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {
                 explorer_visible: true,
@@ -1752,6 +2270,7 @@ impl Default for Model {
             active_task: None,
             active_query: None,
             active_operation: None,
+            active_started: None,
             active_session: None,
             session_generation: 0,
             connect_token: 0,
@@ -1768,9 +2287,9 @@ impl Default for Model {
             schema_diff: SchemaDiffScreen::default(),
             transfer: TransferScreen::default(),
             security: SecurityScreen::default(),
-            explain: ExplainScreen::default(),
             admin: AdminScreen::default(),
             mcp_profiles: McpProfilesScreen::default(),
+            mcp_setup: Default::default(),
             connection_form: ConnectionForm::default(),
             connections: ConnectionsScreen::default(),
             projects: ProjectsScreen::default(),
@@ -1778,10 +2297,35 @@ impl Default for Model {
             secret_prompt: SecretPrompt::default(),
             transaction_prompt: TransactionPrompt::default(),
             document_name_prompt: DocumentNamePrompt::default(),
+            save_query_prompt: None,
+            try_index: None,
+            saved_queries: Default::default(),
             settings: SettingsScreen::default(),
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
             editor: EditorState::default(),
+            catalog_complete: false,
+            schema_run: None,
+            sql_transactions: None,
+            session_tables: Default::default(),
+            vim: crate::screens::vim::VimState::default(),
+            startup_warning: None,
+            expanded_records: false,
+            external_edit: None,
+            keys_disambiguated: false,
+            find: crate::screens::find::FindState::default(),
+        }
+    }
+}
+
+impl Model {
+    /// The screen drawn: the connection form is always drawn on Connections, opened from
+    /// wherever it was.
+    pub fn shown_screen(&self) -> Screen {
+        if self.connection_form.open {
+            Screen::Connections
+        } else {
+            self.screen
         }
     }
 }
@@ -1807,6 +2351,21 @@ impl From<TransactionState> for Model {
 impl Model {
     pub fn fixture(seed: impl Into<Self>) -> Self {
         seed.into()
+    }
+
+    /// How long the running statement has been running, while one is.
+    pub fn running_for(&self) -> Option<std::time::Duration> {
+        let (operation, started) = self.active_started?;
+        (self.active_operation == Some(operation)).then(|| started.elapsed())
+    }
+
+    /// Why the active session's driver cannot do `capability`, if it cannot.
+    pub fn unavailable_reason(&self, capability: dexo_driver_api::Capability) -> Option<&str> {
+        self.active_session
+            .and_then(|session| self.unavailable.get(&session))?
+            .iter()
+            .find(|(lacking, _)| *lacking == capability)
+            .map(|(_, reason)| reason.as_str())
     }
 
     /// No real document is open -- the list is empty or holds only the stand-in. The
@@ -1948,11 +2507,12 @@ impl Model {
         self.height = height;
         self.layout_mode = LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, width, height),
-            Some(&self.panes.clamp(width, height)),
+            Some(&self.effective_panes()),
             true,
         )
         .mode;
-        self.panes = self.panes.clamp(width, height);
+        // `self.panes` is what the user set, and is saved as it is: a resize used to
+        // clamp it in place, so a pass through a small terminal shrank it for good.
         self.sync_grid_viewport();
         self.sync_document_tabs_scroll();
     }
@@ -1965,7 +2525,7 @@ impl Model {
         if self.active_document().kind.is_table() {
             panes.results_height = self.panes.console_height;
         }
-        panes
+        panes.clamp(self.width, self.height)
     }
 
     /// Switches the active document and brings its output pane with it. Assigning
@@ -1991,6 +2551,27 @@ impl Model {
         }
         self.active_document = self.active_document.min(self.documents.len() - 1);
         self.sync_document_tab_focus();
+    }
+
+    /// What is selected in the editor as the user sees it: Vim's Visual selection when
+    /// that mode is on, else the editor's own. Running, saving or formatting "the
+    /// selection" takes this, not the editor's leftover range under a Visual one.
+    pub fn editor_selection(&self) -> Option<std::ops::Range<usize>> {
+        crate::screens::vim::display_selection(self)
+            .or_else(|| self.active_document().selection())
+            .filter(|range| range.start < range.end)
+    }
+
+    /// Whether table document `index` has rows staged for the database that are not yet
+    /// applied: the tab says so, as it does for text not saved.
+    pub fn staged_edits(&self, index: usize) -> bool {
+        match self.documents.get(index) {
+            Some(document) if document.kind.is_table() && index == self.active_document => {
+                self.data.has_pending_edits()
+            }
+            Some(document) if document.kind.is_table() => document.browse.has_pending_edits(),
+            _ => false,
+        }
     }
 
     pub fn set_active_document(&mut self, index: usize) {
@@ -2071,7 +2652,7 @@ impl Model {
         // The toolbar row used to be drawn only for multiple result sets, and this
         // counted it the same way. It is unconditional now.
         let height = inner_h
-            .saturating_sub(crate::widgets::grid::CHROME_ROWS)
+            .saturating_sub(crate::widgets::grid::chrome_rows(self))
             .max(1);
         self.results.set_viewport_size(width, height);
     }
@@ -2085,6 +2666,7 @@ impl Model {
         if self.catalog_connection != self.connection.name {
             self.catalog_objects.clear();
             self.catalog_connection = self.connection.name.clone();
+            self.catalog_complete = false;
         }
         self.catalog_revision = self.catalog_revision.wrapping_add(1);
         // Indexed once per page: a whole snapshot arrives at once, and finding each
@@ -2127,7 +2709,42 @@ impl Model {
 
 #[cfg(test)]
 mod editor_document_tests {
-    use super::EditorDocument;
+    use super::{EditorDocument, describe_native_code};
+
+    #[test]
+    fn a_long_line_wraps_at_spaces_and_indents_what_follows() {
+        use super::wrap_line;
+        assert_eq!(wrap_line("short", 20), ["short"]);
+        assert_eq!(
+            wrap_line(
+                "  CONSTRAINT orders_fkey FOREIGN KEY (customer_id) REFERENCES customers",
+                30
+            ),
+            [
+                "  CONSTRAINT orders_fkey",
+                "    FOREIGN KEY (customer_id)",
+                "    REFERENCES customers"
+            ]
+        );
+        // No space to break at: inside the word.
+        assert_eq!(
+            wrap_line("abcdefghijklmnopqrstuvwxyz", 10),
+            ["abcdefghij", "  klmnopqr", "  stuvwxyz"]
+        );
+    }
+
+    /// SQLite's result code `1` was printed as `SQLSTATE 1`.
+    #[test]
+    fn a_driver_code_is_named_for_what_it_is() {
+        assert_eq!(describe_native_code("42P01"), "SQLSTATE 42P01");
+        assert_eq!(
+            describe_native_code("1146 (42S02)"),
+            "error 1146 · SQLSTATE 42S02"
+        );
+        assert_eq!(describe_native_code("1"), "error code 1");
+        assert_eq!(describe_native_code("2067"), "error code 2067");
+        assert_eq!(describe_native_code("Catalog"), "Catalog");
+    }
 
     #[test]
     fn new_documents_get_unique_ids_and_connection() {

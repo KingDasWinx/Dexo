@@ -200,6 +200,99 @@ impl CatalogReader for MysqlSession {
     async fn dependents(&self, id: &ObjectId) -> Result<Vec<ObjectId>, DriverError> {
         self.relation_graph(id, false).await
     }
+
+    async fn foreign_keys(
+        &self,
+        table: &QualifiedName,
+    ) -> Result<Vec<dexo_driver_api::ForeignKeyRef>, DriverError> {
+        let schema = table
+            .schema()
+            .or(table.catalog())
+            .unwrap_or_default()
+            .to_string();
+        let name = table.object().to_string();
+        let rows: Vec<(String, String, String, String, String, String, String)> = self
+            .exec_rows(
+                "SELECT k.CONSTRAINT_NAME, k.TABLE_SCHEMA, k.TABLE_NAME, k.COLUMN_NAME,
+                        k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME
+                 FROM information_schema.KEY_COLUMN_USAGE k
+                 WHERE k.REFERENCED_TABLE_NAME IS NOT NULL
+                   AND ((k.TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND k.TABLE_NAME = ?)
+                        OR (k.REFERENCED_TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE())
+                            AND k.REFERENCED_TABLE_NAME = ?))
+                 ORDER BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION",
+                (schema.clone(), name.clone(), schema, name),
+            )
+            .await?;
+        // One row per column: a key's rows are consecutive, its columns in order. Each
+        // end is named `database.table` as the app names a table opened from the
+        // sidebar -- the database as the schema -- so the tab already open for it is
+        // found instead of a second one opened.
+        let mut keys: Vec<dexo_driver_api::ForeignKeyRef> = Vec::new();
+        for (constraint, from_schema, from_table, from_column, to_schema, to_table, to_column) in
+            rows
+        {
+            let from = QualifiedName::new(None::<String>, Some(from_schema), from_table);
+            match keys.last_mut() {
+                Some(key) if key.name == constraint && key.from == from => {
+                    key.from_columns.push(from_column);
+                    key.to_columns.push(to_column);
+                }
+                _ => keys.push(dexo_driver_api::ForeignKeyRef {
+                    name: constraint,
+                    from,
+                    from_columns: vec![from_column],
+                    to: QualifiedName::new(None::<String>, Some(to_schema), to_table),
+                    to_columns: vec![to_column],
+                }),
+            }
+        }
+        Ok(keys)
+    }
+
+    async fn databases(&self) -> Result<Vec<String>, DriverError> {
+        self.exec_rows(
+            "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY 1",
+            (),
+        )
+        .await
+    }
+
+    async fn relations_named(
+        &self,
+        schema: Option<&str>,
+        name: &str,
+    ) -> Result<Option<Vec<CatalogObject>>, DriverError> {
+        // A name without a database is the current database's, as a statement reads it.
+        let rows: Vec<(String, String, String)> = self
+            .exec_rows(
+                "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM information_schema.TABLES
+                 WHERE LOWER(TABLE_NAME) = LOWER(?)
+                   AND LOWER(TABLE_SCHEMA) = LOWER(COALESCE(?, DATABASE()))
+                 ORDER BY TABLE_SCHEMA, TABLE_NAME",
+                (name.to_string(), schema.map(str::to_string)),
+            )
+            .await?;
+        Ok(Some(
+            rows.into_iter()
+                .map(|(schema, name, table_type)| {
+                    let is_view = table_type.eq_ignore_ascii_case("VIEW")
+                        || table_type.eq_ignore_ascii_case("SYSTEM VIEW");
+                    let (key, kind) = if is_view {
+                        ("view", ObjectKind::View)
+                    } else {
+                        ("table", ObjectKind::Table)
+                    };
+                    CatalogObject::new(
+                        my_id(key, format!("{schema}/{name}")),
+                        kind,
+                        QualifiedName::new(Some(schema.clone()), None::<String>, name),
+                        Some(my_id("catalog", &schema)),
+                    )
+                })
+                .collect(),
+        ))
+    }
 }
 
 impl MysqlSession {
@@ -216,7 +309,7 @@ impl MysqlSession {
         let mut restrictions = Vec::new();
         let tables: Vec<mysql_async::Row> = self
             .exec_rows(
-                "SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_COLLATION
+                "SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_COLLATION, TABLE_COMMENT
                  FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?",
                 (schema.to_string(),),
             )
@@ -226,6 +319,7 @@ impl MysqlSession {
             let table_type = cell_string(&row, 1);
             let engine = cell_opt(&row, 2);
             let collation = cell_opt(&row, 3);
+            let comment = cell_string(&row, 4);
             let is_view = table_type.eq_ignore_ascii_case("VIEW")
                 || table_type.eq_ignore_ascii_case("SYSTEM VIEW");
             let kind = if is_view {
@@ -246,6 +340,10 @@ impl MysqlSession {
             if let Some(collation) = collation {
                 object =
                     object.with_attribute("driver.mysql.collation", serde_json::json!(collation));
+            }
+            // A view's comment is the word VIEW; only a table's says anything.
+            if !is_view && !comment.trim().is_empty() {
+                object = object.with_attribute("comment", serde_json::json!(comment));
             }
             objects.push(object);
         }
@@ -332,8 +430,14 @@ impl MysqlSession {
             }),
         }
 
+        // MariaDB keeps roles as users flagged `is_role`; it has no role_edges.
+        let roles_sql = if self.is_mariadb() {
+            "SELECT User FROM mysql.user WHERE is_role = 'Y'"
+        } else {
+            "SELECT from_user FROM mysql.role_edges"
+        };
         match self
-            .try_exec_rows::<mysql_async::Row>("SELECT from_user FROM mysql.role_edges", ())
+            .try_exec_rows::<mysql_async::Row>(roles_sql, ())
             .await?
         {
             Ok(roles) => {
@@ -370,7 +474,8 @@ impl MysqlSession {
         let mut restrictions = Vec::new();
         let columns: Vec<mysql_async::Row> = self
             .exec_rows(
-                "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, GENERATION_EXPRESSION, EXTRA, COLLATION_NAME
+                "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, GENERATION_EXPRESSION, EXTRA, COLLATION_NAME,
+                        COLUMN_COMMENT
                  FROM information_schema.COLUMNS
                  WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
                  ORDER BY ORDINAL_POSITION",
@@ -384,6 +489,7 @@ impl MysqlSession {
             let generated = cell_opt(&row, 3);
             let extra = cell_string(&row, 4);
             let collation = cell_opt(&row, 5);
+            let comment = cell_string(&row, 6);
             let mut object = CatalogObject::new(
                 my_id("column", format!("{schema}/{table}/{name}")),
                 ObjectKind::Column,
@@ -402,6 +508,9 @@ impl MysqlSession {
                     "driver.mysql.generation_expression",
                     serde_json::json!(generated),
                 );
+            }
+            if !comment.trim().is_empty() {
+                object = object.with_attribute("comment", serde_json::json!(comment));
             }
             objects.push(object);
         }
@@ -689,6 +798,35 @@ impl MysqlSession {
         schema: &str,
         name: &str,
     ) -> Result<(), DriverError> {
+        if self.is_mariadb() {
+            // MariaDB has no VIEW_TABLE_USAGE; its stored definition names every table
+            // as `schema`.`table`, so the definition is read instead.
+            let rows = self
+                .require_rows(
+                    "SELECT VIEW_DEFINITION FROM information_schema.VIEWS
+                     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+                    (schema.to_string(), name.to_string()),
+                )
+                .await?;
+            let definition = rows
+                .first()
+                .map(|row| cell_string(row, 0))
+                .unwrap_or_default();
+            for (table_schema, table_name) in qualified_names(&definition) {
+                let exists = self
+                    .require_rows(
+                        "SELECT 1 FROM information_schema.TABLES
+                         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+                        (table_schema.clone(), table_name.clone()),
+                    )
+                    .await?;
+                if !exists.is_empty() {
+                    let id = self.relation_id(&table_schema, &table_name).await?;
+                    push_unique(ids, id);
+                }
+            }
+            return Ok(());
+        }
         let rows = self
             .require_rows(
                 "SELECT DISTINCT TABLE_SCHEMA, TABLE_NAME
@@ -712,14 +850,26 @@ impl MysqlSession {
         schema: &str,
         name: &str,
     ) -> Result<(), DriverError> {
-        let rows = self
-            .require_rows(
+        let rows = if self.is_mariadb() {
+            // No VIEW_TABLE_USAGE on MariaDB: a view depends on the table its stored
+            // definition names as `schema`.`table`.
+            let needle = format!("`{schema}`.`{name}`");
+            let pattern = format!("%{}%", like_escape(&needle));
+            self.require_rows(
+                "SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.VIEWS
+                 WHERE VIEW_DEFINITION LIKE ? ESCAPE '!'",
+                (pattern,),
+            )
+            .await?
+        } else {
+            self.require_rows(
                 "SELECT DISTINCT VIEW_SCHEMA, VIEW_NAME
                  FROM information_schema.VIEW_TABLE_USAGE
                  WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
                 (schema.to_string(), name.to_string()),
             )
-            .await?;
+            .await?
+        };
         for row in rows {
             let view_schema = cell_string(&row, 0);
             let view_name = cell_string(&row, 1);
@@ -828,4 +978,34 @@ fn push_unique(ids: &mut Vec<ObjectId>, id: ObjectId) {
     if !ids.iter().any(|existing| existing == &id) {
         ids.push(id);
     }
+}
+
+/// The `schema`.`table` pairs a MariaDB view definition names, in order, once each. A
+/// column reference `schema`.`table`.`column` names its table the same way.
+fn qualified_names(definition: &str) -> Vec<(String, String)> {
+    let mut names: Vec<(String, String)> = Vec::new();
+    let mut rest = definition;
+    while let Some(start) = rest.find('`') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('`') else { break };
+        let first = &after[..end];
+        let tail = &after[end + 1..];
+        if let Some(next) = tail.strip_prefix(".`")
+            && let Some(close) = next.find('`')
+        {
+            let pair = (first.to_string(), next[..close].to_string());
+            if !names.contains(&pair) {
+                names.push(pair);
+            }
+        }
+        rest = tail;
+    }
+    names
+}
+
+/// `text` for a LIKE pattern escaped with `!`.
+fn like_escape(text: &str) -> String {
+    text.replace('!', "!!")
+        .replace('%', "!%")
+        .replace('_', "!_")
 }

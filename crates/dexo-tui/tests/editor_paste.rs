@@ -131,3 +131,30 @@ fn ctrl_v_reads_the_clipboard() {
         "Ctrl+V did not reach the clipboard: {effects:?}"
     );
 }
+
+/// Where the system clipboard cannot be read, Ctrl+V pastes what Dexo copied last
+/// instead of failing with the backend's error.
+#[test]
+fn an_unreadable_clipboard_pastes_what_dexo_copied() {
+    let mut model = editor();
+    update(
+        &mut model,
+        Action::ClipboardWritten {
+            text: "abc def".into(),
+        },
+    );
+    update(&mut model, Action::ClipboardUnreadable);
+    assert_eq!(model.active_document().text(), "abc def");
+    assert!(model.messages.toast.as_ref().is_none_or(|toast| {
+        !toast.message.contains("X11") && !toast.message.contains("Unknown error")
+    }));
+
+    let mut empty = Model {
+        focus: Focus::Editor,
+        ..Model::default()
+    };
+    update(&mut empty, Action::ClipboardUnreadable);
+    assert_eq!(empty.active_document().text(), "");
+    let shown = empty.messages.toast.expect("a message").message;
+    assert!(shown.contains("clipboard cannot be read"), "{shown}");
+}

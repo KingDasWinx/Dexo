@@ -13,7 +13,17 @@ pub fn related_filter(fk: &ForeignKey, row: &[(String, Option<DbValue>)]) -> Opt
     }
     let mut parts = Vec::new();
     for (local, referenced) in fk.local.iter().zip(fk.referenced.iter()) {
-        let value = row.iter().find(|(name, _)| name == local)?.1.as_ref()?;
+        // A key may spell its columns in another case than the table does (SQLite
+        // keeps them as written); the exact name wins when both are there.
+        let value = row
+            .iter()
+            .find(|(name, _)| name == local)
+            .or_else(|| {
+                row.iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(local))
+            })?
+            .1
+            .as_ref()?;
         parts.push(Filter::Eq(ColumnId(referenced.clone()), value.clone()));
     }
     Some(if parts.len() == 1 {
@@ -21,40 +31,6 @@ pub fn related_filter(fk: &ForeignKey, row: &[(String, Option<DbValue>)]) -> Opt
     } else {
         Filter::And(parts)
     })
-}
-
-pub fn from_attributes(
-    attributes: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> Option<ForeignKey> {
-    let local = string_list(attributes.get("fk_local")?)?;
-    let referenced = string_list(attributes.get("fk_referenced")?)?;
-    let table = attributes.get("fk_table")?.as_str()?.to_string();
-    if local.is_empty() || local.len() != referenced.len() || table.is_empty() {
-        return None;
-    }
-    let catalog = attributes
-        .get("fk_catalog")
-        .and_then(|value| value.as_str())
-        .map(str::to_string);
-    let schema = attributes
-        .get("fk_schema")
-        .and_then(|value| value.as_str())
-        .map(str::to_string);
-    Some(ForeignKey {
-        local,
-        referenced_table: QualifiedName::new(catalog, schema, table),
-        referenced,
-    })
-}
-
-fn string_list(value: &serde_json::Value) -> Option<Vec<String>> {
-    Some(
-        value
-            .as_array()?
-            .iter()
-            .filter_map(|item| item.as_str().map(str::to_string))
-            .collect(),
-    )
 }
 
 #[cfg(test)]

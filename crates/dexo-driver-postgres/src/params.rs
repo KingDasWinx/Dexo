@@ -51,6 +51,8 @@ impl ToSql for PgParam {
                 Type::INT2 => i16::try_from(*value)?.to_sql(ty, out),
                 Type::INT4 => i32::try_from(*value)?.to_sql(ty, out),
                 Type::INT8 => value.to_sql(ty, out),
+                // An `oid` read back, where the statement gives the value its column's type.
+                Type::OID => u32::try_from(*value)?.to_sql(ty, out),
                 _ => value.to_sql(ty, out),
             },
             // Sent in text format (see `encode_format`), so the server parses it into

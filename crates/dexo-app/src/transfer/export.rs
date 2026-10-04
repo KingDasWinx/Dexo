@@ -45,6 +45,19 @@ pub async fn export_row_batches(
     Ok(())
 }
 
+/// An error writing into `folder`, in words: the OS's own text names no folder.
+fn describe_io(error: &std::io::Error, folder: &Path) -> String {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => {
+            format!("The folder {} does not exist.", folder.display())
+        }
+        std::io::ErrorKind::PermissionDenied => {
+            format!("Dexo may not write in {}.", folder.display())
+        }
+        _ => error.to_string(),
+    }
+}
+
 #[derive(Debug)]
 pub enum ExportError {
     Cancelled,
@@ -67,7 +80,21 @@ where
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let mut tmp = NamedTempFile::new_in(dir).map_err(|error| ExportError::Io(error.to_string()))?;
+    let mut tmp =
+        NamedTempFile::new_in(dir).map_err(|error| ExportError::Io(describe_io(&error, dir)))?;
+    // An SQL export has to name the table it inserts into: without one, the file's name
+    // (`orders.sql` inserts into `orders`), so it replays as it is.
+    let named;
+    let options = match (&options.table, dest.file_stem()) {
+        (None, Some(stem)) => {
+            named = FormatOptions {
+                table: Some(stem.to_string_lossy().into_owned()),
+                ..options.clone()
+            };
+            &named
+        }
+        _ => options,
+    };
     let mut rows_written = 0u64;
     let mut bytes = 0u64;
     let cancelled = {
@@ -79,17 +106,17 @@ where
                 cancelled = true;
                 break;
             }
-            bytes += encoder.write_row(&row).map_err(ExportError::Io)?;
+            encoder.write_row(&row).map_err(ExportError::Io)?;
             rows_written += 1;
             if rows_written.is_multiple_of(1024) {
                 progress(ExportProgress {
                     rows: rows_written,
-                    bytes,
+                    bytes: encoder.bytes_written(),
                 });
             }
         }
         if !cancelled {
-            encoder.finish().map_err(ExportError::Io)?;
+            bytes = encoder.finish().map_err(ExportError::Io)?;
         }
         cancelled
     };
@@ -102,7 +129,7 @@ where
         .or_else(|_| tmp.as_file_mut().flush())
         .map_err(|error| ExportError::Io(error.to_string()))?;
     tmp.persist(dest)
-        .map_err(|error| ExportError::Io(error.error.to_string()))?;
+        .map_err(|error| ExportError::Io(describe_io(&error.error, dir)))?;
     let report = ExportProgress {
         rows: rows_written,
         bytes,
@@ -166,5 +193,73 @@ mod tests {
         assert_eq!(report.rows, 1_000_000);
         assert!(dest.exists());
         assert!(std::fs::metadata(&dest).unwrap().len() > 1_000_000);
+    }
+
+    /// A folder that is not there says so, in words, and the progress counts bytes.
+    #[test]
+    fn a_missing_folder_is_named_and_progress_counts_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cancel = AtomicBool::new(false);
+        let missing = dir.path().join("nodir").join("x.csv");
+        let error = export_rows(
+            &missing,
+            TransferFormat::Csv,
+            &FormatOptions::default(),
+            &["n".into()],
+            [vec![DbValue::I64(1)]],
+            &cancel,
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, ExportError::Io(message)
+                if message.contains("nodir") && message.contains("does not exist")),
+            "{error:?}"
+        );
+        let dest = dir.path().join("x.csv");
+        let report = export_rows(
+            &dest,
+            TransferFormat::Csv,
+            &FormatOptions::default(),
+            &["n".into()],
+            [vec![DbValue::I64(1)], vec![DbValue::I64(2)]],
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(report.bytes, std::fs::metadata(&dest).unwrap().len());
+    }
+
+    /// An SQL export inserts into the table it is given, or else the one its file is
+    /// named after, so it replays without editing.
+    #[test]
+    fn an_sql_export_names_its_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let export = |file: &str, table: Option<&str>| {
+            let dest = dir.path().join(file);
+            let options = FormatOptions {
+                table: table.map(str::to_string),
+                ..FormatOptions::default()
+            };
+            export_rows(
+                &dest,
+                TransferFormat::Sql,
+                &options,
+                &["n".into()],
+                [vec![DbValue::I64(1)]],
+                &AtomicBool::new(false),
+                |_| {},
+            )
+            .unwrap();
+            std::fs::read_to_string(dest).unwrap()
+        };
+        assert_eq!(
+            export("orders.sql", None),
+            "INSERT INTO \"orders\" (\"n\") VALUES (1);\n"
+        );
+        assert_eq!(
+            export("out.sql", Some("shop.order items")),
+            "INSERT INTO \"shop\".\"order items\" (\"n\") VALUES (1);\n"
+        );
     }
 }

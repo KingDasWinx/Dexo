@@ -76,14 +76,18 @@ impl PostgresSession {
 impl AdministrationProvider for PostgresSession {
     async fn list_sessions(&self) -> Result<AdminList<SessionInfo>, DriverError> {
         let restriction = self.session_restriction().await?;
+        // Not the session that asks, and not the server's own processes. The order is by
+        // the column: a bare `pid` is the output column, which is text, so 56 followed 541.
         let rows = match self
             .client
             .query(
                 "SELECT pid::text, usename::text, datname::text, COALESCE(state, 'unknown'),
                         (EXTRACT(EPOCH FROM (now() - COALESCE(query_start, backend_start))) * 1000)::bigint,
-                        NULLIF(btrim(query), '')
+                        NULLIF(btrim(query), ''), NULLIF(application_name, '')::text,
+                        client_addr::text
                  FROM pg_stat_activity
-                 ORDER BY pid",
+                 WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'
+                 ORDER BY pg_stat_activity.pid",
                 &[],
             )
             .await
@@ -101,6 +105,8 @@ impl AdministrationProvider for PostgresSession {
                     state: row.get(3),
                     duration_ms: duration_ms(row),
                     current_query: row.get(5),
+                    application: row.get(6),
+                    client: row.get(7),
                 })
                 .collect(),
             restriction,
@@ -116,7 +122,7 @@ impl AdministrationProvider for PostgresSession {
                         CASE WHEN relation IS NULL THEN NULL ELSE relation::regclass::text END,
                         mode::text, granted, pid::text
                  FROM pg_locks
-                 WHERE pid IS NOT NULL",
+                 WHERE pid IS NOT NULL AND pid <> pg_backend_pid()",
                 &[],
             )
             .await
@@ -256,12 +262,16 @@ impl AdministrationProvider for PostgresSession {
     }
 
     async fn variables(&self) -> Result<AdminList<VariableInfo>, DriverError> {
+        // boot_val is the compiled-in default, not what the server runs with. reset_val is
+        // what a session here starts from -- the configuration file, ALTER SYSTEM, and the
+        // database's and role's settings -- as MySQL's global value is. Both are counts of
+        // the unit pg_settings names, so the unit goes with them.
         let rows = match self
             .client
             .query(
-                "SELECT name, setting, 'session' FROM pg_settings
+                "SELECT name, setting || COALESCE(' ' || unit, ''), 'session' FROM pg_settings
                  UNION ALL
-                 SELECT name, COALESCE(boot_val, setting), 'server' FROM pg_settings
+                 SELECT name, reset_val || COALESCE(' ' || unit, ''), 'server' FROM pg_settings
                  ORDER BY 1, 3",
                 &[],
             )
@@ -376,10 +386,10 @@ async fn signal_backend(
     Ok(AdminOutcome {
         ok: true,
         idempotent_noop: !sent,
-        message: if sent {
-            "signal sent".into()
-        } else {
-            "target already finished".into()
+        message: match (sent, terminate) {
+            (true, true) => format!("Session {session_id} terminated."),
+            (true, false) => format!("The query of session {session_id} was cancelled."),
+            (false, _) => format!("Session {session_id} had already ended."),
         },
     })
 }

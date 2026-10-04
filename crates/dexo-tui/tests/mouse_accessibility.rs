@@ -145,7 +145,7 @@ fn keyboard_opens_overlays_without_mouse() {
     update(&mut model, Action::OpenSettings);
     assert!(model.settings.open);
     update(&mut model, Action::OpenAdmin);
-    assert!(model.admin.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Server);
     update(&mut model, Action::OpenRecovery);
     assert!(model.recovery.open);
 }
@@ -242,7 +242,7 @@ fn connection_advanced_options_expand_with_the_mouse() {
             .connection_form
             .lines()
             .join("\n")
-            .contains("tls_mode:")
+            .contains("TLS mode:")
     );
 
     paint(&mut model);
@@ -253,7 +253,7 @@ fn connection_advanced_options_expand_with_the_mouse() {
             .connection_form
             .lines()
             .join("\n")
-            .contains("tls_mode:")
+            .contains("TLS mode:")
     );
 
     paint(&mut model);
@@ -531,22 +531,20 @@ fn clicking_parameter_field_only_focuses_it() {
 
 #[test]
 fn mcp_profile_rows_match_the_profile_index() {
-    let mut model = Model::default();
-    model.mcp_profiles.open = true;
+    let mut model = Model {
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
+        ..Model::default()
+    };
     model.mcp_profiles.load_profiles(vec![
         dexo_tui::screens::mcp_profiles::McpProfileSummary {
             name: "reader".into(),
             enabled: true,
-            scopes: vec![],
-            tools: vec![],
-            grants: vec![],
+            ..Default::default()
         },
         dexo_tui::screens::mcp_profiles::McpProfileSummary {
             name: "writer".into(),
-            enabled: false,
-            scopes: vec![],
-            tools: vec![],
-            grants: vec![],
+            ..Default::default()
         },
     ]);
     paint(&mut model);
@@ -574,6 +572,7 @@ fn label_hits_use_terminal_column_widths() {
 #[test]
 fn wheel_moves_schema_diff_selection() {
     let mut model = Model {
+        screen: dexo_tui::model::Screen::Compare,
         schema_diff: dexo_tui::screens::schema_diff::SchemaDiffScreen::fixture(),
         ..Model::default()
     };
@@ -594,8 +593,7 @@ fn wheel_moves_schema_diff_selection() {
 
 #[test]
 fn wheel_moves_security_selection() {
-    let mut model = Model::default();
-    model.security.open = true;
+    let mut model = privileges_view();
     model.security.principals = vec!["reader".into(), "writer".into()];
     let (x, y) = (model.width / 2, model.height / 2);
 
@@ -615,8 +613,8 @@ fn wheel_moves_security_selection() {
 #[test]
 fn wheel_keeps_schema_diff_and_security_selection_in_the_popup_viewport() {
     let mut schema_model = Model {
+        screen: dexo_tui::model::Screen::Compare,
         schema_diff: dexo_tui::screens::schema_diff::SchemaDiffScreen {
-            open: true,
             entries: (0..30)
                 .map(|index| dexo_tui::screens::schema_diff::DiffEntry {
                     kind: "added",
@@ -648,8 +646,7 @@ fn wheel_keeps_schema_diff_and_security_selection_in_the_popup_viewport() {
         (0, 0)
     );
 
-    let mut security_model = Model::default();
-    security_model.security.open = true;
+    let mut security_model = privileges_view();
     security_model.security.principals = (0..30).map(|index| format!("role_{index}")).collect();
     let (x, y) = (security_model.width / 2, security_model.height / 2);
     for _ in 0..20 {
@@ -696,4 +693,58 @@ fn wheel_scrolls_transfer_preview_without_changing_focus() {
         model.transfer.footer,
         dexo_tui::widgets::form::FooterFocus::Input
     );
+}
+
+/// Clicking a row of the completion list accepts that row, as Enter does.
+#[test]
+fn a_click_on_a_completion_row_accepts_it() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
+    let mut model = Model::default();
+    model.apply_size(120, 30);
+    model.focus = dexo_tui::model::Focus::Editor;
+    let table = |name: &str| {
+        CatalogObject::new(
+            ObjectId::new(format!("table:{name}")),
+            ObjectKind::Table,
+            QualifiedName::new(None::<String>, Some("public"), name),
+            None,
+        )
+    };
+    model.absorb_catalog(&[table("orders"), table("order_items")]);
+    for ch in "select * from o".chars() {
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+        );
+    }
+    assert!(model.editor.completion_open);
+    paint(&mut model);
+    let (x, y) = model.hits.center(HitTarget::ListRow(1));
+    let second = model.editor.completions[1].label.clone();
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            x,
+            y,
+            KeyModifiers::NONE,
+        ),
+    );
+    assert!(!model.editor.completion_open);
+    assert!(
+        model.active_document().text().ends_with(&second),
+        "{:?}",
+        model.active_document().text()
+    );
+}
+
+/// A table's document on its Privileges view, the Results pane in focus.
+fn privileges_view() -> Model {
+    let mut model = Model::default();
+    model.active_document_mut().kind =
+        dexo_tui::model::DocumentKind::Table(dexo_app::parse_qualified("local.public.orders"));
+    model.results.view = dexo_tui::model::ResultsView::Privileges;
+    model.focus = dexo_tui::Focus::Results;
+    model
 }

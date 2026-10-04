@@ -69,7 +69,7 @@
 
         <Package Id='*'
             Keywords='Installer'
-            Description='A local-first database workbench for PostgreSQL and MySQL in the terminal'
+            Description='A local-first database workbench for PostgreSQL, MySQL and SQLite in the terminal'
             Manufacturer='KingDasWinx'
             InstallerVersion='450'
             Languages='1033'

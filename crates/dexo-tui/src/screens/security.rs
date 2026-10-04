@@ -2,11 +2,9 @@ use dexo_driver_api::{GrantRecord, PrivilegeDef, QualifiedName, SchemaChange};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SecurityScreen {
-    pub open: bool,
     pub principals: Vec<String>,
     pub grants: Vec<GrantRecord>,
     pub selected: usize,
-    pub has_password: bool,
 }
 
 impl SecurityScreen {
@@ -48,23 +46,57 @@ impl SecurityScreen {
         }
     }
 
-    pub fn lines(&self) -> Vec<String> {
-        let mut lines = Vec::new();
-        for (index, principal) in self.principals.iter().enumerate() {
-            let marker = if index == self.selected { ">" } else { " " };
-            lines.push(format!("{marker} {principal}"));
-        }
-        for grant in &self.grants {
+    /// The roles, then what the selected one holds, then what the keys do; each line at
+    /// most `width` columns. `target` is the table Enter grants on.
+    /// The roles, the picked one's privileges on `table` -- not its grants everywhere, a
+    /// page of `information_schema` -- and how to grant from there.
+    pub fn table_lines(&self, table: &str) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .principals
+            .iter()
+            .enumerate()
+            .map(|(index, principal)| {
+                let marker = if index == self.selected { ">" } else { " " };
+                format!("{marker} {principal}")
+            })
+            .collect();
+        let Some(selected) = self.principals.get(self.selected) else {
+            lines.push("No roles or grants to show on this connection.".into());
+            return lines;
+        };
+        lines.push(String::new());
+        let on_table: Vec<&str> = self
+            .grants
+            .iter()
+            .filter(|grant| {
+                grant.principal.object() == selected
+                    && grant.target.display_unquoted().eq_ignore_ascii_case(table)
+            })
+            .flat_map(|grant| grant.privileges.iter().map(String::as_str))
+            .collect();
+        lines.push(if on_table.is_empty() {
+            format!("{selected} holds nothing on {table} of its own.")
+        } else {
+            format!("{selected} on {table}: {}", on_table.join(", "))
+        });
+        let elsewhere = self
+            .grants
+            .iter()
+            .filter(|grant| {
+                grant.principal.object() == selected
+                    && !grant.target.display_unquoted().eq_ignore_ascii_case(table)
+            })
+            .count();
+        if elsewhere > 0 {
             lines.push(format!(
-                "grant {} on {} ({})",
-                grant.principal.object(),
-                grant.target.display_unquoted(),
-                grant.privileges.join(",")
+                "and {elsewhere} grant{} on other objects.",
+                if elsewhere == 1 { "" } else { "s" }
             ));
         }
-        if self.has_password {
-            lines.push("password: ***".into());
-        }
+        lines.push(String::new());
+        lines.push(format!(
+            "Enter grants SELECT on {table} to {selected}, after a preview."
+        ));
         lines
     }
 }
@@ -73,17 +105,39 @@ impl SecurityScreen {
 mod tests {
     use super::SecurityScreen;
 
+    /// A role is shown with what it may do on the table, and its grants elsewhere are
+    /// counted, not listed: they filled the view with `information_schema`.
     #[test]
-    fn password_is_never_rendered() {
-        let mut screen = SecurityScreen {
+    fn a_role_shows_what_it_may_do_on_the_table_and_counts_the_rest() {
+        use dexo_driver_api::{GrantRecord, QualifiedName};
+        let record = |target: QualifiedName, privilege: &str| GrantRecord {
+            principal: QualifiedName::new(None::<String>, None::<String>, "reporter"),
+            target,
+            privileges: vec![privilege.into()],
+        };
+        let orders = QualifiedName::new(Some("qa"), Some("public"), "orders");
+        let screen = SecurityScreen {
             principals: vec!["reporter".into()],
-            has_password: true,
+            grants: vec![
+                record(orders.clone(), "SELECT"),
+                record(orders, "INSERT"),
+                record(
+                    QualifiedName::new(Some("qa"), Some("public"), "users"),
+                    "SELECT",
+                ),
+            ],
             ..SecurityScreen::default()
         };
-        screen.open = true;
-        let dump = screen.lines().join("\n");
-        assert!(dump.contains("***"));
-        assert!(!dump.to_ascii_lowercase().contains("s3cret"));
-        assert!(!dump.to_ascii_lowercase().contains("password="));
+        let text = screen.table_lines("qa.public.orders").join("\n");
+        assert!(
+            text.contains("reporter on qa.public.orders: SELECT, INSERT"),
+            "{text}"
+        );
+        assert!(text.contains("and 1 grant on other objects"), "{text}");
+        assert!(!text.contains("users"), "{text}");
+        let empty = SecurityScreen::default()
+            .table_lines("qa.public.orders")
+            .join("\n");
+        assert!(empty.contains("No roles or grants"), "{empty}");
     }
 }

@@ -9,34 +9,45 @@ use dexo_driver_api::TransactionState;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
+/// The status line; `hits` is what this frame drew above it, which says what the screen's
+/// keys are said for.
+pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &crate::mouse::HitMap) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     // The sidebar already shows a connected session with a dot, so the name carries a
     // prefix only when something is wrong.
-    let conn = if model.connection.ready {
-        model.connection.name.clone()
-    } else if model.connection.name.is_empty() {
-        "disconnected".into()
-    } else {
-        format!("offline:{}", model.connection.name)
-    };
+    let mut conn =
+        if model.connection.ready && model.connections.is_temporary(&model.connection.name) {
+            // Nothing saved behind it: closing Dexo forgets it, unless Save Connection… keeps it.
+            format!("{} (temporary)", model.connection.name)
+        } else if model.connection.ready {
+            model.connection.name.clone()
+        } else if model.connection.name.is_empty() {
+            "disconnected".into()
+        } else {
+            format!("offline:{}", model.connection.name)
+        };
+    // A connection that refuses writes says so before a write is tried.
+    if model.connection.read_only && !model.connection.name.is_empty() {
+        conn.push_str(" (read-only)");
+    }
     // Idle is the null state; a marker shown always marks nothing.
     let tx = match model.transaction {
         TransactionState::Idle => "",
-        TransactionState::Active => "tx:active",
-        TransactionState::Failed => "tx:failed",
-        TransactionState::Unknown => "tx:unknown",
+        TransactionState::Active => "Transaction",
+        TransactionState::Failed => "Transaction failed: roll back",
+        TransactionState::Unknown => "Transaction state unknown",
     };
+    // Nothing else on screen changes while a statement runs, and a second run used to
+    // queue behind it without a word.
+    // A statement waiting on a lock looks like nothing at all: the person is told it is
+    // running, for how long, and how to stop it.
+    let running = running_text(model);
     let env = environment_marker(&model.connection.environment, model.capabilities.unicode);
     let env_style = model.theme.style(
-        match model.connection.environment.to_ascii_lowercase().as_str() {
-            "production" => Role::Production,
-            "staging" => Role::Staging,
-            "development" => Role::Development,
-            _ => Role::Muted,
-        },
+        crate::accessibility::environment_role(&model.connection.environment)
+            .unwrap_or(Role::Muted),
         model.capabilities,
     );
     let err_style = model.theme.style(Role::Error, model.capabilities);
@@ -48,15 +59,88 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     } else {
         Style::default()
     };
+    // Vim's `:` and `/` are typed on this line, as in Vim, with the cursor in them.
+    if crate::screens::vim::active(model)
+        && let Some(prompt) = &model.vim.prompt
+    {
+        // Selected, the text shows in reverse: typing replaces it.
+        let style = if prompt.input.is_selected() {
+            Style::default().add_modifier(ratatui::style::Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(prompt.kind.to_string()),
+                Span::styled(prompt.input.as_str().to_string(), style),
+            ])),
+            area,
+        );
+        let before: String = prompt
+            .input
+            .as_str()
+            .chars()
+            .take(prompt.input.cursor())
+            .collect();
+        let x = area.x + 1 + unicode_width::UnicodeWidthStr::width(before.as_str()) as u16;
+        if x < area.x + area.width {
+            frame.set_cursor_position(ratatui::layout::Position::new(x, area.y));
+        }
+        return;
+    }
     let mut spans = Vec::new();
-    if !model.mouse {
+    if crate::screens::vim::active(model) && model.effective_focus() == crate::model::Focus::Editor
+    {
         spans.push(Span::styled(
-            "MOUSE OFF · Ctrl+P settings.mouse  ",
+            format!("-- {} -- ", crate::screens::vim::mode(model).label()),
+            model
+                .theme
+                .style(Role::Focus, model.capabilities)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ));
+        let pending = crate::screens::vim::pending(model);
+        if !pending.is_empty() {
+            spans.push(Span::raw(format!("{pending}  ")));
+        }
+    }
+    if !model.mouse {
+        // The way back is the palette's Toggle Mouse, said in the words the palette uses.
+        let palette = crate::palette::shortcut_for(model, "palette.open", Some("Ctrl+P"))
+            .unwrap_or_else(|| "the palette".into());
+        spans.push(Span::styled(
+            format!("MOUSE OFF · {palette}, Toggle Mouse  "),
             err_style,
         ));
     }
+    // Another screen names itself and its keys; the connection and the editor's state
+    // belong to the workbench and are on its header.
+    if model.shown_screen() != crate::model::Screen::Workbench {
+        spans.push(Span::styled(
+            format!("{}  ", model.shown_screen().title()),
+            model
+                .theme
+                .style(Role::Focus, model.capabilities)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ));
+        let doors = doors(model);
+        let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+        let room = (area.width as usize).saturating_sub(used + doors.chars().count() + 2);
+        let hint = fit_hint(&crate::screen::hints(model, hits), room);
+        let gap = (area.width as usize)
+            .saturating_sub(used + hint.chars().count() + doors.chars().count());
+        spans.push(Span::raw(hint));
+        if gap > 0 {
+            spans.push(Span::raw(" ".repeat(gap)));
+            spans.push(Span::styled(
+                doors,
+                model.theme.style(Role::Muted, model.capabilities),
+            ));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
     if matches!(model.layout_mode, crate::layout::LayoutMode::Compact) {
-        spans.push(Span::raw(format!("{conn}  ctrl+p  F1")));
+        spans.push(Span::raw(format!("{conn}  {}", doors(model))));
         if let Some(notice) = &model.update_notice {
             let arrow = if model.capabilities.unicode {
                 "↑"
@@ -68,8 +152,19 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
                 model.theme.style(Role::Warning, model.capabilities),
             ));
         }
+        if let Some(running) = &running {
+            spans.push(Span::styled(
+                format!("  {running}"),
+                model.theme.style(Role::Warning, model.capabilities),
+            ));
+        }
+        // Whole hints that fit, as on the wide bar: the line ended mid-hint at 60 columns.
+        let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
         if let Some(hint) = footer_hint(model) {
-            spans.push(Span::raw(format!("  {hint}")));
+            let hint = fit_hint(&hint, (area.width as usize).saturating_sub(used + 2));
+            if !hint.is_empty() {
+                spans.push(Span::raw(format!("  {hint}")));
+            }
         }
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
@@ -81,6 +176,12 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if !tx.is_empty() {
         spans.push(Span::styled(format!("{tx}  "), tx_style));
     }
+    if let Some(running) = &running {
+        spans.push(Span::styled(
+            format!("{running}  "),
+            model.theme.style(Role::Warning, model.capabilities),
+        ));
+    }
     // The focused pane already carries an accent border and the cursor; the layout
     // preset and the row count are both printed where they apply. None of them
     // belong here.
@@ -89,16 +190,25 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     // doors, then the hint. The doors outlive the hint because F1 is how you get the
     // hint back.
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-    let doors = "Ctrl+P  F1";
+    let doors = doors(model);
+    let doors = doors.as_str();
     let room = (area.width as usize).saturating_sub(used);
     // A newer release outranks the key hint: the hint comes back with F1, the command
     // to update does not come back at all.
     let notice = update_notice(model, room.saturating_sub(doors.chars().count() + 2));
     let reserved = doors.chars().count() + 2 + notice.as_ref().map_or(0, |n| n.chars().count() + 2);
-    if let Some(hint) = footer_hint(model)
+    // With the cursor on something the editor underlined, its message says what.
+    let wrong = (model.effective_focus() == crate::model::Focus::Editor)
+        .then(|| crate::screens::editor::diagnostic_at_cursor(model))
+        .flatten();
+    if let Some(message) = wrong
         && room > reserved
     {
-        spans.push(Span::raw(fit_hint(hint, room - reserved)));
+        spans.push(Span::styled(fit_hint(message, room - reserved), err_style));
+    } else if let Some(hint) = footer_hint(model)
+        && room > reserved
+    {
+        spans.push(Span::raw(fit_hint(&hint, room - reserved)));
     }
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
     let right = notice.as_ref().map_or(0, |n| n.chars().count() + 2) + doors.chars().count();
@@ -157,14 +267,72 @@ fn fit_hint(hint: &str, budget: usize) -> String {
     out
 }
 
-fn footer_hint(model: &Model) -> Option<&'static str> {
+/// `key what` for each command the active keymap binds, two spaces apart: Vim and
+/// Emacs page, close and run with other keys, or none, and a fixed hint said keys that
+/// did nothing there.
+fn keyed_hint(model: &Model, parts: &[(&str, &str)]) -> String {
+    parts
+        .iter()
+        .filter_map(|(id, what)| {
+            let key = crate::palette::shortcut_for(model, id, None)?;
+            Some(format!("{key} {what}"))
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+/// `Running 12s - Ctrl+F2 cancels` while a statement runs.
+fn running_text(model: &Model) -> Option<String> {
+    // From the moment a run is sent; its time once the runtime says it started.
+    let elapsed = model.running_for();
+    if elapsed.is_none() && (model.active_query.is_none() || model.active_operation.is_none()) {
+        return None;
+    }
+    let time = elapsed.map_or(String::new(), |elapsed| format!(" {}s", elapsed.as_secs()));
+    let cancel = keyed_hint(model, &[("query.cancel", "cancels")]);
+    Some(if cancel.is_empty() {
+        format!("Running{time}")
+    } else {
+        format!("Running{time} - {cancel}")
+    })
+}
+
+/// The palette's and Help's keys, which bring the hint back.
+fn doors(model: &Model) -> String {
+    keyed_hint(model, &[("palette.open", ""), ("help.open", "")])
+        .split("  ")
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn footer_hint(model: &Model) -> Option<String> {
+    // Behind a dialog the editor's keys are not the ones that answer: Settings and Help
+    // ignore Ctrl+J and Ctrl+W, and the hints for them stayed up.
+    // The file picker's keys are said here, not in the picker, which kept a row for them.
+    if crate::mouse::top_overlay(model) == Some(crate::mouse::OverlayKind::FilePicker)
+        && model.file_picker.confirm.is_none()
+    {
+        return Some(if model.file_picker.finding {
+            "type to find  Enter open  Left up  Esc cancel".into()
+        } else {
+            format!(
+                "type the name  Enter {}  Left up  Esc cancel",
+                model.file_picker_mode.submit_label().to_lowercase()
+            )
+        });
+    }
+    if crate::mouse::top_overlay(model).is_some() {
+        return None;
+    }
     if matches!(model.layout_mode, crate::layout::LayoutMode::Compact)
         && matches!(
             model.effective_focus(),
             crate::model::Focus::Editor | crate::model::Focus::Palette
         )
     {
-        return Some("Alt+1 connections  Ctrl+P commands");
+        // The palette's own key is already on this line, as a door.
+        return Some(keyed_hint(model, &[("focus.explorer", "connections")]));
     }
     // A table document has no editor on screen, so the editor's hint would be a lie.
     match model.effective_focus() {
@@ -184,12 +352,98 @@ fn footer_hint(model: &Model) -> Option<&'static str> {
                     "Enter expand  a actions"
                 }
             })
-            .or(Some("Enter connect/expand  a actions  n new")),
-        crate::model::Focus::DocumentTabs => {
-            Some("←/→ tabs  Enter open/new  Ctrl+W close  Esc editor")
+            .or(Some("Enter connect/expand  a actions  n new"))
+            .map(str::to_string),
+        crate::model::Focus::DocumentTabs => Some(format!(
+            "←/→ tabs  Enter open/new  {}  Esc editor",
+            keyed_hint(model, &[("document.close", "close")])
+        )),
+        crate::model::Focus::Editor => Some(keyed_hint(
+            model,
+            &[
+                ("query.execute_statement", "run"),
+                ("document.new", "new sql"),
+                ("document.close", "close"),
+            ],
+        )),
+        // A table's own views have their own keys: not the grid's.
+        crate::model::Focus::Results
+            if model.results.view == crate::model::ResultsView::Privileges =>
+        {
+            Some(keyed_hint(model, &[("results.cycle_view", "view")]))
+                .map(|view| format!("Up/Down pick a role  Enter grant SELECT  {view}"))
         }
-        crate::model::Focus::Editor => Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close"),
-        crate::model::Focus::Results => Some("Enter actions  v view  n/p page  Ctrl+W close"),
+        crate::model::Focus::Results
+            if model.results.view == crate::model::ResultsView::Structure =>
+        {
+            Some(keyed_hint(model, &[("results.cycle_view", "view")]))
+                .map(|view| format!("Up/Down read  n note  {view}"))
+        }
+        // The plan and the log are read, not edited: the grid's keys say nothing there.
+        crate::model::Focus::Results
+            if model.results.view == crate::model::ResultsView::Explain =>
+        {
+            Some(keyed_hint(model, &[("results.cycle_view", "view")]))
+                .map(|view| format!("Up/Down read  i try an index  {view}"))
+        }
+        crate::model::Focus::Results
+            if model.results.view == crate::model::ResultsView::Messages =>
+        {
+            Some(keyed_hint(model, &[("results.cycle_view", "view")]))
+                .map(|view| format!("Up/Down read  {view}"))
+        }
+        crate::model::Focus::Results if model.results.view == crate::model::ResultsView::Ddl => {
+            Some(keyed_hint(model, &[("results.cycle_view", "view")]))
+                .map(|view| format!("Up/Down read  {view}"))
+        }
+        crate::model::Focus::Results => {
+            // Only what this grid does: `n` and `p` turn the pages of a table's rows or of
+            // a paged result, and the rows are changed in a table's.
+            let table = model.active_document().kind.is_table();
+            let paged = table
+                || model
+                    .results
+                    .tabs
+                    .get(model.results.active)
+                    .is_some_and(|tab| tab.paged);
+            let page = match (
+                crate::palette::shortcut_for(model, "data.page_next", None),
+                crate::palette::shortcut_for(model, "data.page_prev", None),
+            ) {
+                (Some(next), Some(previous)) if paged => format!("{next}/{previous} page  "),
+                _ => String::new(),
+            };
+            let edits = if !table {
+                String::new()
+            } else if model.data.has_pending_edits() {
+                format!(
+                    "{}  ",
+                    keyed_hint(model, &[("data.review", "review changes")])
+                )
+            } else {
+                format!(
+                    "{}  ",
+                    keyed_hint(
+                        model,
+                        &[
+                            ("data.insert_row", "insert"),
+                            ("data.toggle_delete", "delete")
+                        ],
+                    )
+                )
+            };
+            Some(format!(
+                "Enter actions  {edits}{}  {page}{}",
+                keyed_hint(
+                    model,
+                    &[
+                        ("results.cycle_view", "view"),
+                        ("transfer.export", "export")
+                    ]
+                ),
+                keyed_hint(model, &[("document.close", "close")])
+            ))
+        }
         _ => None,
     }
 }
@@ -212,7 +466,7 @@ mod tests {
             .sync_connection_roots(&model.connections.profiles, "");
         model.explorer.select(connection_id("prod"));
         assert_eq!(
-            footer_hint(&model),
+            footer_hint(&model).as_deref(),
             Some("Enter connect  a actions  n new  e edit")
         );
 
@@ -232,7 +486,7 @@ mod tests {
             .sync_connection_roots(&model.connections.profiles, "prod");
         model.explorer.select(connection_id("prod"));
         assert_eq!(
-            footer_hint(&model),
+            footer_hint(&model).as_deref(),
             Some("Enter expand  a actions  n new  e edit")
         );
     }
@@ -258,10 +512,7 @@ mod tests {
             layout_mode: LayoutMode::Compact,
             ..Model::default()
         };
-        assert_eq!(
-            footer_hint(&model),
-            Some("Alt+1 connections  Ctrl+P commands")
-        );
+        assert_eq!(footer_hint(&model).as_deref(), Some("Alt+1 connections"));
     }
 
     #[test]
@@ -280,15 +531,54 @@ mod tests {
             ));
         model.set_active_document(1);
         assert_eq!(
-            footer_hint(&model),
-            Some("Enter actions  v view  n/p page  Ctrl+W close")
+            footer_hint(&model).as_deref(),
+            Some(
+                "Enter actions  i insert  Delete delete  v view  e export  n/p page  Ctrl+W close"
+            )
         );
 
         model.set_active_document(0);
+        model.keys_disambiguated = true;
         assert_eq!(
-            footer_hint(&model),
+            footer_hint(&model).as_deref(),
             Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close")
         );
+        // Where the terminal sends Ctrl+Enter as Enter, the key that runs is named.
+        model.keys_disambiguated = false;
+        assert_eq!(
+            footer_hint(&model).as_deref(),
+            Some("Ctrl+J run  Ctrl+N new sql  Ctrl+W close")
+        );
+    }
+
+    /// A statement waiting on a lock showed nothing: the bar says it runs, for how long
+    /// and what stops it, and the transaction and a read-only connection in words.
+    #[test]
+    fn the_status_bar_says_what_is_running_and_what_the_connection_is() {
+        use crate::render::render_to_string;
+        use dexo_driver_api::TransactionState;
+        let mut model = Model::default();
+        model.connection.name = "pg-readonly".into();
+        model.connection.ready = true;
+        model.connection.read_only = true;
+        model.transaction = TransactionState::Failed;
+        let operation = crate::runtime::OperationId::new();
+        model.active_operation = Some(operation);
+        model.active_started = Some((operation, std::time::Instant::now()));
+        let view = render_to_string(&model, 140, 30);
+        let footer = view.lines().last().unwrap().to_string();
+        for want in [
+            "pg-readonly (read-only)",
+            "Transaction failed: roll back",
+            "Running 0s - Ctrl+F2 cancels",
+        ] {
+            assert!(footer.contains(want), "{want} missing in: {footer}");
+        }
+        assert!(!footer.contains("tx:"), "{footer}");
+        // Once it ends, the bar goes quiet again.
+        model.active_operation = None;
+        let view = render_to_string(&model, 140, 30);
+        assert!(!view.lines().last().unwrap().contains("Running"));
     }
 
     #[test]
@@ -338,7 +628,7 @@ mod tests {
 
     /// Nothing else in the app records a message, so an error that blinks out is lost.
     #[test]
-    fn an_error_toast_stays_until_it_is_dismissed() {
+    fn an_error_toast_outlasts_an_info_one_but_goes_by_itself() {
         use crate::action::Action;
         use crate::render::render_to_string;
         use crate::update::update;
@@ -347,20 +637,30 @@ mod tests {
         model
             .messages
             .error("relation \"orders\" does not exist".into());
-        for _ in 0..50 {
+        for _ in 0..10 {
             update(&mut model, Action::ToastTick);
         }
         let view = render_to_string(&model, 120, 40);
-        assert!(view.contains("does not exist"), "the error aged out");
+        assert!(view.contains("does not exist"), "the error aged out early");
         assert!(
             view.contains("error"),
             "the toast never said it was an error"
         );
+        assert!(model.messages.expires(), "the toast has no clock");
+
+        for _ in 0..5 {
+            update(&mut model, Action::ToastTick);
+        }
+        assert!(model.messages.toast.is_none(), "the error never went away");
         assert!(
-            !model.messages.expires(),
-            "a sticky toast is running the clock"
+            model
+                .messages
+                .last()
+                .is_some_and(|entry| entry.message.contains("does not exist")),
+            "the Messages view lost the error"
         );
 
+        model.messages.error("again".into());
         update(&mut model, Action::DismissToast);
         assert!(model.messages.toast.is_none());
     }
@@ -401,9 +701,43 @@ mod tests {
             model.apply_size(width, height);
             let view = render_to_string(&model, width, height);
             assert!(
-                view.contains("MOUSE OFF · Ctrl+P settings.mouse"),
+                view.contains("MOUSE OFF · Ctrl+P, Toggle Mouse"),
                 "missing mouse recovery command at {width}x{height}"
             );
+            assert!(
+                !view.contains("settings.mouse"),
+                "an internal id on screen at {width}x{height}"
+            );
         }
+    }
+
+    /// The hints say the keys of the keymap in use: Vim has no page keys, and Emacs
+    /// opens the palette with Alt+X.
+    #[test]
+    fn hints_follow_the_keymap() {
+        let mut model = Model {
+            focus: Focus::Results,
+            keymap: crate::keymap::Keymap::vim_profile(),
+            ..Model::default()
+        };
+        // Only a table's rows are in pages, so only there is `n/p` a hint.
+        model
+            .documents
+            .push(crate::model::EditorDocument::new_table(
+                dexo_app::parse_qualified("public.orders"),
+                None,
+            ));
+        model.set_active_document(1);
+        let hint = footer_hint(&model).unwrap();
+        assert!(!hint.contains("page"), "{hint}");
+        assert!(hint.contains("Ctrl+W close"), "{hint}");
+        model.keymap = crate::keymap::Keymap::emacs_profile();
+        assert!(
+            super::doors(&model).starts_with("Alt+X"),
+            "{}",
+            super::doors(&model)
+        );
+        model.keymap = crate::keymap::Keymap::default_profile();
+        assert!(footer_hint(&model).unwrap().contains("n/p page"));
     }
 }

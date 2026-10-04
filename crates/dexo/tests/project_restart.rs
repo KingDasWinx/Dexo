@@ -94,5 +94,8 @@ fn restart_restores_project_documents_layout_and_active_items() {
         ..WorkbenchLayout::default()
     }
     .clamp(50, 18);
-    assert!(!compact.explorer_visible);
+    assert!(
+        compact.explorer_visible,
+        "a small terminal must not hide the explorer"
+    );
 }

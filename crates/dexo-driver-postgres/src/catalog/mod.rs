@@ -6,6 +6,8 @@ use dexo_driver_api::{
 use crate::error::{is_permission, map_error};
 use crate::session::PostgresSession;
 
+mod table_ddl;
+
 const SYSTEM_SCHEMAS: &[&str] = &["pg_catalog", "information_schema", "pg_toast"];
 
 fn pg_id(kind: &str, key: impl std::fmt::Display) -> ObjectId {
@@ -28,7 +30,8 @@ fn is_system_schema(name: &str) -> bool {
 
 fn relkind_to_kind(relkind: &str) -> ObjectKind {
     match relkind {
-        "r" | "p" => ObjectKind::Table,
+        // A foreign table reads like any other.
+        "r" | "p" | "f" => ObjectKind::Table,
         "v" => ObjectKind::View,
         "m" => ObjectKind::MaterializedView,
         "S" => ObjectKind::Sequence,
@@ -39,13 +42,37 @@ fn relkind_to_kind(relkind: &str) -> ObjectKind {
 
 fn relkind_key(relkind: &str) -> &'static str {
     match relkind {
-        "r" | "p" => "table",
+        "r" | "p" | "f" => "table",
         "v" => "view",
         "m" => "materialized_view",
         "S" => "sequence",
         "i" => "index",
         _ => "class",
     }
+}
+
+/// A table, view or sequence with what the explorer shows of it: built the same way
+/// when its schema lists it and when it is found by id, so the inspector sees its
+/// comment either way.
+fn relation_object(
+    id: ObjectId,
+    name: QualifiedName,
+    schema: ObjectId,
+    oid: i64,
+    relkind: &str,
+    partkey: Option<String>,
+    comment: Option<String>,
+) -> CatalogObject {
+    let mut object = CatalogObject::new(id, relkind_to_kind(relkind), name, Some(schema))
+        .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
+        .with_attribute("driver.postgres.relkind", serde_json::json!(relkind));
+    if let Some(partkey) = partkey.filter(|value| !value.is_empty()) {
+        object = object.with_attribute("driver.postgres.partition_key", serde_json::json!(partkey));
+    }
+    if let Some(comment) = comment.filter(|value| !value.trim().is_empty()) {
+        object = object.with_attribute("comment", serde_json::json!(comment));
+    }
+    object
 }
 
 impl PostgresSession {
@@ -230,10 +257,11 @@ impl PostgresSession {
         let classes = self
             .client
             .query(
-                "SELECT c.oid::bigint, c.relname::text, c.relkind::text, pg_get_partkeydef(c.oid)
+                "SELECT c.oid::bigint, c.relname::text, c.relkind::text, pg_get_partkeydef(c.oid),
+                        obj_description(c.oid, 'pg_class')
                  FROM pg_class c
                  WHERE c.relnamespace = $1::bigint::oid
-                   AND c.relkind IN ('r','p','v','m','S')
+                   AND c.relkind IN ('r','p','f','v','m','S')
                    AND NOT c.relispartition
                  ORDER BY c.relname",
                 &[&schema_oid],
@@ -244,20 +272,15 @@ impl PostgresSession {
             let oid: i64 = row.get(0);
             let name: String = row.get(1);
             let relkind: String = row.get(2);
-            let partkey: Option<String> = row.get(3);
-            let mut object = CatalogObject::new(
+            objects.push(relation_object(
                 pg_id(relkind_key(&relkind), oid),
-                relkind_to_kind(&relkind),
                 QualifiedName::new(Some(catalog), Some(schema), name),
-                Some(parent.clone()),
-            )
-            .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
-            .with_attribute("driver.postgres.relkind", serde_json::json!(relkind));
-            if let Some(partkey) = partkey.filter(|value| !value.is_empty()) {
-                object = object
-                    .with_attribute("driver.postgres.partition_key", serde_json::json!(partkey));
-            }
-            objects.push(object);
+                parent.clone(),
+                oid,
+                &relkind,
+                row.get(3),
+                row.get(4),
+            ));
         }
 
         let routines = self
@@ -335,7 +358,8 @@ impl PostgresSession {
         let columns = self
             .client
             .query(
-                "SELECT a.attnum::bigint, a.attname::text, format_type(a.atttypid, a.atttypmod), a.attnotnull
+                "SELECT a.attnum::bigint, a.attname::text, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+                        col_description(a.attrelid, a.attnum)
                  FROM pg_attribute a
                  WHERE a.attrelid = $1::bigint::oid AND a.attnum > 0 AND NOT a.attisdropped
                  ORDER BY a.attnum",
@@ -348,17 +372,20 @@ impl PostgresSession {
             let name: String = row.get(1);
             let type_name: String = row.get(2);
             let not_null: bool = row.get(3);
-            objects.push(
-                CatalogObject::new(
-                    pg_id("column", format!("{relid}.{attnum}")),
-                    ObjectKind::Column,
-                    QualifiedName::new(Some(catalog), Some(schema), format!("{relation}.{name}")),
-                    Some(parent.clone()),
-                )
-                .with_attribute("driver.postgres.attnum", serde_json::json!(attnum))
-                .with_attribute("type", serde_json::json!(type_name))
-                .with_attribute("driver.postgres.not_null", serde_json::json!(not_null)),
-            );
+            let comment: Option<String> = row.get(4);
+            let mut column = CatalogObject::new(
+                pg_id("column", format!("{relid}.{attnum}")),
+                ObjectKind::Column,
+                QualifiedName::new(Some(catalog), Some(schema), format!("{relation}.{name}")),
+                Some(parent.clone()),
+            )
+            .with_attribute("driver.postgres.attnum", serde_json::json!(attnum))
+            .with_attribute("type", serde_json::json!(type_name))
+            .with_attribute("driver.postgres.not_null", serde_json::json!(not_null));
+            if let Some(comment) = comment.filter(|value| !value.trim().is_empty()) {
+                column = column.with_attribute("comment", serde_json::json!(comment));
+            }
+            objects.push(column);
         }
 
         let indexes = self
@@ -545,7 +572,7 @@ impl PostgresSession {
                     CASE c.relname
                       WHEN 'pg_class' THEN COALESCE((
                         SELECT CASE relkind
-                          WHEN 'r' THEN 'table' WHEN 'p' THEN 'table'
+                          WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'f' THEN 'table'
                           WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view'
                           WHEN 'S' THEN 'sequence' WHEN 'i' THEN 'index'
                           ELSE 'class' END
@@ -573,7 +600,7 @@ impl PostgresSession {
                     CASE c.relname
                       WHEN 'pg_class' THEN COALESCE((
                         SELECT CASE relkind
-                          WHEN 'r' THEN 'table' WHEN 'p' THEN 'table'
+                          WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'f' THEN 'table'
                           WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view'
                           WHEN 'S' THEN 'sequence' WHEN 'i' THEN 'index'
                           ELSE 'class' END
@@ -636,7 +663,7 @@ impl PostgresSession {
             .client
             .query_opt(
                 "SELECT CASE relkind
-                   WHEN 'r' THEN 'table' WHEN 'p' THEN 'table'
+                   WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'f' THEN 'table'
                    WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view'
                    WHEN 'S' THEN 'sequence' WHEN 'i' THEN 'index'
                    ELSE 'class' END
@@ -761,20 +788,87 @@ impl CatalogReader for PostgresSession {
                     .with_attribute(oid_attr(oid).0, oid_attr(oid).1),
                 ))
             }
-            "table" | "view" | "materialized_view" | "sequence" | "index" | "partition" => {
-                let (catalog, schema, name) = self.relation_name(oid).await?;
-                Ok(Some(CatalogObject::new(
+            "table" | "view" | "materialized_view" | "sequence" => {
+                let Some(row) = self
+                    .client
+                    .query_opt(
+                        "SELECT current_database()::text, n.nspname::text, c.relname::text,
+                                n.oid::bigint, c.relkind::text, pg_get_partkeydef(c.oid),
+                                obj_description(c.oid, 'pg_class'),
+                                pg_get_userbyid(c.relowner)::text,
+                                pg_total_relation_size(c.oid)::bigint
+                         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                         WHERE c.oid = $1::bigint::oid",
+                        &[&oid],
+                    )
+                    .await
+                    .map_err(map_error)?
+                else {
+                    return Ok(None);
+                };
+                let relkind: String = row.get(4);
+                let object = relation_object(
                     id.clone(),
-                    relkind_to_kind(match kind {
-                        "view" => "v",
-                        "materialized_view" => "m",
-                        "sequence" => "S",
-                        "index" => "i",
-                        _ => "r",
-                    }),
-                    QualifiedName::new(Some(catalog), Some(schema), name),
-                    None,
-                )))
+                    QualifiedName::new(
+                        Some(row.get::<_, String>(0)),
+                        Some(row.get::<_, String>(1)),
+                        row.get::<_, String>(2),
+                    ),
+                    pg_id("schema", row.get::<_, i64>(3)),
+                    oid,
+                    &relkind,
+                    row.get(5),
+                    row.get(6),
+                );
+                Ok(Some(
+                    object
+                        .with_attribute("owner", serde_json::json!(row.get::<_, String>(7)))
+                        .with_attribute("size_bytes", serde_json::json!(row.get::<_, i64>(8))),
+                ))
+            }
+            "index" | "partition" => {
+                let (catalog, schema, name) = self.relation_name(oid).await?;
+                Ok(Some(
+                    CatalogObject::new(
+                        id.clone(),
+                        relkind_to_kind(if kind == "index" { "i" } else { "r" }),
+                        QualifiedName::new(Some(catalog), Some(schema), name),
+                        None,
+                    )
+                    .with_attribute(oid_attr(oid).0, oid_attr(oid).1),
+                ))
+            }
+            "constraint" => {
+                let Some(row) = self
+                    .client
+                    .query_opt(
+                        "SELECT current_database()::text, n.nspname::text, k.conname::text,
+                                k.contype::text, k.conrelid::bigint
+                         FROM pg_constraint k JOIN pg_namespace n ON n.oid = k.connamespace
+                         WHERE k.oid = $1::bigint::oid",
+                        &[&oid],
+                    )
+                    .await
+                    .map_err(map_error)?
+                else {
+                    return Ok(None);
+                };
+                let contype: String = row.get(3);
+                let table: i64 = row.get(4);
+                Ok(Some(
+                    CatalogObject::new(
+                        id.clone(),
+                        ObjectKind::Constraint,
+                        QualifiedName::new(
+                            Some(row.get::<_, String>(0)),
+                            Some(row.get::<_, String>(1)),
+                            row.get::<_, String>(2),
+                        ),
+                        (table != 0).then(|| pg_id("table", table)),
+                    )
+                    .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
+                    .with_attribute("driver.postgres.contype", serde_json::json!(contype)),
+                ))
             }
             _ => Ok(None),
         }
@@ -787,21 +881,7 @@ impl CatalogReader for PostgresSession {
         let sql = match kind {
             "table" | "partition" => {
                 let oid: i64 = key.parse().unwrap_or(0);
-                self.client
-                    .query_one(
-                        "SELECT 'CREATE TABLE ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname) || E' (\\n' ||
-                                coalesce(string_agg('  ' || quote_ident(a.attname) || ' ' || format_type(a.atttypid, a.atttypmod), E',\\n' ORDER BY a.attnum), '') ||
-                                E'\\n);'
-                         FROM pg_class c
-                         JOIN pg_namespace n ON n.oid = c.relnamespace
-                         JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-                         WHERE c.oid = $1::bigint::oid
-                         GROUP BY n.nspname, c.relname",
-                        &[&oid],
-                    )
-                    .await
-                    .map_err(map_error)?
-                    .get::<_, String>(0)
+                self.table_ddl(oid).await?
             }
             "view" | "materialized_view" => {
                 let oid: i64 = key.parse().unwrap_or(0);
@@ -890,5 +970,118 @@ impl CatalogReader for PostgresSession {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
         self.depend_ids(oid, false).await
+    }
+
+    async fn foreign_keys(
+        &self,
+        table: &QualifiedName,
+    ) -> Result<Vec<dexo_driver_api::ForeignKeyRef>, DriverError> {
+        let schema = table.schema().unwrap_or("public").to_string();
+        let name = table.object().to_string();
+        let rows = self
+            .client
+            .query(
+                "SELECT c.conname::text,
+                        fn.nspname::text, ft.relname::text,
+                        ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n, o)
+                              JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.n
+                              ORDER BY k.o),
+                        tn.nspname::text, tt.relname::text,
+                        ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(n, o)
+                              JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.n
+                              ORDER BY k.o)
+                 FROM pg_constraint c
+                 JOIN pg_class ft ON ft.oid = c.conrelid
+                 JOIN pg_namespace fn ON fn.oid = ft.relnamespace
+                 JOIN pg_class tt ON tt.oid = c.confrelid
+                 JOIN pg_namespace tn ON tn.oid = tt.relnamespace
+                 WHERE c.contype = 'f'
+                   -- A partition's clone of its parent's key is the parent's key.
+                   AND c.conparentid = 0
+                   AND ((fn.nspname = $1 AND ft.relname = $2)
+                        OR (tn.nspname = $1 AND tt.relname = $2))
+                 ORDER BY c.conname, fn.nspname, ft.relname",
+                &[&schema, &name],
+            )
+            .await
+            .map_err(map_error)?;
+        let catalog = table.catalog().map(str::to_string);
+        Ok(rows
+            .into_iter()
+            .map(|row| dexo_driver_api::ForeignKeyRef {
+                name: row.get(0),
+                from: QualifiedName::new(
+                    catalog.clone(),
+                    Some(row.get::<_, String>(1)),
+                    row.get::<_, String>(2),
+                ),
+                from_columns: row.get(3),
+                to: QualifiedName::new(
+                    catalog.clone(),
+                    Some(row.get::<_, String>(4)),
+                    row.get::<_, String>(5),
+                ),
+                to_columns: row.get(6),
+            })
+            .collect())
+    }
+
+    async fn databases(&self) -> Result<Vec<String>, DriverError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT datname::text FROM pg_database
+                 WHERE NOT datistemplate AND datallowconn ORDER BY 1",
+                &[],
+            )
+            .await
+            .map_err(map_error)?;
+        Ok(rows.into_iter().map(|row| row.get(0)).collect())
+    }
+
+    async fn relations_named(
+        &self,
+        schema: Option<&str>,
+        name: &str,
+    ) -> Result<Option<Vec<CatalogObject>>, DriverError> {
+        // `current_schemas(true)` is the search_path as the server walks it: pg_temp
+        // and pg_catalog in their places, schemas that do not exist left out.
+        let rows = self
+            .client
+            .query(
+                "SELECT c.oid::bigint, n.oid::bigint, n.nspname::text, c.relname::text,
+                        c.relkind::text, current_database()::text
+                 FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE c.relkind IN ('r','p','f','v','m')
+                   AND lower(c.relname) = lower($2::text)
+                   AND CASE WHEN $1::text IS NULL THEN n.nspname = ANY (current_schemas(true))
+                            ELSE lower(n.nspname) = lower($1::text) END
+                 ORDER BY array_position(current_schemas(true), n.nspname), n.nspname,
+                          c.relname",
+                &[&schema, &name],
+            )
+            .await
+            .map_err(map_error)?;
+        Ok(Some(
+            rows.into_iter()
+                .map(|row| {
+                    let oid: i64 = row.get(0);
+                    let schema_oid: i64 = row.get(1);
+                    let schema: String = row.get(2);
+                    let relation: String = row.get(3);
+                    let relkind: String = row.get(4);
+                    let catalog: String = row.get(5);
+                    CatalogObject::new(
+                        pg_id(relkind_key(&relkind), oid),
+                        relkind_to_kind(&relkind),
+                        QualifiedName::new(Some(catalog), Some(schema), relation),
+                        Some(pg_id("schema", schema_oid)),
+                    )
+                    .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
+                    .with_attribute("driver.postgres.relkind", serde_json::json!(relkind))
+                })
+                .collect(),
+        ))
     }
 }

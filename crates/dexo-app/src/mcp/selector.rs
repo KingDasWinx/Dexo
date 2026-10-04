@@ -25,7 +25,7 @@ impl Segment {
         if part.is_empty() || part.contains('*') {
             return Err(AppError::new(
                 ErrorCategory::McpPolicy,
-                "selectors allow exact names or explicit * only",
+                "a selector names each part exactly or with a lone *, as db.public.orders or db.public.*",
             ));
         }
         Ok(Self::Exact(part.to_string()))

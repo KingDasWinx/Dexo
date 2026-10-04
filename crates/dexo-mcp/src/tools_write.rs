@@ -1,6 +1,8 @@
 use dexo_app::data::{ChangeSet, RowIdentity, TableMeta, mutations_for};
 use dexo_app::error::{AppError, ErrorCategory};
+use dexo_app::mcp::approval::{Approval, ApprovalDecision};
 use dexo_app::mcp::audit::{AuditEvent, SqlAuditMode};
+use dexo_app::mcp::grant::Grant;
 use dexo_app::mcp::grant::WRITE_TOOLS;
 use dexo_app::mcp::ledger::GrantLedger;
 use dexo_app::mcp::operation::{OperationRecord, OperationState, SideEffect, payload_hash};
@@ -16,6 +18,7 @@ use rmcp::{tool, tool_router};
 use serde::Serialize;
 use serde_json::json;
 use serde_json::{Map, Value};
+use tokio_util::sync::CancellationToken;
 
 use crate::render::text_result;
 use crate::schema::{
@@ -30,11 +33,43 @@ impl DexoMcpServer {
         name: &str,
         connection: Option<String>,
         input: &impl Serialize,
+        cancel: CancellationToken,
     ) -> CallToolResult {
         let arguments = serde_json::to_value(input)
             .ok()
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
+        // A write an asking grant covers waits for a person first, before the connection
+        // is taken: the session stays free for other calls while it waits.
+        let approved = match self.inner.router.resolve(connection.as_deref()) {
+            Ok(slot) => match self
+                .await_approval(name, &slot.meta, &arguments, &cancel)
+                .await
+            {
+                Ok(approved) => approved,
+                Err(error) => return crate::error::app_error(&error),
+            },
+            Err(_) => None,
+        };
+        // A call the agent cancelled does not run, approved or not: rmcp only cancels
+        // the token, and the handler goes on unless it looks.
+        if cancel.is_cancelled() {
+            return crate::error::app_error(&cancelled_by_agent());
+        }
+        // The profile's call permit is taken only now, to run: held while a person
+        // decided, two waiting writes answered BUSY to every other call. An approved
+        // write waits for its turn rather than make the person approve it again.
+        let _permit = if approved.is_some() {
+            tokio::select! {
+                permit = self.inner.calls.acquire() => permit.ok(),
+                () = cancel.cancelled() => return crate::error::app_error(&cancelled_by_agent()),
+            }
+        } else {
+            match self.inner.calls.try_acquire() {
+                Ok(permit) => Some(permit),
+                Err(_) => return crate::error::busy(),
+            }
+        };
         let mut lease = match self.open(connection.as_deref()).await {
             Ok(lease) => lease,
             Err(result) => return result,
@@ -47,6 +82,7 @@ impl DexoMcpServer {
             name,
             arguments,
             now_secs(),
+            approved,
         )
         .await
         .map(|text| text_result(text.clone(), json!({ "outcome": text })));
@@ -54,26 +90,263 @@ impl DexoMcpServer {
     }
 }
 
+impl DexoMcpServer {
+    /// Waits for a person's decision when only an asking grant covers this write: the
+    /// request goes to the database, where Dexo's Agents screen shows it under Approvals, and the
+    /// answer is read back every quarter second until the grant's time runs out, or the
+    /// agent cancels the call, which takes the request away so no one can approve it.
+    /// Any other write -- replayed, refused, or covered by a grant that does not ask --
+    /// goes straight on, and is judged where it runs.
+    async fn await_approval(
+        &self,
+        name: &str,
+        connection: &McpConnection,
+        arguments: &Map<String, Value>,
+        cancel: &CancellationToken,
+    ) -> Result<Option<uuid::Uuid>, AppError> {
+        let service = &self.inner.service;
+        let ledger = self.inner.ledger.as_ref();
+        let now = now_secs();
+        let replayed = arguments
+            .get("operation_id")
+            .and_then(Value::as_str)
+            .is_some_and(|operation| {
+                ledger
+                    .lookup_operation(&service.profile.name, &self.inner.session_id, operation)
+                    .is_some()
+            });
+        if replayed || is_grant_management(name) || !service.profile.tool_allowed(name) {
+            return Ok(None);
+        }
+        let Ok(targets) = write_targets(service, connection, name, arguments) else {
+            return Ok(None);
+        };
+        let grants = ledger.active_grants(&service.profile.name, now);
+        let Some(grant) = covering_grant(&grants, name, connection, &targets, service, now) else {
+            return Ok(None);
+        };
+        if !grant.asks() {
+            return Ok(None);
+        }
+        // A destructive DDL without its confirm_target is refused where it runs; asking a
+        // person to approve it first only had them approve a write that then failed.
+        if name == "schema_apply_ddl" {
+            let target = arguments
+                .get("target")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let sql = arguments
+                .get("sql")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let risk = classify_raw_sql(sql);
+            if (risk.destructive || risk.data_loss)
+                && arguments.get("confirm_target").and_then(Value::as_str) != Some(target)
+            {
+                return Ok(None);
+            }
+        }
+        let mut approval = Approval::pending(
+            &service.profile.name,
+            &connection.name,
+            name,
+            arguments,
+            targets.iter().map(ToString::to_string).collect(),
+            now,
+            grant.ask_secs,
+        );
+        approval.grant = grant.id;
+        // A request cannot outlive the grant that would run it.
+        approval.deadline = approval.deadline.min(grant.expires_at);
+        let waits = approval.deadline - approval.created_at;
+        ledger.request_approval(&approval)?;
+        // However the wait ends -- a decision, the deadline, a cancel, or the call
+        // dropped as the server goes away -- a request still pending is settled as
+        // cancelled: its SQL goes, and no one approves a write nobody waits for.
+        let _waiting = Waiting {
+            ledger,
+            id: approval.id,
+        };
+        let mut beat = now;
+        let target = arguments
+            .get("target")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let grant_id = grant.id.to_string();
+        let operation = arguments.get("operation_id").and_then(Value::as_str);
+        audit(
+            ledger,
+            service,
+            name,
+            operation,
+            target,
+            "ask",
+            Some(&grant_id),
+            "waiting",
+            now,
+            None,
+        );
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+                () = cancel.cancelled() => {
+                    let now = now_secs();
+                    audit(
+                        ledger,
+                        service,
+                        name,
+                        operation,
+                        target,
+                        "deny",
+                        Some(&grant_id),
+                        "cancelled",
+                        now,
+                        None,
+                    );
+                    return Err(cancelled_by_agent());
+                }
+            }
+            let now = now_secs();
+            // Once a second the request says its call still waits; Approvals
+            // approves only a request that does.
+            if now != beat {
+                ledger.touch_approval(approval.id, now);
+                beat = now;
+            }
+            let decision = ledger
+                .approval(approval.id)
+                .map_or(ApprovalDecision::Expired, |approval| approval.decision);
+            let refused = match decision {
+                ApprovalDecision::Approved => {
+                    audit(
+                        ledger,
+                        service,
+                        name,
+                        operation,
+                        target,
+                        "approved",
+                        Some(&grant_id),
+                        "approved",
+                        now,
+                        None,
+                    );
+                    return Ok(Some(approval.id));
+                }
+                ApprovalDecision::Pending if now < approval.deadline => continue,
+                // Past the deadline it is settled as expired -- unless a person decided
+                // in the same instant, which the next read shows.
+                ApprovalDecision::Pending => {
+                    if !ledger.settle_approval(approval.id, ApprovalDecision::Expired, now)? {
+                        continue;
+                    }
+                    format!("no one approved this write within {waits}s")
+                }
+                // Revoking the grant denies its waiting requests; that is not a person
+                // saying no, and the agent is told which it was.
+                ApprovalDecision::Denied if ledger.is_revoked(grant.id) => {
+                    "the grant for this write was revoked while it waited".to_string()
+                }
+                ApprovalDecision::Denied => "a person denied this write".to_string(),
+                ApprovalDecision::Expired => {
+                    format!("no one approved this write within {waits}s")
+                }
+                ApprovalDecision::Cancelled => "this write's request was cancelled".to_string(),
+            };
+            audit(
+                ledger,
+                service,
+                name,
+                operation,
+                target,
+                "deny",
+                Some(&grant_id),
+                &refused,
+                now,
+                None,
+            );
+            return Err(AppError::new(ErrorCategory::McpPolicy, refused));
+        }
+    }
+}
+
+/// The tables a write touches: those its SQL or DDL names, or the one it targets.
+fn write_targets(
+    service: &McpService,
+    connection: &McpConnection,
+    name: &str,
+    arguments: &Map<String, Value>,
+) -> Result<Vec<ObjectRef>, AppError> {
+    let sql = arguments
+        .get("sql")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let target = arguments
+        .get("target")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match name {
+        "data_execute_sql" => service.data_write_targets(connection, sql),
+        "schema_apply_ddl" => service.schema_write_targets(connection, sql),
+        _ => Ok(vec![connection.qualify(&ObjectRef::parse(target).path)]),
+    }
+}
+
+/// The grant that lets a write through: one that does not ask first, so an asking grant
+/// makes a person decide only when nothing else covers the write.
+fn covering_grant(
+    grants: &[Grant],
+    name: &str,
+    connection: &McpConnection,
+    targets: &[ObjectRef],
+    service: &McpService,
+    now: i64,
+) -> Option<Grant> {
+    let policy = service.policy();
+    let covers = |grant: &&Grant| {
+        targets
+            .iter()
+            .all(|target| grant.authorizes(name, &connection.name, target, &policy, now))
+    };
+    grants
+        .iter()
+        .filter(covers)
+        .find(|grant| !grant.asks())
+        .or_else(|| grants.iter().find(covers))
+        .cloned()
+}
+
 #[tool_router(router = write_tools, vis = "pub(crate)")]
 impl DexoMcpServer {
     /// Insert one row. Appears only while a data_write grant covering `target` is active; one successful call spends the grant.
     #[tool(annotations(read_only_hint = false, destructive_hint = false))]
-    async fn data_insert(&self, Parameters(input): Parameters<DataInsertInput>) -> CallToolResult {
-        self.write("data_insert", input.connection.clone(), &input)
+    async fn data_insert(
+        &self,
+        Parameters(input): Parameters<DataInsertInput>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        self.write("data_insert", input.connection.clone(), &input, cancel)
             .await
     }
 
     /// Update the one row named by `identity`. Appears only while a data_write grant covering `target` is active.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
-    async fn data_update(&self, Parameters(input): Parameters<DataUpdateInput>) -> CallToolResult {
-        self.write("data_update", input.connection.clone(), &input)
+    async fn data_update(
+        &self,
+        Parameters(input): Parameters<DataUpdateInput>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        self.write("data_update", input.connection.clone(), &input, cancel)
             .await
     }
 
     /// Delete the one row named by `identity`. Appears only while a data_write grant covering `target` is active.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
-    async fn data_delete(&self, Parameters(input): Parameters<DataDeleteInput>) -> CallToolResult {
-        self.write("data_delete", input.connection.clone(), &input)
+    async fn data_delete(
+        &self,
+        Parameters(input): Parameters<DataDeleteInput>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        self.write("data_delete", input.connection.clone(), &input, cancel)
             .await
     }
 
@@ -82,15 +355,20 @@ impl DexoMcpServer {
     async fn data_execute_sql(
         &self,
         Parameters(input): Parameters<DataSqlInput>,
+        cancel: CancellationToken,
     ) -> CallToolResult {
-        self.write("data_execute_sql", input.connection.clone(), &input)
+        self.write("data_execute_sql", input.connection.clone(), &input, cancel)
             .await
     }
 
     /// Apply one DDL statement. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
-    async fn schema_apply_ddl(&self, Parameters(input): Parameters<DdlInput>) -> CallToolResult {
-        self.write("schema_apply_ddl", input.connection.clone(), &input)
+    async fn schema_apply_ddl(
+        &self,
+        Parameters(input): Parameters<DdlInput>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        self.write("schema_apply_ddl", input.connection.clone(), &input, cancel)
             .await
     }
 
@@ -99,9 +377,15 @@ impl DexoMcpServer {
     async fn admin_cancel_query(
         &self,
         Parameters(input): Parameters<AdminActionInput>,
+        cancel: CancellationToken,
     ) -> CallToolResult {
-        self.write("admin_cancel_query", input.connection.clone(), &input)
-            .await
+        self.write(
+            "admin_cancel_query",
+            input.connection.clone(),
+            &input,
+            cancel,
+        )
+        .await
     }
 
     /// Terminate one server session. Needs an admin grant for this connection and `confirm_target` equal to `session_id`.
@@ -109,15 +393,34 @@ impl DexoMcpServer {
     async fn admin_terminate_session(
         &self,
         Parameters(input): Parameters<AdminActionInput>,
+        cancel: CancellationToken,
     ) -> CallToolResult {
-        self.write("admin_terminate_session", input.connection.clone(), &input)
-            .await
+        self.write(
+            "admin_terminate_session",
+            input.connection.clone(),
+            &input,
+            cancel,
+        )
+        .await
     }
 }
 
-pub fn write_tool_names(ledger: &dyn GrantLedger, profile: &str, now: i64) -> Vec<String> {
+/// The write tools an active grant publishes, for the connections that accept writes: a
+/// grant on a connection that became production, or read-only, stays in the ledger but
+/// opens nothing, and the tool list no longer offers what `list_connections` says it
+/// cannot do.
+pub fn write_tool_names(
+    ledger: &dyn GrantLedger,
+    profile: &str,
+    now: i64,
+    accepts_writes: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
     let mut tools = Vec::new();
-    for grant in ledger.active_grants(profile, now) {
+    for grant in ledger
+        .active_grants(profile, now)
+        .into_iter()
+        .filter(|grant| accepts_writes(&grant.connection))
+    {
         for tool in grant.tools {
             if WRITE_TOOLS.contains(&tool.as_str()) && !tools.contains(&tool) {
                 tools.push(tool);
@@ -131,6 +434,7 @@ pub fn is_grant_management(name: &str) -> bool {
     matches!(name, "grant_create" | "grant_revoke" | "grant_list")
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn call_write_tool(
     service: &McpService,
     ledger: &dyn GrantLedger,
@@ -139,6 +443,7 @@ pub async fn call_write_tool(
     name: &str,
     arguments: Map<String, Value>,
     now: i64,
+    approved: Option<uuid::Uuid>,
 ) -> Result<String, AppError> {
     if is_grant_management(name) {
         audit(
@@ -165,10 +470,6 @@ pub async fn call_write_tool(
         return Err(AppError::new(ErrorCategory::McpPolicy, "not found"));
     }
     connection.accepts_writes()?;
-    let sql = arguments
-        .get("sql")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
     let value = Value::Object(arguments.clone());
     let operation_id = arguments
         .get("operation_id")
@@ -178,7 +479,6 @@ pub async fn call_write_tool(
         .get("target")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let object = connection.qualify(&ObjectRef::parse(target_name).path);
     if let Some(existing) = ledger.lookup_operation(&service.profile.name, session_id, operation_id)
     {
         let replayed =
@@ -197,22 +497,10 @@ pub async fn call_write_tool(
         );
         return Ok(replayed.result);
     }
-    let targets = match name {
-        "data_execute_sql" => service.data_write_targets(connection, sql)?,
-        "schema_apply_ddl" => service.schema_write_targets(connection, sql)?,
-        _ => vec![object],
-    };
-    let profile_policy = service.policy();
+    let targets = write_targets(service, connection, name, &arguments)?;
     let grants = ledger.active_grants(&service.profile.name, now);
-    let grant = grants
-        .iter()
-        .find(|grant| {
-            targets.iter().all(|target| {
-                grant.authorizes(name, &connection.name, target, &profile_policy, now)
-            })
-        })
-        .cloned()
-        .ok_or_else(|| {
+    let grant =
+        covering_grant(&grants, name, connection, &targets, service, now).ok_or_else(|| {
             audit(
                 ledger,
                 service,
@@ -227,6 +515,26 @@ pub async fn call_write_tool(
             );
             AppError::new(ErrorCategory::McpPolicy, "not found")
         })?;
+    // An asking grant lets a write through only once a person approved it, before it
+    // was taken to the connection.
+    if grant.asks() && approved.is_none() {
+        audit(
+            ledger,
+            service,
+            name,
+            Some(operation_id),
+            target_name,
+            "deny",
+            Some(&grant.id.to_string()),
+            "waits for approval",
+            now,
+            None,
+        );
+        return Err(AppError::new(
+            ErrorCategory::McpPolicy,
+            "this write waits for a person's approval",
+        ));
+    }
     let record = OperationRecord {
         profile: service.profile.name.clone(),
         session: session_id.into(),
@@ -316,8 +624,20 @@ pub async fn call_write_tool(
     }
 }
 
+/// What an agent reads of a write: whether it went through, what became of the database,
+/// and the detail -- in words, not the names of the types that hold them.
 fn format_outcome(state: OperationState, side_effect: SideEffect, text: &str) -> String {
-    format!("{state:?} {side_effect:?} {text}")
+    let state = match state {
+        OperationState::Succeeded => "done",
+        _ => "failed",
+    };
+    let side_effect = match side_effect {
+        SideEffect::Committed => "committed",
+        SideEffect::RolledBack => "rolled back",
+        SideEffect::PartiallyCommitted => "partly committed",
+        SideEffect::Unknown => "outcome unknown",
+    };
+    format!("{state}, {side_effect}: {}", text.replace('_', " "))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -375,7 +695,13 @@ async fn execute(
             }
             let sql = value.get("sql").and_then(Value::as_str).unwrap_or_default();
             let affected = service.execute_write(session, connection, sql).await?;
-            Ok((SideEffect::Committed, format!("{affected} rows affected")))
+            Ok((
+                SideEffect::Committed,
+                format!(
+                    "{affected} row{} affected",
+                    if affected == 1 { "" } else { "s" }
+                ),
+            ))
         }
         "schema_apply_ddl" => apply_ddl(value, session, connection, cancelled()).await,
         "admin_cancel_query" | "admin_terminate_session" => {
@@ -594,6 +920,25 @@ pub fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// A request a call waits on; dropped, it settles the request as cancelled if no one
+/// decided it, which is a no-op once someone did.
+struct Waiting<'a> {
+    ledger: &'a dyn GrantLedger,
+    id: uuid::Uuid,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        let _ = self
+            .ledger
+            .settle_approval(self.id, ApprovalDecision::Cancelled, now_secs());
+    }
+}
+
+fn cancelled_by_agent() -> AppError {
+    AppError::new(ErrorCategory::Cancelled, "the agent cancelled this write")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{call_write_tool, is_grant_management, write_tool_names};
@@ -606,6 +951,33 @@ mod tests {
     use dexo_app::mcp::selector::{Effect, SelectorRule};
     use dexo_test_support::FakeSession;
     use serde_json::json;
+
+    /// A call that stops waiting -- dropped with its server, or cancelled -- takes its
+    /// request with it: settled, without its SQL, and no longer approvable.
+    #[test]
+    fn a_dropped_wait_settles_its_request() {
+        use dexo_app::mcp::approval::{Approval, ApprovalDecision};
+        let ledger = MemoryGrantLedger::default();
+        let arguments = json!({"sql": "DELETE FROM orders"})
+            .as_object()
+            .cloned()
+            .unwrap();
+        let now = super::now_secs();
+        let request = Approval::pending("p", "c", "data_execute_sql", &arguments, vec![], now, 60);
+        ledger.request_approval(&request).unwrap();
+        drop(super::Waiting {
+            ledger: &ledger,
+            id: request.id,
+        });
+        let settled = ledger.approval(request.id).unwrap();
+        assert_eq!(settled.decision, ApprovalDecision::Cancelled);
+        assert!(settled.statement.is_empty());
+        assert!(
+            !ledger
+                .settle_approval(request.id, ApprovalDecision::Approved, now)
+                .unwrap()
+        );
+    }
 
     fn profile() -> McpProfile {
         let mut profile = McpProfile::new("assistant");
@@ -685,6 +1057,7 @@ mod tests {
             tool,
             payload.as_object().cloned().unwrap(),
             0,
+            None,
         )
         .await
     }
@@ -720,7 +1093,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first, replay);
-        assert!(first.contains("Committed"), "{first}");
+        assert!(first.contains("committed"), "{first}");
         assert_eq!(
             session
                 .log()
@@ -760,6 +1133,7 @@ mod tests {
                 .cloned()
                 .unwrap(),
             0,
+            None,
         )
         .await
         .unwrap_err();
@@ -814,7 +1188,7 @@ mod tests {
         assert!(!is_grant_management("data_insert"));
         assert!(is_grant_management("grant_create"));
         let ledger = MemoryGrantLedger::default();
-        assert!(write_tool_names(&ledger, "assistant", 0).is_empty());
+        assert!(write_tool_names(&ledger, "assistant", 0, &|_| true).is_empty());
     }
 
     #[tokio::test]
@@ -939,6 +1313,7 @@ mod tests {
             .cloned()
             .unwrap(),
             0,
+            None,
         )
         .await
         .unwrap_err();
@@ -982,11 +1357,12 @@ mod tests {
             .cloned()
             .unwrap(),
             0,
+            None,
         )
         .await
         .unwrap();
         assert!(
-            result.contains("Committed") && !result.contains("RolledBack"),
+            result.contains("committed") && !result.contains("rolled back"),
             "{result}"
         );
         assert!(session.log().contains(&"ddl DROP TABLE items".to_string()));
@@ -1052,6 +1428,7 @@ mod tests {
             .cloned()
             .unwrap(),
             0,
+            None,
         )
         .await
         .unwrap_err();
@@ -1087,6 +1464,7 @@ mod tests {
                 .cloned()
                 .unwrap(),
             0,
+            None,
         )
         .await
         .unwrap_err();

@@ -119,7 +119,7 @@ async fn mysql_ddl_round_trip_matches_introspected_shape() {
                     partition: None,
                     engine: Some("InnoDB".into()),
                     charset: Some("utf8mb4".into()),
-                    collation: Some("utf8mb4_0900_ai_ci".into()),
+                    collation: Some("utf8mb4_unicode_ci".into()),
                 },
             }
         )
@@ -360,5 +360,87 @@ async fn mysql_least_privilege_grant_revoke() {
         drain(limited.as_ref(), "SELECT * FROM dexo.lp_allowed")
             .await
             .is_err()
+    );
+}
+
+/// The inspector's privileges: a grant on everything or on the schema counted for
+/// nothing, so root saw none on a table; a grant on a table of the same name in another
+/// schema counted; and `dex` matched every user whose name holds it, `dexo` among them.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn privileges_count_every_level_for_the_exact_account() {
+    use dexo_driver_api::QueryRequest;
+    use futures_util::StreamExt;
+
+    async fn drain(session: &dyn Session, sql: &str) {
+        let mut stream = session.execute(QueryRequest::write(sql)).await.unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    }
+
+    let fixture = connect_root().await;
+    let root = fixture.session.as_ref();
+    for sql in [
+        "CREATE DATABASE priv_other",
+        "CREATE TABLE dexo.priv_t (id int)",
+        "CREATE TABLE priv_other.priv_t (id int)",
+        "CREATE USER 'dex'@'%' IDENTIFIED BY 'dexo_test_only'",
+        "GRANT SELECT ON dexo.priv_t TO 'dex'@'%'",
+        "GRANT INSERT ON priv_other.priv_t TO 'dex'@'%'",
+        "GRANT UPDATE ON dexo.priv_t TO 'dexo'@'%'",
+    ] {
+        drain(root, sql).await;
+    }
+    let as_user = |user: &'static str| {
+        let endpoint = fixture.endpoint.clone();
+        async move {
+            MysqlFactory
+                .connect(ConnectRequest::new(
+                    endpoint,
+                    Some("dexo".into()),
+                    user.into(),
+                    SecretString::from("dexo_test_only"),
+                    false,
+                ))
+                .await
+                .unwrap()
+        }
+    };
+    let table = q("dexo", "priv_t");
+    let dml = ["SELECT", "INSERT", "UPDATE", "DELETE"].map(String::from);
+    async fn of(
+        session: &dyn Session,
+        principal: Option<QualifiedName>,
+        table: &QualifiedName,
+    ) -> Vec<String> {
+        session
+            .security()
+            .unwrap()
+            .effective_privileges(principal.as_ref(), table)
+            .await
+            .unwrap()
+    }
+    // Global grants.
+    assert!(of(root, None, &table).await.starts_with(&dml));
+    // Schema-level grants, the image's GRANT ALL ON dexo.*.
+    let dexo = as_user("dexo").await;
+    assert!(of(&*dexo, None, &table).await.starts_with(&dml));
+    // A table grant, and nothing from the other schema or from `dexo`'s grants.
+    let dex = as_user("dex").await;
+    assert_eq!(of(&*dex, None, &table).await, ["SELECT"]);
+    assert_eq!(of(root, Some(ident("dex")), &table).await, ["SELECT"]);
+    let grants = root
+        .security()
+        .unwrap()
+        .list_grants(Some(&ident("dex")))
+        .await
+        .unwrap();
+    // The account as MySQL names it, unquoted: dex@%, never dexo@%.
+    assert!(
+        grants
+            .iter()
+            .all(|grant| grant.principal.object() == "dex@%"),
+        "{grants:?}"
     );
 }

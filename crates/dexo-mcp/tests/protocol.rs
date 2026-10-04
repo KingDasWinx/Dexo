@@ -155,6 +155,24 @@ fn catalog() -> Vec<dexo_driver_api::CatalogObject> {
             Some("users"),
         )
         .with_attribute("type", json!("int4")),
+        node(
+            "secrets_pkey",
+            ObjectKind::Index,
+            public("secrets_pkey"),
+            Some("secrets"),
+        ),
+        node(
+            "secrets_owner_fk",
+            ObjectKind::Constraint,
+            public("secrets_owner_fk"),
+            Some("secrets"),
+        ),
+        node(
+            "users_pkey",
+            ObjectKind::Index,
+            public("users_pkey"),
+            Some("users"),
+        ),
     ]
 }
 
@@ -172,13 +190,30 @@ async fn a_denied_table_is_invisible_to_every_catalog_tool() {
         .call("catalog_list", json!({"parent_id": "secrets"}))
         .await;
     assert!(!text(&columns).contains("email"));
+    assert!(
+        !text(&columns).contains("secrets_pkey"),
+        "{}",
+        text(&columns)
+    );
     let search = client
         .call("catalog_search", json!({"query": "secr"}))
         .await;
     assert!(!text(&search).contains("secrets"));
-    for tool in ["object_describe", "object_get_ddl", "object_relationships"] {
-        let hidden = client.call(tool, json!({"name": "secrets"})).await;
-        assert_eq!(text(&hidden), "Error [NOT_FOUND]: not found", "{tool}");
+    // An index or a constraint is named on its own, and still belongs to its table.
+    let keys = client
+        .call("catalog_search", json!({"query": "pkey"}))
+        .await;
+    assert!(text(&keys).contains("users_pkey"), "{}", text(&keys));
+    assert!(!text(&keys).contains("secrets"), "{}", text(&keys));
+    for name in ["secrets", "secrets_pkey", "secrets_owner_fk"] {
+        for tool in ["object_describe", "object_get_ddl", "object_relationships"] {
+            let hidden = client.call(tool, json!({"name": name})).await;
+            assert_eq!(
+                text(&hidden),
+                "Error [NOT_FOUND]: not found",
+                "{tool} {name}"
+            );
+        }
     }
     let described = client
         .call("object_describe", json!({"name": "users"}))
@@ -365,7 +400,7 @@ async fn resources_and_prompts_do_not_leak_policy_or_sql() {
 async fn tool_contract_is_versioned() {
     assert_eq!(
         dexo_mcp::TOOL_SCHEMA_VERSION,
-        2,
+        3,
         "rename the snapshot below with the new version"
     );
     let mut everything = profile();
@@ -415,7 +450,7 @@ async fn tool_contract_is_versioned() {
         ledger,
     )
     .await;
-    insta::assert_json_snapshot!("tools_v2", client.tools().await);
+    insta::assert_json_snapshot!("tools_v3", client.tools().await);
 }
 
 /// MCP-002 / MCP-003: a structured-only profile exposes no raw SQL, no write and no
@@ -582,8 +617,11 @@ async fn production_connections_refuse_writes_over_the_protocol() {
             json!({"operation_id": "op-prod", "target": "users", "values": {"id": 1}}),
         )
         .await;
+    // The tool is not on the list for a connection that cannot take it, so the call finds
+    // nothing; either way no write is made.
     assert!(
-        text(&refused).starts_with("Error [POLICY_DENIED]"),
+        text(&refused).starts_with("Error [NOT_FOUND]")
+            || text(&refused).starts_with("Error [POLICY_DENIED]"),
         "{refused}"
     );
     assert_eq!(
@@ -617,4 +655,353 @@ async fn missing_required_arguments_are_rejected() {
             "{name} accepted a call without {required:?}: {response}"
         );
     }
+}
+
+/// E1: under an asking grant a write waits for a person -- runs once approved, is
+/// refused when denied or when no one answers in time -- and the request keeps no SQL
+/// once it is decided.
+#[tokio::test]
+async fn an_asking_grant_waits_for_a_person() {
+    use dexo_app::mcp::{ApprovalDecision, GrantLedger};
+    let (mut client, _, ledger) = client_with(FakeBackend::with_session("local", users())).await;
+    ledger
+        .insert_grant(
+            Grant::new(
+                &profile(),
+                "local",
+                GrantCapability::DataWrite,
+                vec!["data_insert".into()],
+                vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+                dexo_mcp::tools_write::now_secs(),
+                DEFAULT_TTL_SECS,
+            )
+            .unwrap()
+            .asking(2),
+        )
+        .unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    // A person: answers the first request with `answer`, after looking at it.
+    let decide = |ledger: Arc<MemoryGrantLedger>, answer: ApprovalDecision| {
+        tokio::spawn(async move {
+            loop {
+                let now = dexo_mcp::tools_write::now_secs();
+                if let Some(request) = ledger.pending_approvals(now).into_iter().next() {
+                    assert_eq!(request.tool, "data_insert");
+                    assert!(request.statement.contains("users"), "{request:?}");
+                    assert_eq!(request.targets, ["db.public.users"]);
+                    ledger.settle_approval(request.id, answer, now).unwrap();
+                    return request.id;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+    };
+    let approving = decide(Arc::clone(&ledger), ApprovalDecision::Approved);
+    let approved = client
+        .call(
+            "data_insert",
+            json!({"operation_id": "op-ask-1", "target": "users", "values": {"id": 2}}),
+        )
+        .await;
+    let id = approving.await.unwrap();
+    assert!(!text(&approved).contains("approval"), "{approved}");
+    assert!(
+        !text(&approved).starts_with("Error [POLICY_DENIED]"),
+        "{approved}"
+    );
+    assert!(ledger.approval(id).unwrap().statement.is_empty());
+
+    let denying = decide(Arc::clone(&ledger), ApprovalDecision::Denied);
+    let denied = client
+        .call(
+            "data_insert",
+            json!({"operation_id": "op-ask-2", "target": "users", "values": {"id": 3}}),
+        )
+        .await;
+    denying.await.unwrap();
+    assert!(
+        text(&denied).starts_with("Error [POLICY_DENIED]"),
+        "{denied}"
+    );
+    assert!(text(&denied).contains("denied"), "{denied}");
+
+    let unanswered = client
+        .call(
+            "data_insert",
+            json!({"operation_id": "op-ask-3", "target": "users", "values": {"id": 4}}),
+        )
+        .await;
+    assert!(
+        text(&unanswered).contains("no one approved"),
+        "{unanswered}"
+    );
+    let now = dexo_mcp::tools_write::now_secs();
+    assert!(ledger.pending_approvals(now).is_empty());
+}
+
+/// An asking grant on `users` that waits up to `secs` for each write.
+fn asking_grant(secs: u32) -> Grant {
+    Grant::new(
+        &profile(),
+        "local",
+        GrantCapability::DataWrite,
+        vec!["data_insert".into()],
+        vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+        dexo_mcp::tools_write::now_secs(),
+        DEFAULT_TTL_SECS,
+    )
+    .unwrap()
+    .asking(secs)
+}
+
+/// The first request waiting for a person, once the server has written it down.
+async fn first_pending(ledger: &MemoryGrantLedger) -> dexo_app::mcp::Approval {
+    loop {
+        let now = dexo_mcp::tools_write::now_secs();
+        if let Some(request) = ledger.pending_approvals(now).into_iter().next() {
+            return request;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// A write the agent cancels while it waits takes its request away: no one can approve
+/// it afterwards, and nothing reaches the database.
+#[tokio::test]
+async fn a_cancelled_write_cannot_be_approved() {
+    use dexo_app::mcp::ApprovalDecision;
+    let session = users();
+    let (mut client, _, ledger) =
+        client_with(FakeBackend::with_session("local", session.clone())).await;
+    ledger.insert_grant(asking_grant(30)).unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    let waiting = client
+        .send_request(
+            "tools/call",
+            json!({"name": "data_insert", "arguments":
+                {"operation_id": "op-cancel", "target": "users", "values": {"id": 9}}}),
+        )
+        .await;
+    let request = first_pending(&ledger).await;
+    client
+        .notify(
+            "notifications/cancelled",
+            json!({"requestId": waiting, "reason": "test"}),
+        )
+        .await;
+    let mut settled = None;
+    for _ in 0..100 {
+        let current = ledger.approval(request.id).unwrap();
+        if current.decision != ApprovalDecision::Pending {
+            settled = Some(current);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let settled = settled.expect("the cancel settles the request");
+    assert_eq!(settled.decision, ApprovalDecision::Cancelled);
+    assert!(settled.statement.is_empty());
+    let now = dexo_mcp::tools_write::now_secs();
+    assert!(
+        !ledger
+            .settle_approval(request.id, ApprovalDecision::Approved, now)
+            .unwrap()
+    );
+    let listed = client.call("list_connections", json!({})).await;
+    assert!(!is_error(&listed), "{listed}");
+    assert!(
+        !session
+            .log()
+            .iter()
+            .any(|entry| entry.starts_with("columns") || entry.starts_with("apply")),
+        "{:?}",
+        session.log()
+    );
+}
+
+/// A write waiting for a person holds none of the profile's call permits: with room for
+/// one call, other calls still answer while it waits, and it runs once approved.
+#[tokio::test]
+async fn a_waiting_write_leaves_room_for_other_calls() {
+    use dexo_app::mcp::ApprovalDecision;
+    let mut single = profile();
+    single.limits.max_concurrency = 1;
+    let ledger = Arc::new(MemoryGrantLedger::default());
+    let mut client = Client::start(
+        single,
+        vec![connection("local")],
+        Arc::new(FakeBackend::with_session("local", users())),
+        Arc::clone(&ledger),
+    )
+    .await;
+    ledger.insert_grant(asking_grant(30)).unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    let waiting = client
+        .send_request(
+            "tools/call",
+            json!({"name": "data_insert", "arguments":
+                {"operation_id": "op-room", "target": "users", "values": {"id": 9}}}),
+        )
+        .await;
+    let request = first_pending(&ledger).await;
+    let listed = client.call("list_connections", json!({})).await;
+    assert!(!is_error(&listed), "{listed}");
+    let now = dexo_mcp::tools_write::now_secs();
+    assert!(
+        ledger
+            .settle_approval(request.id, ApprovalDecision::Approved, now)
+            .unwrap()
+    );
+    let ran = client.response(waiting).await["result"].clone();
+    assert!(!text(&ran).contains("BUSY"), "{ran}");
+    assert!(!text(&ran).contains("approval"), "{ran}");
+}
+
+/// E2: notes say what a table and its columns mean -- the person's note, else the
+/// database's comment -- in object_describe and catalog_search, which also finds a
+/// table by its note; a hidden table's note is never found.
+#[tokio::test]
+async fn notes_tell_agents_what_the_schema_means() {
+    let mut objects = catalog();
+    for object in &mut objects {
+        if object.id.as_str() == "users.id" {
+            *object = object
+                .clone()
+                .with_attribute("comment", json!("Surrogate key, never shown to people"));
+        }
+    }
+    let mut backend = FakeBackend::with_session("local", users().with_catalog(objects.clone()));
+    backend.catalog = objects;
+    backend.notes = [
+        (
+            "db.public.users",
+            "One row per customer account; closed accounts stay.",
+        ),
+        (
+            "db.public.secrets",
+            "Customer passwords and payment tokens.",
+        ),
+    ]
+    .into_iter()
+    .map(|(object, note)| (object.to_string(), note.to_string()))
+    .collect();
+    let (mut client, _, _) = client_with(backend).await;
+    let described = client
+        .call("object_describe", json!({"name": "users"}))
+        .await;
+    let described = text(&described);
+    assert!(
+        described.contains("One row per customer account"),
+        "{described}"
+    );
+    assert!(
+        described.contains("Surrogate key, never shown to people (database comment)"),
+        "{described}"
+    );
+    let found = client
+        .call("catalog_search", json!({"query": "customer account"}))
+        .await;
+    assert!(text(&found).contains("db.public.users"), "{}", text(&found));
+    let hidden = client
+        .call("catalog_search", json!({"query": "payment tokens"}))
+        .await;
+    assert!(!text(&hidden).contains("secrets"), "{}", text(&hidden));
+}
+
+/// Revoking the grant denies its waiting write, and the agent is told that, not that "a
+/// person denied" it.
+#[tokio::test]
+async fn a_revoked_grant_is_not_reported_as_a_persons_no() {
+    use dexo_app::mcp::GrantLedger;
+    let (mut client, _, ledger) = client_with(FakeBackend::with_session("local", users())).await;
+    ledger.insert_grant(asking_grant(30)).unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    let waiting = client
+        .send_request(
+            "tools/call",
+            json!({"name": "data_insert", "arguments":
+                {"operation_id": "op-revoke", "target": "users", "values": {"id": 5}}}),
+        )
+        .await;
+    first_pending(&ledger).await;
+    ledger.revoke_profile(&profile().name).unwrap();
+    let answer = client.response(waiting).await["result"].clone();
+    let message = text(&answer);
+    assert!(message.contains("revoked"), "{message}");
+    assert!(!message.contains("a person denied"), "{message}");
+}
+
+/// A grant left on a connection that is now production opens nothing: the tool list does
+/// not offer a write `list_connections` says it cannot do.
+#[tokio::test]
+async fn a_grant_on_a_production_connection_publishes_no_write_tool() {
+    use dexo_app::mcp::GrantLedger;
+    let backend = Arc::new(FakeBackend::with_session("local", users()));
+    let ledger = Arc::new(MemoryGrantLedger::default());
+    let mut production = connection("local");
+    production.environment = dexo_app::Environment::Production;
+    let mut client = Client::start(
+        profile(),
+        vec![production],
+        Arc::clone(&backend),
+        Arc::clone(&ledger),
+    )
+    .await;
+    ledger.insert_grant(asking_grant(30)).unwrap();
+    let tools = client.tools().await;
+    assert!(
+        tools.iter().all(|tool| tool["name"] != "data_insert"),
+        "{tools:?}"
+    );
+}
+
+/// A wrong argument is told in words, not in the deserializer's `failed to deserialize
+/// parameters: missing field`.
+#[tokio::test]
+async fn a_missing_argument_is_named_in_words() {
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", users())).await;
+    let response = client
+        .request(
+            "tools/call",
+            json!({"name": "object_describe", "arguments": {"object": "users"}}),
+        )
+        .await;
+    let message = response["error"]["message"]
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| text(&response["result"]));
+    assert!(message.contains("`name` is missing"), "{message}");
+    assert!(!message.contains("deserialize"), "{message}");
+}
+
+/// catalog_search names what it found, in the names an agent passes to the other tools, and
+/// carries no catalog ids.
+#[tokio::test]
+async fn catalog_search_returns_names_not_internal_ids() {
+    let mut backend = FakeBackend::with_session("local", users().with_catalog(catalog()));
+    backend.catalog = catalog();
+    let (mut client, _, _) = client_with(backend).await;
+    let found = client
+        .call("catalog_search", json!({"query": "pkey"}))
+        .await;
+    let shown = text(&found);
+    assert!(shown.contains("users_pkey"), "{shown}");
+    assert!(!shown.contains("| id |"), "{shown}");
+    assert!(!shown.contains("Table"), "no Debug names: {shown}");
 }

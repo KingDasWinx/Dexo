@@ -1,0 +1,48 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "3.55"
+    },
+    "windowing": {
+      "windows": [
+        {
+          "name": "<unnamed window>",
+          "using_filesort": true,
+          "filesort_key": [
+            "`c`",
+            "`id`"
+          ],
+          "frame_buffer": {
+            "using_temporary_table": true,
+            "optimized_frame_evaluation": true
+          },
+          "functions": [
+            "sum"
+          ]
+        }
+      ],
+      "cost_info": {
+        "sort_cost": "3.00"
+      },
+      "table": {
+        "table_name": "o",
+        "access_type": "ALL",
+        "rows_examined_per_scan": 3,
+        "rows_produced_per_join": 3,
+        "filtered": "100.00",
+        "cost_info": {
+          "read_cost": "0.25",
+          "eval_cost": "0.30",
+          "prefix_cost": "0.55",
+          "data_read_per_join": "48"
+        },
+        "used_columns": [
+          "id",
+          "c",
+          "total"
+        ]
+      }
+    }
+  }
+}

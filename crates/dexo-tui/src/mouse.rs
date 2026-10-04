@@ -12,6 +12,18 @@ pub enum PaneEdge {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HitTarget {
+    /// A name on the header's strip of screens.
+    ScreenTab(crate::model::Screen),
+    /// One of a screen's views, on the row under the header.
+    ScreenView(usize),
+    /// A button on a screen: a click presses its key, Shift with it when set.
+    Press(crossterm::event::KeyCode, bool),
+    /// A group's heading in a screen's list, by its place among the headings.
+    ListGroup(usize),
+    /// A screen's list pane, under its rows: a click there gives it the keys.
+    ScreenList,
+    /// A screen's detail pane: the wheel over it reads on, elsewhere it moves the pick.
+    ScreenDetail,
     ResultTab(usize),
     ResultsView(usize),
     DocumentTab(usize),
@@ -21,18 +33,34 @@ pub enum HitTarget {
     DocumentTabScrollNext,
     Explorer,
     ExplorerNode(usize),
+    /// The arrow before a node's name: a click on it opens or closes the node.
+    ExplorerTwistie(usize),
     SidebarConnection(usize),
     Editor,
     PaneDivider(PaneEdge),
     Grid,
     Console,
     GridRow(usize),
-    GridCell { row: usize, col: usize },
+    GridCell {
+        row: usize,
+        col: usize,
+    },
     GridHeader(usize),
+    ClauseBar(crate::screens::data::ClauseBar),
     RecentSqlFile(usize),
     Overlay,
     ListRow(usize),
+    /// One of the values a settings row lists side by side: `index` into that row's.
+    SettingsChoice {
+        row: usize,
+        index: usize,
+    },
     FormField(usize),
+    /// A click on the `<` (step -1) or `>` (step 1) of a field picked from a list.
+    FormChoice {
+        index: usize,
+        step: i8,
+    },
     FooterSubmit,
     FooterCancel,
     Button(HitButton),
@@ -41,25 +69,16 @@ pub enum HitTarget {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HitButton {
     Close,
-    Session,
     Keychain,
     Cancel,
     Theme,
     Keymap,
     Mouse,
     Reset,
-    Pause,
-    Resume,
     Confirm,
     Recover,
     Discard,
     Apply,
-    ConfirmProduction,
-    ToggleAdded,
-    ToggleRemoved,
-    ToggleChanged,
-    ConfirmDiff,
-    ApplyDiff,
     Export,
     Revoke,
     ConfirmDirty,
@@ -68,15 +87,16 @@ pub enum HitButton {
     New,
     Edit,
     Actions,
-    Duplicate,
     Test,
-    Delete,
-    CloseSession,
     ParentDir,
     ToggleDescending,
-    CycleDriver,
     ToggleAdvanced,
     GetStarted,
+    /// The edit-cell dialog's NULL and Editor buttons.
+    SetNull,
+    OpenEditor,
+    /// The `[Browse]` button of a dialog's file field.
+    Browse,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,35 +107,36 @@ pub enum OverlayKind {
     ResultsMenu,
     NodeMenu,
     ClosePrompt,
+    RunPrompt,
+    ProductionPrompt,
+    ExplainPrompt,
+    QuitPrompt,
     DeleteConnection,
     Review,
     DdlPreview,
-    SchemaDiff,
     Transfer,
-    Security,
-    Admin,
-    McpProfiles,
     ValueViewer,
     ObjectOverlay,
     SchemaForm,
     InsertRow,
-    Connections,
+    CellEdit,
     Projects,
     ConfigTransfer,
     SecretPrompt,
     TransactionPrompt,
     DocumentNamePrompt,
-    DataQueryPrompt,
     ConnectionForm,
     Settings,
     Recovery,
     Diagnostics,
-    McpAudit,
     FilePicker,
     Completion,
     Parameters,
-    History,
+    ClearHistory,
     Snippets,
+    Related,
+    SaveQuery,
+    TryIndex,
 }
 
 #[derive(Clone, Debug)]
@@ -136,15 +157,37 @@ pub enum ScrollArea {
     Help,
     Inspector,
     Explain,
+    McpAudit,
+    Value,
+    Review,
+    Messages,
+    DdlPreview,
+    McpProfiles,
+    Sessions,
+    SchemaDiff,
+    /// Whatever detail pane a screen shows.
+    ScreenDetail,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HitMap {
     targets: Vec<(HitTarget, Rect)>,
     scroll_limits: Vec<(ScrollArea, u16)>,
+    pages: Vec<(ScrollArea, u16)>,
+    /// The screen drew one of its list and its detail, the one with the keys: too narrow
+    /// for both.
+    folded: bool,
 }
 
 impl HitMap {
+    pub fn fold(&mut self) {
+        self.folded = true;
+    }
+
+    pub fn folded(&self) -> bool {
+        self.folded
+    }
+
     /// The furthest a view can scroll, as last drawn. Only the render knows how many lines
     /// a view has and how tall it came out; without the bound, every key past the end kept
     /// counting, and scrolling back took as many presses before anything moved.
@@ -152,6 +195,21 @@ impl HitMap {
         let max = u16::try_from(max).unwrap_or(u16::MAX);
         self.scroll_limits.retain(|(known, _)| *known != area);
         self.scroll_limits.push((area, max));
+    }
+
+    /// How many lines a view showed, as last drawn: a page of it.
+    pub fn set_page(&mut self, area: ScrollArea, rows: u16) {
+        self.pages.retain(|(known, _)| *known != area);
+        self.pages.push((area, rows.max(1)));
+    }
+
+    /// A page of `area`, or `fallback` before it is drawn. A page taller than the view
+    /// skipped lines nobody saw.
+    pub fn page(&self, area: ScrollArea, fallback: u16) -> u16 {
+        self.pages
+            .iter()
+            .find(|(known, _)| *known == area)
+            .map_or(fallback, |(_, rows)| *rows)
     }
 
     /// Moves `scroll` by `delta` lines, within the bound the last frame recorded. A view
@@ -190,6 +248,13 @@ impl HitMap {
             .map(|(target, _)| *target)
     }
 
+    /// Whether the last draw put `target` on screen.
+    pub fn has(&self, target: HitTarget) -> bool {
+        self.targets
+            .iter()
+            .any(|(candidate, _)| *candidate == target)
+    }
+
     pub fn center(&self, target: HitTarget) -> (u16, u16) {
         self.targets
             .iter()
@@ -207,25 +272,43 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
     [
         // A question about losing work sits above everything else.
         (model.close_prompt.is_some(), OverlayKind::ClosePrompt),
+        (model.run_prompt.is_some(), OverlayKind::RunPrompt),
+        (
+            model.production_prompt.is_some(),
+            OverlayKind::ProductionPrompt,
+        ),
+        (model.explain_prompt.is_some(), OverlayKind::ExplainPrompt),
+        (model.quit_prompt.is_some(), OverlayKind::QuitPrompt),
         (
             model.connections.delete_target.is_some(),
             OverlayKind::DeleteConnection,
         ),
         (model.editor.snippet_open, OverlayKind::Snippets),
-        (model.editor.history_open, OverlayKind::History),
+        (model.data.related_picker.is_some(), OverlayKind::Related),
+        (model.save_query_prompt.is_some(), OverlayKind::SaveQuery),
+        (model.try_index.is_some(), OverlayKind::TryIndex),
+        (
+            model.editor.history_confirm_clear,
+            OverlayKind::ClearHistory,
+        ),
         (model.editor.parameter_prompt, OverlayKind::Parameters),
+        // The preview of a change is above whatever asked for it: the Security panel
+        // stayed on top of it, and took its clicks.
+        (
+            model.schema_editor.preview.is_some(),
+            OverlayKind::DdlPreview,
+        ),
         (model.schema_editor.open, OverlayKind::SchemaForm),
         (model.inspector.open, OverlayKind::ObjectOverlay),
         (model.data.viewer.is_some(), OverlayKind::ValueViewer),
         (model.editor.completion_open, OverlayKind::Completion),
         (model.file_picker.open, OverlayKind::FilePicker),
-        (model.mcp_audit.open, OverlayKind::McpAudit),
         (model.diagnostics.open, OverlayKind::Diagnostics),
         (model.recovery.open, OverlayKind::Recovery),
         (model.settings.open, OverlayKind::Settings),
         (model.connection_form.open, OverlayKind::ConnectionForm),
-        (model.data.query_prompt.open, OverlayKind::DataQueryPrompt),
         (model.data.insert_form.open, OverlayKind::InsertRow),
+        (model.data.cell_edit.is_some(), OverlayKind::CellEdit),
         (
             model.transaction_prompt.open,
             OverlayKind::TransactionPrompt,
@@ -237,16 +320,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.secret_prompt.open, OverlayKind::SecretPrompt),
         (model.config_transfer.open, OverlayKind::ConfigTransfer),
         (model.projects.open, OverlayKind::Projects),
-        (model.connections.open, OverlayKind::Connections),
-        (model.mcp_profiles.open, OverlayKind::McpProfiles),
-        (model.admin.open, OverlayKind::Admin),
-        (model.security.open, OverlayKind::Security),
         (model.transfer.open, OverlayKind::Transfer),
-        (model.schema_diff.open, OverlayKind::SchemaDiff),
-        (
-            model.schema_editor.preview.is_some(),
-            OverlayKind::DdlPreview,
-        ),
         (model.data.review.is_some(), OverlayKind::Review),
         (model.results_menu.open, OverlayKind::ResultsMenu),
         (model.node_menu.open, OverlayKind::NodeMenu),

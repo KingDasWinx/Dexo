@@ -56,6 +56,8 @@ fn strings_comments_names_and_parameters_are_left_as_typed() {
         "\"select\" ",
         ":limit ",
         "a_select ",
+        // An accented letter is part of the name: `select` ends no word here.
+        "jáselect ",
     ] {
         let out = typed(text);
         assert_eq!(out.to_ascii_lowercase(), out, "{text:?} became {out:?}");

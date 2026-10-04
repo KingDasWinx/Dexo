@@ -1,11 +1,14 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
+assertion_line: 13
 expression: "render_to_string(&model, 60, 20)"
 ---
-default  no connection  —                                   
+default  no connection  —    1 Sidebar  [2 SQL]  3 Results  
  scratch.sql ×  +                                           
+┌▸ SQL · scratch.sql───────────────────────────────────────┐
 ┌Settings──────────────────────────────────────────────────┐
-│> Mode       [Dark]  Light   Low color                    │
+│> Theme      [1/6  Dexo]                                  │
+│  Mode       [Dark]  Light   Low color                    │
 │  Accent     [Cyan]  Blue   Violet   Green   Amber   Rose │
 │  Keymap     [Default]  Vim   Emacs                       │
 │  Mouse      [On]  Off                                    │
@@ -14,11 +17,9 @@ default  no connection  —
 │  Updates    [On]  Off                                    │
 │                                                          │
 │  [Reset to defaults]                                     │
-│  up/down field  left/right change  r reset  esc close    │
+│  arrows change  e theme  r reset  Esc close              │
 └──────────────────────────────────────────────────────────┘
 │                                                          │
 │                                                          │
-│                                                          │
-│                                                          │
 └──────────────────────────────────────────────────────────┘
-disconnected  Ctrl+Enter run  Ctrl+N new sql      Ctrl+P  F1
+disconnected                                      Ctrl+P  F1

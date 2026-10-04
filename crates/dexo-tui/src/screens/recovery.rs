@@ -47,17 +47,26 @@ impl RecoveryScreen {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec![
-            format!("recovery open={}", self.open),
-            format!("transaction={}", self.transaction),
-            format!("confirm_discard={}", self.confirm_discard),
-        ];
-        for doc in &self.documents {
-            lines.push(format!("document {doc}"));
+        let mut lines = Vec::new();
+        if self.documents.is_empty() {
+            lines.push("Nothing to recover: Dexo closed normally last time.".to_string());
+        } else {
+            lines.push("Dexo closed unexpectedly and kept these unsaved documents:".into());
+            lines.extend(self.documents.iter().map(|doc| format!("  {doc}")));
         }
-        if self.transaction == "active" {
-            lines.push("BUG active transaction after crash".into());
+        if self.transaction != "idle" {
+            lines.push(format!(
+                "A transaction was open: its state is {}.",
+                self.transaction
+            ));
         }
+        lines.push(String::new());
+        lines.push(if self.confirm_discard {
+            "Their text is lost. Press Discard again.".to_string()
+        } else {
+            "Keep leaves them open; Discard closes them.".to_string()
+        });
+        lines.push(" [Keep]   [Discard]".to_string());
         lines
     }
 }

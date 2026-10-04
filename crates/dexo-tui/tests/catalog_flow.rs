@@ -218,6 +218,7 @@ async fn inspector_loads_properties_ddl_dependencies_and_privileges() {
             ddl: Some("CREATE TABLE orders (id int)".into()),
             dependencies: vec![ObjectId::new("table:customers")],
             dependents: vec![ObjectId::new("view:orders_v")],
+            names: Default::default(),
             effective_privileges: vec!["SELECT".into()],
             restrictions: vec![],
         },
@@ -283,6 +284,59 @@ fn goto_selects_catalog_object() {
     );
 }
 
+/// The table itself is selected, not its database: `qa0` prefixes `qa0.shop.items`,
+/// and the tree is walked from the top.
+#[test]
+fn goto_selects_the_table_not_the_database_whose_name_prefixes_it() {
+    let mut model = Model::default();
+    model.explorer.replace_roots(CatalogList {
+        objects: vec![object(
+            "pg:database:qa0",
+            ObjectKind::Catalog,
+            ("qa0", "qa0", "qa0"),
+            None,
+        )],
+        restrictions: vec![],
+    });
+    model.explorer.apply_children(
+        &ObjectId::new("pg:database:qa0"),
+        CatalogList {
+            objects: vec![object(
+                "pg:schema:shop",
+                ObjectKind::Schema,
+                ("qa0", "shop", "shop"),
+                Some("pg:database:qa0"),
+            )],
+            restrictions: vec![],
+        },
+    );
+    model.explorer.apply_children(
+        &ObjectId::new("pg:schema:shop"),
+        CatalogList {
+            objects: vec![object(
+                "pg:table:shop.items",
+                ObjectKind::Table,
+                ("qa0", "shop", "items"),
+                Some("pg:schema:shop"),
+            )],
+            restrictions: vec![],
+        },
+    );
+    model
+        .active_document_mut()
+        .sql
+        .insert(0, "select * from items")
+        .unwrap();
+    model.active_document_mut().sql.set_cursor(16).unwrap();
+
+    let _ = update(&mut model, Action::GoToDefinition);
+
+    assert_eq!(
+        model.explorer.selected.as_ref().map(|id| id.as_str()),
+        Some("pg:table:shop.items")
+    );
+}
+
 #[test]
 fn offline_snapshot_rejects_incomplete_and_keeps_complete() {
     let db = Database::open_in_memory().unwrap();
@@ -337,11 +391,14 @@ fn data_page_fills_the_active_grid() {
         active_session: Some(dexo_tui::runtime::SessionId(Uuid::from_u128(1))),
         ..Model::default()
     };
+    let ticket = dexo_tui::runtime::OperationId::new();
+    model.data.page_ticket = Some(ticket);
     let _ = update(
         &mut model,
         Action::DataPageLoaded {
             generation: 1,
             session: Uuid::from_u128(1).to_string(),
+            ticket,
             page: dexo_driver_api::DataPage {
                 columns: vec![dexo_driver_api::ColumnMeta {
                     name: "id".into(),

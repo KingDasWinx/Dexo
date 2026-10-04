@@ -2,25 +2,24 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 100, 30)"
 ---
-demo  local  public                                                                                 
-┌  Sidebar─────────────────┐ scratch.sql ×  local·users ×  +                                        
-│[n]ew [e]dit [a]ctions    │┌▸ Results (0) crumbs:1────────────────────────────────────────────────┐
-│  ● local▾  [offline]     ││[Grid] Explain  Messages                                              │
-│>   ▸ public              ││                                                                      │
-│      mysql.u┌Review changes────────────────────────────────────────────────────────┐             │
-│             │target: demo.public.users                                             │             │
-│             │ops: 0                                                                │             │
-│             │status: Pending                                                       │             │
-│             │ready                                                                 │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             └──────────────────────────────────────────────────────────────────────┘             │
+[Workbench] Connections  Agents  Server  History   demo  local  public                              
+┌  Sidebar─────────────────┐ scratch.sql ×  local·users* ×  +                                       
+│[n]ew [e]dit [a]ctions    │┌▸ Results WHERE id = 1 · 1 pending────────────────────────────────────┐
+│  ● local▾                ││[Grid] Structure  DDL  Privileges  Explain  Messages                  │
+│>   ▸ public              ││WHERE w to filter                  ORDER BY o to sort                 │
+│ ┌Review changes────────────────────────────────────────────────────────────────────────────────┐ │
+│ │1 change to demo.public.users                                                                 │ │
+│ │                                                                                              │ │
+│ │INSERT INTO public.users (id) VALUES (2);                                                     │ │
+│ │d discard all changes  Esc cancel: they stay pending                                          │ │
+│ │>[Apply]   [Cancel]                                                                           │ │
+│ └──────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
@@ -30,5 +29,6 @@ demo  local  public
 │                          │┌  Console─────────────────────────────────────────────────────────────┐
 │                          ││                                                                      │
 │                          ││                                                                      │
+│                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-local  Enter actions  v view  n/p page  Ctrl+W close                                      Ctrl+P  F1
+local                                                                                     Ctrl+P  F1

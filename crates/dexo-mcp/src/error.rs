@@ -18,6 +18,13 @@ pub fn tool_error(code: &str, message: &str) -> CallToolResult {
     ))])
 }
 
+pub fn busy() -> CallToolResult {
+    tool_error(
+        "BUSY",
+        "too many calls in flight for this profile; retry shortly",
+    )
+}
+
 pub fn app_error(error: &AppError) -> CallToolResult {
     let message = error.to_string();
     let code = match error.category() {

@@ -1,117 +1,68 @@
-use dexo_sql::statement_at;
-use std::sync::Mutex;
-
 use dexo_driver_api::{ExplainRequest, Session};
+use dexo_sql::{Dialect, statement_at_in};
 
-pub struct ExplainManager {
-    last_sql: Mutex<String>,
-    analyze_confirmed: Mutex<bool>,
+/// The statement under the cursor -- the one Run would take -- without its `;`.
+pub fn statement_sql(document: &str, cursor: usize, dialect: Dialect) -> Option<String> {
+    let span = statement_at_in(document, cursor, dialect)?;
+    let sql = document[span.byte_range].trim().trim_end_matches(';');
+    (!sql.is_empty()).then(|| sql.to_string())
 }
 
-impl Default for ExplainManager {
-    fn default() -> Self {
-        Self {
-            last_sql: Mutex::new(String::new()),
-            analyze_confirmed: Mutex::new(false),
-        }
-    }
-}
-
-impl ExplainManager {
-    pub async fn explain(
-        &self,
-        document: &str,
-        cursor: usize,
-        analyze: bool,
-    ) -> Result<(), String> {
-        if analyze && !*self.analyze_confirmed.lock().expect("confirm") {
-            return Err("explain analyze requires confirmation".into());
-        }
-        let span = statement_at(document, cursor).ok_or_else(|| "no statement".to_string())?;
-        let sql = document[span.byte_range.clone()]
-            .trim()
-            .trim_end_matches(';');
-        *self.last_sql.lock().expect("sql") = sql.to_string();
-        Ok(())
-    }
-
-    pub fn confirm_analyze(&self) {
-        *self.analyze_confirmed.lock().expect("confirm") = true;
-    }
-
-    pub fn explain_sql(&self) -> String {
-        self.last_sql.lock().expect("sql").clone()
-    }
+/// What one explain was asked for, and where its plan goes.
+pub struct ExplainRun {
+    pub cursor: usize,
+    pub dialect: Dialect,
+    pub analyze: bool,
+    pub indexes: Vec<String>,
+    pub document: String,
+    pub operation: crate::runtime::OperationId,
 }
 
 pub async fn run_live(
     session: std::sync::Arc<dyn Session>,
-    document: &str,
-    cursor: usize,
-    analyze: bool,
+    text: &str,
+    run: ExplainRun,
     tx: tokio::sync::mpsc::Sender<crate::action::Action>,
 ) {
-    let manager = ExplainManager::default();
-    if analyze {
-        manager.confirm_analyze();
-    }
-    match manager.explain(document, cursor, analyze).await {
-        Ok(()) => {
-            let sql = manager.explain_sql();
-            let Some(provider) = session.explain() else {
-                let _ = tx
-                    .send(crate::action::Action::OperationFailed {
-                        key: crate::runtime::OperationKey::new(
-                            crate::runtime::OperationId::new(),
-                            "",
-                            "",
-                            0,
-                        ),
-                        message: "explain unavailable".into(),
-                    })
-                    .await;
-                return;
-            };
-            let request = if analyze {
-                ExplainRequest::analyzed(sql)
+    let ExplainRun {
+        cursor,
+        dialect,
+        analyze,
+        indexes,
+        document,
+        operation,
+    } = run;
+    let statement = statement_sql(text, cursor, dialect);
+    let outcome = match (&statement, session.explain()) {
+        (None, _) => Err("there is no statement under the cursor to explain".to_string()),
+        (Some(_), None) => Err("explain is unavailable for this connection".into()),
+        (Some(sql), Some(provider)) => {
+            let request = if !indexes.is_empty() {
+                ExplainRequest::with_indexes(sql.clone(), indexes.clone())
+            } else if analyze {
+                ExplainRequest::analyzed(sql.clone())
             } else {
-                ExplainRequest::estimated(sql)
+                ExplainRequest::estimated(sql.clone())
             };
-            match provider.explain(request).await {
-                Ok(plan) => {
-                    let _ = tx
-                        .send(crate::action::Action::ExplainLoaded {
-                            plan: Box::new(plan),
-                        })
-                        .await;
-                }
-                Err(error) => {
-                    let _ = tx
-                        .send(crate::action::Action::OperationFailed {
-                            key: crate::runtime::OperationKey::new(
-                                crate::runtime::OperationId::new(),
-                                "",
-                                "",
-                                0,
-                            ),
-                            message: error.to_string(),
-                        })
-                        .await;
-                }
-            }
+            provider
+                .explain(request)
+                .await
+                .map_err(|error| error.to_string())
         }
-        Err(message) => {
-            let _ = tx
-                .send(crate::action::Action::OperationFailed {
-                    key: crate::runtime::OperationKey::new(
-                        crate::runtime::OperationId::new(),
-                        "",
-                        "",
-                        0,
-                    ),
-                    message,
-                })
-                .await;
-        }
-    }
+    };
+    let action = match outcome {
+        Ok(plan) => crate::action::Action::ExplainLoaded {
+            plan: Box::new(plan),
+            sql: statement.unwrap_or_default(),
+            indexes,
+            document,
+            operation,
+        },
+        Err(message) => crate::action::Action::ExplainFailed {
+            document,
+            operation,
+            message,
+        },
+    };
+    let _ = tx.send(action).await;
 }

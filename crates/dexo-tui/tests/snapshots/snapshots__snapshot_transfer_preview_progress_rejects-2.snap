@@ -1,17 +1,20 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 222
 expression: "render_to_string(&model, 60, 20)"
 ---
-demo  local  public                                         
-┌Transfer──────────────────────────────────────────────────┐
-│export out.csv                                            │
-│format=csv (Ctrl+F to cycle) strategy=Stop                │
-│progress rows=10000 bytes=80000 running=true              │
-│ [Submit]   [Cancel]                                      │
+demo  local  public          1 Sidebar  [2 SQL]  3 Results  
+ scratch.sql ×  +                                           
+┌▸ SQL · scratch.sql───────────────────────────────────────┐
+┌Export data───────────────────────────────────────────────┐
+│Export 10,000 rows from the results to a file.            │
 │                                                          │
+│> File:     out.csv                               [Browse]│
+│  Format:   csv                                           │
 │                                                          │
-│                                                          │
-│                                                          │
+│Exporting... 10,000 rows, 78 KB, 0s. Esc stops it.        │
+│ >[Cancel]                                                │
+└──────────────────────────────────────────────────────────┘
 │                                                          │
 │                                                          │
 │                                                          │
@@ -19,6 +22,4 @@ demo  local  public
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-│                                                          │
-└──────────────────────────────────────────────────────────┘
-local  Ctrl+Enter run  Ctrl+N new sql             Ctrl+P  F1
+local                                             Ctrl+P  F1

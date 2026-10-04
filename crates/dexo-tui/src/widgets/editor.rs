@@ -32,11 +32,18 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     }
     let focused = model.effective_focus() == Focus::Editor;
     let block = crate::render::pane_block(model, &title, focused);
-    let inner = block.inner(area);
+    let pane = block.inner(area);
     frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
+    if pane.width == 0 || pane.height == 0 {
         return;
     }
+    // The find bar takes the pane's last rows; the text keeps the rest -- all of them in
+    // a pane too short for both, since the bar has the keys while it is open.
+    let bar = (crate::screens::find::bar_rows(model) as u16).min(pane.height);
+    let inner = Rect {
+        height: pane.height - bar,
+        ..pane
+    };
 
     // ponytail: the whole buffer is still copied, split and scanned once per frame --
     // under a millisecond at 3 300 lines (benches/editor_navigation). Read the rope's
@@ -49,9 +56,11 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     };
     let gutter = GUTTER;
     let text_width = inner.width.saturating_sub(gutter);
-    let sel = doc.selection();
+    // Vim's Visual-line mode selects whole lines, wherever the cursor is in them.
+    let sel = crate::screens::vim::display_selection(model).or_else(|| doc.selection());
     let cursor = doc.cursor();
-    let stmt = current_statement_lines(&text, cursor);
+    let stmt =
+        current_statement_lines(&text, cursor, crate::screens::editor::editor_dialect(model));
     let sel_style = model
         .theme
         .style(Role::Selection, model.capabilities)
@@ -72,6 +81,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
             .iter()
             .map(|line| line.len() + 1)
             .sum::<usize>();
+    let (window_start, window_chars) = (byte_at, char_at);
     // Only the spans that touch the window, still in the parser's order: the first one
     // containing a byte wins, and nested captures depend on that order.
     let window_highlights: Vec<&dexo_sql::HighlightSpan> = model
@@ -80,7 +90,10 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         .iter()
         .filter(|span| span.byte_range.start < window_end && span.byte_range.end > byte_at)
         .collect();
+    // Where each row's text starts, in chars, for the find overlay below.
+    let mut row_starts = Vec::with_capacity(end - start);
     for (row, line) in lines[start..end].iter().enumerate() {
+        row_starts.push(char_at);
         let line_no = start + row + 1;
         let marker = if stmt.contains(&(start + row)) {
             "▸"
@@ -100,27 +113,85 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
                 .take(visible.skip_chars)
                 .map(char::len_utf8)
                 .sum::<usize>();
-        if let Some(range) = &sel {
-            spans.extend(selection_spans(
-                &visible.text,
-                line_start + visible.skip_chars,
-                range,
-                sel_style,
-            ));
-        } else {
-            spans.extend(highlight_spans(
-                &visible.text,
-                visible_byte,
-                &window_highlights,
-            ));
-        }
+        // The selection is painted over the highlighting below, so selecting text --
+        // or the find bar's current match -- keeps the rest of the line in colour.
+        spans.extend(highlight_spans(
+            &visible.text,
+            visible_byte,
+            &window_highlights,
+        ));
         rendered.push(Line::from(spans));
         char_at = line_end + 1;
         byte_at += line.len() + 1;
     }
     frame.render_widget(Paragraph::new(rendered), inner);
 
-    if model.effective_focus() == Focus::Editor {
+    let text_rect = Rect {
+        x: inner.x + gutter,
+        width: text_width,
+        ..inner
+    };
+    let window = Window {
+        area: text_rect,
+        lines: &lines[start..end],
+        starts: &row_starts,
+        scrolled: doc.viewport_column,
+    };
+    let found = if model.find.open {
+        crate::screens::find::find_all(&text, model.find.query.as_str(), model.find.options)
+    } else {
+        Vec::new()
+    };
+    // Every match is underlined and lit, on top of whatever highlighting it has; the
+    // current one is the selection, painted after it.
+    let lit = model
+        .theme
+        .style(Role::Warning, model.capabilities)
+        .add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+    paint(frame, &window, &found, lit);
+    // Only the underlines in the window, counted in chars from its start: counting from
+    // the start of the document cost a frame as much as the document was long, for
+    // every underline in it.
+    let window_text = &text[window_start.min(text.len())..window_end.min(text.len())];
+    let chars_to = |byte: usize| {
+        let within = byte.clamp(window_start, window_start + window_text.len()) - window_start;
+        window_chars + window_text[..within].chars().count()
+    };
+    let wrong: Vec<std::ops::Range<usize>> = crate::screens::editor::current_diagnostics(model)
+        .into_iter()
+        .filter_map(|diagnostic| diagnostic.byte_range.clone())
+        .filter(|range| range.start < window_end && range.end >= window_start)
+        .filter(|range| {
+            text.is_char_boundary(range.start.min(text.len()))
+                && text.is_char_boundary(range.end.min(text.len()))
+        })
+        .map(|range| {
+            let start = chars_to(range.start);
+            start..chars_to(range.end).max(start + 1)
+        })
+        .collect();
+    let squiggle = model
+        .theme
+        .style(Role::Error, model.capabilities)
+        .add_modifier(Modifier::UNDERLINED);
+    paint(frame, &window, &wrong, squiggle);
+    if let Some(range) = &sel {
+        paint(frame, &window, std::slice::from_ref(range), sel_style);
+    }
+    if model.find.open {
+        render_find_bar(
+            frame,
+            Rect {
+                y: pane.y + inner.height,
+                height: bar,
+                ..pane
+            },
+            model,
+            &found,
+        );
+    }
+
+    if model.effective_focus() == Focus::Editor && !model.find.open {
         let (line, col) = line_col_of(&text, cursor);
         if line >= start && line < end {
             let line_text = lines.get(line).copied().unwrap_or("");
@@ -134,6 +205,118 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     }
 }
 
+/// The find bar: the query, which match is current, the toggles, and what the keys do.
+/// The terminal cursor sits in the field being typed into.
+fn render_find_bar(frame: &mut Frame, area: Rect, model: &Model, found: &[std::ops::Range<usize>]) {
+    use crate::screens::find::FindField;
+    if area.height == 0 {
+        return;
+    }
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let on = model
+        .theme
+        .style(Role::Focus, model.capabilities)
+        .add_modifier(Modifier::BOLD);
+    let toggle =
+        |label: &'static str, enabled: bool| Span::styled(label, if enabled { on } else { muted });
+    let count = match (crate::screens::find::current(model, found), found.len()) {
+        _ if model.find.query.is_empty() => String::new(),
+        (_, 0) => "no matches".to_string(),
+        (Some(index), total) => format!("{}/{total}", index + 1),
+        (None, total) => format!("{total} found"),
+    };
+    let find = &model.find;
+    // Each field shows the stretch of its text around the cursor, so a query wider than
+    // the pane still shows where the typing is.
+    let room = (area.width as usize)
+        .saturating_sub(FIND_LABEL.len() + 1)
+        .max(1);
+    // Laid out in display columns, so a wide character keeps the cursor on its text.
+    let window = |input: &crate::widgets::text_input::TextInput| {
+        let (shown, cursor) = input.window(room);
+        let style = if input.is_selected() {
+            Style::default().add_modifier(ratatui::style::Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        (cursor, Span::styled(shown.trim_end().to_string(), style))
+    };
+    let (query_cursor, query_shown) = window(&find.query);
+    let (replacement_cursor, replacement_shown) = window(&find.replacement);
+    // The label of the field the keys go to is in the accent, the other stays quiet.
+    let label = |text: &'static str, field: FindField| {
+        Span::styled(text, if find.field == field { on } else { muted })
+    };
+    // The hint gives way, a piece at a time, to whatever the row has left: cut at the
+    // pane's edge it ended mid-word.
+    let fit = |used: usize, hints: &[&'static str]| -> &'static str {
+        let left = (area.width as usize).saturating_sub(used);
+        hints
+            .iter()
+            .copied()
+            .find(|hint| hint.chars().count() <= left)
+            .unwrap_or("")
+    };
+    let used =
+        FIND_LABEL.len() + query_shown.width() + 2 + count.chars().count() + 2 + "Aa Word".len();
+    let mut rows = vec![Line::from(vec![
+        label(FIND_LABEL, FindField::Query),
+        query_shown,
+        Span::raw("  "),
+        Span::raw(count),
+        Span::raw("  "),
+        toggle("Aa", find.options.case_sensitive),
+        Span::raw(" "),
+        toggle("Word", find.options.whole_word),
+        Span::styled(
+            fit(
+                used,
+                &[
+                    "  Enter next · Shift+Enter prev · Alt+C case · Alt+W word · Alt+R replace · Esc",
+                    "  Enter next · Alt+C case · Alt+W word · Alt+R replace · Esc",
+                    "  Enter next · Alt+R replace · Esc",
+                    "  Enter next · Esc",
+                    "  Esc",
+                ],
+            ),
+            muted,
+        ),
+    ])];
+    if find.replacing {
+        let used = REPLACE_LABEL.len() + replacement_shown.width();
+        rows.push(Line::from(vec![
+            label(REPLACE_LABEL, FindField::Replace),
+            replacement_shown,
+            Span::styled(
+                fit(
+                    used,
+                    &[
+                        "  Enter replace · Alt+A all · Tab switch",
+                        "  Enter replace · Alt+A all",
+                        "  Enter replace",
+                    ],
+                ),
+                muted,
+            ),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(rows), area);
+    if model.effective_focus() == Focus::Editor {
+        let (row, cursor) = match find.field {
+            FindField::Query => (0, query_cursor),
+            FindField::Replace => (1, replacement_cursor),
+        };
+        let x = area.x + FIND_LABEL.len() as u16 + cursor as u16;
+        if row < area.height && x < area.x + area.width {
+            frame.set_cursor_position(Position::new(x, area.y + row));
+        }
+    }
+}
+
+/// Both labels are as wide, so the two fields start in the same column.
+const FIND_LABEL: &str = "Find    ";
+const REPLACE_LABEL: &str = "Replace ";
+
 /// What the editor shows when no document is open: the ways to get one. Typing works
 /// too -- the first keystroke becomes a document of the active connection.
 fn render_nothing_open(frame: &mut Frame, area: Rect, model: &Model) {
@@ -145,11 +328,16 @@ fn render_nothing_open(frame: &mut Frame, area: Rect, model: &Model) {
         return;
     }
     let muted = model.theme.style(Role::Muted, model.capabilities);
+    // The keys of the keymap in use, as the status bar names them.
+    let key =
+        |id: &str| crate::palette::shortcut_for(model, id, None).unwrap_or_else(|| "Ctrl+P".into());
+    let new_key = format!("{}  new sql", key("document.new"));
+    let open_key = format!("{}  open a file", key("document.open"));
     let lines = [
         "No document open",
         "",
-        "Ctrl+N  new query",
-        "Ctrl+O  open a file",
+        new_key.as_str(),
+        open_key.as_str(),
         "or just start typing",
     ];
     let top = inner.height.saturating_sub(lines.len() as u16) / 2;
@@ -230,38 +418,39 @@ fn visible_slice(line: &str, skip_cols: usize, width: usize) -> Visible {
     }
 }
 
-fn selection_spans(
-    visible: &str,
-    line_char_start: usize,
-    range: &std::ops::Range<usize>,
-    sel_style: Style,
-) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut buf = String::new();
-    let mut selected = false;
-    for (offset, ch) in visible.chars().enumerate() {
-        let index = line_char_start + offset;
-        let now = index >= range.start && index < range.end;
-        if now != selected && !buf.is_empty() {
-            spans.push(span_owned(std::mem::take(&mut buf), selected, sel_style));
-        }
-        selected = now;
-        buf.push(ch);
-    }
-    if !buf.is_empty() {
-        spans.push(span_owned(buf, selected, sel_style));
-    }
-    if spans.is_empty() {
-        spans.push(Span::raw(String::new()));
-    }
-    spans
+/// The rows on screen: where they are drawn, their text, where each starts in the
+/// document (in chars), and how far the view is scrolled sideways.
+struct Window<'a> {
+    area: Rect,
+    lines: &'a [&'a str],
+    starts: &'a [usize],
+    scrolled: usize,
 }
 
-fn span_owned(text: String, selected: bool, sel_style: Style) -> Span<'static> {
-    if selected {
-        Span::styled(text, sel_style)
-    } else {
-        Span::raw(text)
+/// Lays `style` over the cells that show `ranges` (document chars), on top of what the
+/// paragraph drew there.
+fn paint(frame: &mut Frame, window: &Window, ranges: &[std::ops::Range<usize>], style: Style) {
+    if ranges.is_empty() {
+        return;
+    }
+    for (row, line) in window.lines.iter().enumerate() {
+        let line_start = window.starts[row];
+        let line_end = line_start + line.chars().count();
+        for range in ranges
+            .iter()
+            .filter(|range| range.start < line_end && range.end > line_start)
+        {
+            let from = range.start.max(line_start) - line_start;
+            let to = range.end.min(line_end) - line_start;
+            let x0 = display_width_range(line, window.scrolled, from);
+            let x1 = display_width_range(line, window.scrolled, to).min(window.area.width as usize);
+            for x in x0..x1 {
+                let position = Position::new(window.area.x + x as u16, window.area.y + row as u16);
+                if let Some(cell) = frame.buffer_mut().cell_mut(position) {
+                    cell.set_style(style);
+                }
+            }
+        }
     }
 }
 
@@ -313,9 +502,9 @@ fn highlight_style(kind: dexo_sql::Highlight) -> Style {
     }
 }
 
-fn current_statement_lines(text: &str, cursor: usize) -> Vec<usize> {
+fn current_statement_lines(text: &str, cursor: usize, dialect: dexo_sql::Dialect) -> Vec<usize> {
     let byte = text.chars().take(cursor).map(char::len_utf8).sum();
-    let Some(span) = dexo_sql::statement_at(text, byte) else {
+    let Some(span) = dexo_sql::statement_at_in(text, byte, dialect) else {
         return Vec::new();
     };
     let start = text[..span.byte_range.start].matches('\n').count();
@@ -356,6 +545,84 @@ fn display_width_range(line: &str, from_col: usize, to_char: usize) -> usize {
         cols += UnicodeWidthChar::width(ch).unwrap_or(0);
     }
     cols.saturating_sub(from_col)
+}
+
+/// `sql` in the editor's colours, each line cut to `width` columns: a statement shown
+/// outside the editor -- in History -- reads as it did when it was written.
+pub(crate) fn sql_lines(sql: &str, width: usize, dialect: dexo_sql::Dialect) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthChar;
+    let mut highlights = dexo_sql::ParserService::new(dialect).parse(sql).highlights;
+    highlights.sort_by_key(|span| span.byte_range.start);
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    // The first span that may still reach the next chunk: the chunks come in order, so
+    // each span is passed over once, and a chunk is given only the spans on it. Every
+    // span against every character made a long script's whole view crawl.
+    let mut first = 0;
+    let mut paint = |chunk: &str, start: usize| -> Line<'static> {
+        let end = start + chunk.len();
+        while first < highlights.len() && highlights[first].byte_range.end <= start {
+            first += 1;
+        }
+        let on: Vec<&dexo_sql::HighlightSpan> = highlights[first..]
+            .iter()
+            .take_while(|span| span.byte_range.start < end)
+            .filter(|span| span.byte_range.end > start)
+            .collect();
+        Line::from(highlight_spans(chunk, start, &on))
+    };
+    let mut start = 0;
+    for line in sql.split('\n') {
+        let mut chunk = String::new();
+        let mut chunk_start = start;
+        let mut used = 0;
+        for ch in line.chars() {
+            let wide = ch.width().unwrap_or(0);
+            if used + wide > width && !chunk.is_empty() {
+                lines.push(paint(&chunk, chunk_start));
+                chunk_start += chunk.len();
+                chunk.clear();
+                used = 0;
+            }
+            chunk.push(ch);
+            used += wide;
+        }
+        let chunk = chunk.trim_end_matches('\r');
+        lines.push(paint(chunk, chunk_start));
+        start += line.len() + 1;
+    }
+    lines
+}
+
+#[cfg(test)]
+mod sql_lines_tests {
+    /// The colours land where they did when every span was tried on every character,
+    /// and a long script is drawn in time.
+    #[test]
+    fn colours_stay_on_their_words_and_a_long_script_is_quick() {
+        let lines = super::sql_lines("select 1\nfrom t", 80, dexo_sql::Dialect::Postgres);
+        let keyword = |line: &ratatui::text::Line<'_>, word: &str| {
+            line.spans
+                .iter()
+                .find(|span| span.content.contains(word))
+                .map(|span| span.style)
+        };
+        let select = keyword(&lines[0], "select").expect("select drawn");
+        assert_eq!(keyword(&lines[1], "from"), Some(select));
+        assert_ne!(keyword(&lines[0], "1"), Some(select));
+
+        let script: String = (0..4_000)
+            .map(|n| format!("ALTER TABLE public.t{n} ADD COLUMN note_{n} text;\n"))
+            .collect();
+        let started = std::time::Instant::now();
+        let lines = super::sql_lines(&script, 100, dexo_sql::Dialect::Postgres);
+        assert!(lines.len() >= 4_000);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+    }
 }
 
 #[cfg(test)]

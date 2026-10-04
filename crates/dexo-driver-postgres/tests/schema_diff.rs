@@ -185,6 +185,24 @@ fn postgres_script_golden_drop_and_create() {
     assert!(script.forward.contains("lock=AccessExclusive"));
     assert!(script.reverse.is_none());
 
+    // A foreign table is listed as a table, but only DROP FOREIGN TABLE removes it.
+    let foreign = table("public", "remote_orders")
+        .with_attribute("driver.postgres.relkind", serde_json::json!("f"));
+    let script = generate_script(
+        &[OrderedChange {
+            difference: SchemaDifference::Removed(foreign),
+            manual: false,
+        }],
+        pg_render,
+    );
+    assert!(
+        script
+            .forward
+            .contains("DROP FOREIGN TABLE \"public\".\"remote_orders\""),
+        "{}",
+        script.forward
+    );
+
     let added = OrderedChange {
         difference: SchemaDifference::Added(table("public", "orders")),
         manual: false,

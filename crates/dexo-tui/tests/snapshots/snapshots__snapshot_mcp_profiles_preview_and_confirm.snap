@@ -2,53 +2,53 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
-demo  local  public                                                                                                                                             
-┌  Sidebar─────────────────┐ scratch.sql ×  +                                                                                                                   
-│[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ● local▾  [offline]     ││   1▸select 1                                                                                                                     │
-│>   ▸ public              ││                                                                                                                                  │
-│      mysql.users [restric││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││               ┌MCP profiles──────────────────────────────────────────────────────────┐                                           │
-│                          ││               │mcp profile=assistant enabled=false confirm=false                     │                                           │
-│                          ││               │scope allow db.public.*                                               │                                           │
-│                          ││               │scope deny db.public.secrets                                          │                                           │
-│                          ││               │tool catalog_search                                                   │                                           │
-│                          ││               │tool object_describe                                                  │                                           │
-│                          ││               │resource db.public.items                                              │                                           │
-│                          ││               │grant data_write data_insert 900s                                     │                                           │
-│                          ││               │diff profile db.public.* -> grant db.public.items                     │                                           │
-│                          ││               │enable requires local confirmation                                    │                                           │
-│                          ││               │e enable/disable  r revoke profile  R revoke all  up/down select  esc │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               └──────────────────────────────────────────────────────────────────────┘                                           │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-│                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                          ││[Grid] Explain  Messages                                                                                                          │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-└──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-local  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                                                                                   Ctrl+P  F1
+ Workbench  Connections [Agents] Server  History   demo  local  public                                                                                          
+ 1 Approvals   2 Activity  [3 Profiles]  4 Setup                                                                                                                
+┌▸ Profiles (1)───────────────────────────────────────────────────┐┌  assistant────────────────────────────────────────────────────────────────────────────────┐
+│ [n New]                                                         ││ [e Enable]  [c Connections…]  [q Read SQL on]  [g Grant…]  [r Revoke grants]  [x Delete]  │
+│                                                                 ││                                                                                           │
+│> ○ assistant  1 conn    browse    1 grant                       ││ State        disabled                                                                     │
+│                                                                 ││ Connections  local                                                                        │
+│                                                                 ││ Access       browse and describe only                                                     │
+│                                                                 ││ Sees         db.public.*                                                                  │
+│                                                                 ││ Never        db.public.secrets                                                            │
+│                                                                 ││ Tools        catalog_search, object_describe                                              │
+│                                                                 ││ ── Grants                                                                                 │
+│                                                                 ││ data_insert on db.public.items (local): one write, then it is spent, ends in 15 min       │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+│                                                                 ││                                                                                           │
+└─────────────────────────────────────────────────────────────────┘└───────────────────────────────────────────────────────────────────────────────────────────┘
+Agents  Up/Down pick  R revoke all  PgUp/PgDn read  1-4 views  Esc back                                                                               Ctrl+P  F1

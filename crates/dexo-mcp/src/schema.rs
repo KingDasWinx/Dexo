@@ -11,6 +11,19 @@ pub struct SqlInput {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ExplainInput {
+    /// Connection name from `list_connections`; optional when the profile has exactly one.
+    pub connection: Option<String>,
+    /// One read-only statement: SELECT, WITH … SELECT, VALUES or TABLE.
+    pub sql: String,
+    /// Indexes to plan with as if they were built, without building them -- each one
+    /// `CREATE INDEX ON table (columns)`. Postgres with the hypopg extension only; they
+    /// exist for this plan alone.
+    #[serde(default)]
+    pub hypothetical_indexes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DataInsertInput {
     /// Connection name from `list_connections`; optional when the profile has exactly one.
     pub connection: Option<String>,

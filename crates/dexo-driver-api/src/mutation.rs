@@ -51,6 +51,48 @@ pub struct DataRequest {
     pub filter: Option<Filter>,
     pub sort: Vec<Sort>,
     pub page: Page,
+    /// SQL text typed into the workbench's WHERE and ORDER BY bars. Only the TUI sets
+    /// it, after checking it reads; MCP builds requests from typed filters alone.
+    pub clauses: RawClauses,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RawClauses {
+    pub where_sql: Option<String>,
+    pub order_by: Option<String>,
+}
+
+impl RawClauses {
+    /// The WHERE condition: the raw text, the typed filter, or both together.
+    pub fn condition(&self, typed: Option<String>) -> Option<String> {
+        let raw = self
+            .where_sql
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|raw| {
+                // A line comment at its end (`--`, or MySQL's `#`) ran on over the `)`
+                // and everything after it on the line.
+                if raw.contains("--") || raw.contains('#') {
+                    format!("({raw}\n)")
+                } else {
+                    format!("({raw})")
+                }
+            });
+        match (raw, typed) {
+            (Some(raw), Some(typed)) => Some(format!("{raw} AND ({typed})")),
+            (raw, None) => raw,
+            (None, typed) => typed,
+        }
+    }
+
+    /// The ORDER BY text, which takes the place of a typed sort.
+    pub fn order(&self) -> Option<&str> {
+        self.order_by
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    }
 }
 
 impl DataRequest {
@@ -163,6 +205,12 @@ pub trait DataMutator: Send + Sync {
         &self,
         target: &QualifiedName,
     ) -> Result<Vec<ColumnKeyInfo>, DriverError>;
+
+    /// The table's row count as the server's statistics have it, without counting:
+    /// `None` when it keeps none.
+    async fn estimate_rows(&self, _target: &QualifiedName) -> Result<Option<u64>, DriverError> {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -192,5 +240,28 @@ mod tests {
         }
         let value = "O'Reilly";
         assert_eq!(value.replace('\'', "''"), "O''Reilly");
+    }
+
+    /// A comment ending the WHERE text ends on its own line, before the `)` and the
+    /// typed filter that follow it.
+    #[test]
+    fn a_trailing_comment_cannot_take_the_typed_filter() {
+        let clauses = |text: &str| super::RawClauses {
+            where_sql: Some(text.into()),
+            order_by: None,
+        };
+        assert_eq!(
+            clauses("total > 1").condition(Some("id = ?".into())),
+            Some("(total > 1) AND (id = ?)".into())
+        );
+        assert_eq!(
+            clauses("total > 1 -- big").condition(Some("id = ?".into())),
+            Some("(total > 1 -- big\n) AND (id = ?)".into())
+        );
+        assert_eq!(
+            clauses("total > 1 # big").condition(None),
+            Some("(total > 1 # big\n)".into())
+        );
+        assert_eq!(clauses("  ").condition(None), None);
     }
 }

@@ -1,0 +1,76 @@
+{
+  "query_block": {
+    "union_result": {
+      "using_temporary_table": true,
+      "select_id": 3,
+      "table_name": "<union1,2>",
+      "access_type": "ALL",
+      "query_specifications": [
+        {
+          "dependent": false,
+          "cacheable": true,
+          "query_block": {
+            "select_id": 1,
+            "cost_info": {
+              "query_cost": "0.55"
+            },
+            "table": {
+              "table_name": "o",
+              "access_type": "index",
+              "key": "PRIMARY",
+              "used_key_parts": [
+                "id"
+              ],
+              "key_length": "4",
+              "rows_examined_per_scan": 3,
+              "rows_produced_per_join": 3,
+              "filtered": "100.00",
+              "using_index": true,
+              "cost_info": {
+                "read_cost": "0.25",
+                "eval_cost": "0.30",
+                "prefix_cost": "0.55",
+                "data_read_per_join": "48"
+              },
+              "used_columns": [
+                "id"
+              ]
+            }
+          }
+        },
+        {
+          "dependent": false,
+          "cacheable": true,
+          "query_block": {
+            "select_id": 2,
+            "cost_info": {
+              "query_cost": "0.45"
+            },
+            "table": {
+              "table_name": "c",
+              "access_type": "index",
+              "key": "PRIMARY",
+              "used_key_parts": [
+                "id"
+              ],
+              "key_length": "4",
+              "rows_examined_per_scan": 2,
+              "rows_produced_per_join": 2,
+              "filtered": "100.00",
+              "using_index": true,
+              "cost_info": {
+                "read_cost": "0.25",
+                "eval_cost": "0.20",
+                "prefix_cost": "0.45",
+                "data_read_per_join": "32"
+              },
+              "used_columns": [
+                "id"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

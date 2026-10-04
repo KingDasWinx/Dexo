@@ -1,13 +1,16 @@
 pub mod completion;
 pub mod context;
 pub mod derived;
+pub mod diagnose;
 pub mod diagnostic;
 pub mod dialect;
 pub mod document;
+pub mod dropped;
 pub mod edit;
 pub mod format;
 pub mod lex;
 pub mod navigation;
+pub mod order;
 pub mod parameter;
 pub mod parse;
 pub mod rank;
@@ -23,17 +26,26 @@ pub use context::{
     Confidence, CursorContext, Intent, RowSource, RowSourceKind, StatementKind, TriggerMode,
     TriggerOrigin, analyze, should_open,
 };
-pub use derived::{derive_page, filter_values};
+pub use derived::{
+    derive_count_in, derive_page, derive_page_in, filter_values, table_count_in, table_select,
+};
+pub use diagnose::{Diagnoser, KnownObjects, created_table, diagnose};
 pub use diagnostic::{Diagnostic, DiagnosticSource};
 pub use dialect::Dialect;
 pub use document::{SqlDocument, SqlError};
-pub use format::format_sql;
+pub use dropped::dropped_tables;
+pub use format::{Indent, format_sql, format_sql_with};
 pub use lex::{Token, TokenKind, is_reserved, suppressed_at, tokenize};
 pub use navigation::definition_at;
-pub use parameter::{HistoryEntry, HistoryPolicy, named_parameters};
+pub use order::{OrderKey, cycle_order, order_keys, order_text};
+pub use parameter::{HistoryEntry, HistoryPolicy, bind_named, named_parameters};
 pub use parse::{Highlight, HighlightSpan, ParsedSql, ParserService};
-pub use snippet::{Expansion, Snippet, expand, expand_placeholders};
-pub use statement::{StatementEffect, StatementSpan, split_statements, statement_at};
+pub use snippet::{Expansion, Snippet, builtin_snippets, expand, expand_placeholders};
+pub use statement::{
+    StatementEffect, StatementSpan, is_backslash_command, split_statements, split_statements_in,
+    statement_at, statement_at_in,
+};
 pub use statement_guard::{
-    GuardRejection, Inspection, inspect_data_write, inspect_read, inspect_schema_write,
+    Destructive, GuardRejection, Inspection, clauses_read, destructive, inspect_data_write,
+    inspect_index, inspect_read, inspect_schema_write, is_read,
 };

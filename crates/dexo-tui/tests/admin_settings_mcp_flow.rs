@@ -67,19 +67,81 @@ async fn saved_mode_accent_keymap_and_mouse_survive_restart() {
     assert!(!loaded.mouse);
 }
 
-#[tokio::test]
-async fn terminate_requires_exact_backend_id_and_never_retries() {
-    let mut calls = 0u32;
-    let preview = "42";
-    assert_ne!(preview, "41");
-    let typed = "42";
-    if typed != preview {
-        panic!("wrong target");
+fn sessions_model(read_only: bool) -> dexo_tui::Model {
+    let mut model = dexo_tui::Model {
+        active_session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::new_v4())),
+        ..Default::default()
+    };
+    model.connection.name = "shop".into();
+    model.connection.read_only = read_only;
+    update(&mut model, Action::OpenAdmin);
+    model.admin = dexo_tui::screens::admin::AdminScreen::fixture();
+    // The sessions are of the server the screen shows, and its policy is that one's.
+    if let Some(server) = model.admin.server.as_mut() {
+        server.read_only = read_only;
     }
-    calls += 1;
-    assert_eq!(calls, 1);
-    let _ = Action::ConfirmAdmin;
-    let _ = update;
+    model.admin.read_only = read_only;
+    model
+}
+
+fn press_key(
+    model: &mut dexo_tui::Model,
+    code: crossterm::event::KeyCode,
+) -> Vec<dexo_tui::Effect> {
+    update(
+        model,
+        Action::Key(crossterm::event::KeyEvent::new(
+            code,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+    )
+}
+
+fn terminates(effects: &[dexo_tui::Effect]) -> Option<String> {
+    effects.iter().find_map(|effect| match effect {
+        dexo_tui::Effect::AdminTerminate { target, .. } => Some(target.clone()),
+        _ => None,
+    })
+}
+
+/// Enter used to end the first session listed, whoever owned it. Now only the session
+/// picked is ended, after its id is typed, and an id that does not match does nothing.
+#[test]
+fn only_the_picked_session_ends_once_its_id_is_typed() {
+    use crossterm::event::KeyCode;
+    let mut model = sessions_model(false);
+    assert_eq!(terminates(&press_key(&mut model, KeyCode::Enter)), None);
+    // The longest running is listed first: 11.
+    assert_eq!(
+        model.admin.picked().map(|session| session.id.as_str()),
+        Some("11")
+    );
+    press_key(&mut model, KeyCode::Char('t'));
+    assert_eq!(terminates(&press_key(&mut model, KeyCode::Enter)), None);
+    assert!(model.admin.terminate.as_ref().unwrap().error.is_some());
+    press_key(&mut model, KeyCode::Char('1'));
+    assert_eq!(terminates(&press_key(&mut model, KeyCode::Enter)), None);
+    press_key(&mut model, KeyCode::Char('1'));
+    assert_eq!(
+        terminates(&press_key(&mut model, KeyCode::Enter)).as_deref(),
+        Some("11")
+    );
+    assert!(model.admin.terminate.is_none());
+}
+
+/// Ending a session is a write: a read-only connection refuses it before asking.
+#[test]
+fn a_read_only_connection_ends_no_session() {
+    use crossterm::event::KeyCode;
+    let mut model = sessions_model(true);
+    press_key(&mut model, KeyCode::Char('t'));
+    assert!(model.admin.terminate.is_none());
+    assert!(
+        model
+            .messages
+            .iter()
+            .any(|message| message.message.contains("read-only")),
+    );
 }
 
 #[tokio::test]
@@ -144,13 +206,177 @@ fn open_admin_emits_load_when_session_ready() {
         session_generation: 1,
         ..Model::default()
     };
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1)),
+            connection: "shop".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 1,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
     let effects = update(&mut model, Action::OpenAdmin);
-    assert!(model.admin.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Server);
     assert!(
         effects
             .iter()
             .any(|effect| matches!(effect, dexo_tui::Effect::LoadAdminSessions { .. }))
     );
+}
+
+/// A command that cannot run closes the palette and says why once; it stayed open under
+/// its reason, with the editor behind it dead to the keys. A second Begin says what to
+/// do, not "session is not idle".
+#[test]
+fn a_command_that_cannot_run_closes_the_palette_and_says_why() {
+    let mut model = Model::default();
+    choose(&mut model, "Commit Transaction");
+    assert!(!model.palette.open, "the palette stayed open");
+    assert_eq!(
+        model.messages.last().map(|line| line.message.as_str()),
+        Some("no active transaction")
+    );
+
+    let mut open = Model {
+        transaction: dexo_driver_api::TransactionState::Active,
+        ..Model::default()
+    };
+    choose(&mut open, "Begin Transaction");
+    assert!(!open.palette.open);
+    assert_eq!(
+        open.messages.last().map(|line| line.message.as_str()),
+        Some("a transaction is already open: commit or roll it back first")
+    );
+}
+
+/// A session the server ended is closed, so the connection reads offline and the next
+/// run connects by itself, instead of failing with "connection closed" for ever.
+#[test]
+fn a_session_the_server_ended_is_closed_and_said_so() {
+    let session = dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(7));
+    let mut model = Model::default();
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: session,
+            connection: "pg-prod".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 1,
+            environment: "production".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
+    let effects = update(
+        &mut model,
+        Action::SessionLost {
+            session: session.0.to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [dexo_tui::Effect::CloseSession { session: closing }] if *closing == session
+    ));
+    assert!(model.messages.iter().any(|message| {
+        message.message.contains("pg-prod lost its connection")
+            && message.message.contains("Run again")
+    }));
+    // A session this model does not know is nobody's to close.
+    assert!(
+        update(
+            &mut model,
+            Action::SessionLost {
+                session: "somewhere-else".into()
+            }
+        )
+        .is_empty()
+    );
+}
+
+/// A long list moves its pick with Home, End and the paging keys.
+#[test]
+fn the_sessions_list_moves_by_key() {
+    use crossterm::event::KeyCode;
+    let mut model = sessions_model(false);
+    model.height = 20;
+    model.admin.sessions = (1..=17).map(|n| session_info(&n.to_string())).collect();
+    model.admin.blocking.clear();
+    // They are idle: listed only when asked for.
+    model.admin.show_idle = true;
+
+    press_key(&mut model, KeyCode::End);
+    assert_eq!(model.admin.selected, 16);
+    press_key(&mut model, KeyCode::Home);
+    assert_eq!(model.admin.selected, 0);
+    press_key(&mut model, KeyCode::PageDown);
+    let page = model.admin.selected;
+    assert!(page > 0);
+    let shown = dexo_tui::render::render_to_string(&model, 80, 20);
+    assert!(
+        shown.contains(&format!("> ● {:<8}", model.admin.sessions[page].id)),
+        "{shown}"
+    );
+    press_key(&mut model, KeyCode::PageUp);
+    assert_eq!(model.admin.selected, 0);
+}
+
+/// The list loads in the background: the screen says so, shows why when it cannot load,
+/// and an answer that lands after leaving does not change what is shown.
+#[test]
+fn the_sessions_screen_shows_loading_failures_and_ignores_a_late_answer() {
+    let session = dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1));
+    let mut model = Model {
+        active_session: Some(session),
+        session_generation: 1,
+        ..Model::default()
+    };
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: session,
+            connection: "shop".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 1,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
+    update(&mut model, Action::OpenAdmin);
+    assert!(model.admin.loading);
+    let screen = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(screen.contains("Reading the server's sessions"), "{screen}");
+
+    update(
+        &mut model,
+        Action::AdminFailed {
+            message: "connection refused".into(),
+        },
+    );
+    assert!(!model.admin.loading);
+    assert_eq!(
+        model.admin.last_error.as_deref(),
+        Some("connection refused")
+    );
+    assert!(
+        model
+            .messages
+            .iter()
+            .any(|message| message.message.contains("connection refused"))
+    );
+
+    update(&mut model, Action::OpenAdmin);
+    press_key(&mut model, crossterm::event::KeyCode::Esc);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Workbench);
+    update(
+        &mut model,
+        Action::AdminSessionsLoaded {
+            sessions: vec![session_info("9")],
+            captured_at: "now".into(),
+            blocking: Vec::new(),
+        },
+    );
+    assert!(model.admin.sessions.is_empty(), "a late answer was taken");
 }
 
 fn choose(model: &mut Model, query: &str) {
@@ -181,23 +407,36 @@ fn press(model: &mut Model, ch: char) {
     );
 }
 
-/// Enabling a profile hands an MCP client tool access to the database, so it takes
-/// the same two presses that revoking already took. The screen used to have no key
-/// for it at all -- it could list and revoke, never enable.
+/// Enabling a profile hands an MCP client tool access to the database, so it asks in a
+/// dialog first, with Cancel focused, and no letter typed at the screen confirms it.
 #[test]
-fn enabling_an_mcp_profile_takes_two_presses() {
+fn enabling_an_mcp_profile_asks_in_a_dialog() {
     let mut model = Model {
         mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
     assert!(!model.mcp_profiles.enabled);
 
     let armed = update(&mut model, Action::Key(key('e')));
-    assert!(armed.is_empty(), "arming must not grant anything yet");
-    assert!(!model.mcp_profiles.enabled);
-    assert!(model.mcp_profiles.preview.contains("confirm enable"));
+    assert!(armed.is_empty(), "asking must not grant anything yet");
+    assert!(model.mcp_profiles.confirm.is_some());
+    let view = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(view.contains("Enable assistant?"), "{view}");
+    assert!(
+        view.contains("[Enable]") && view.contains("[Cancel]"),
+        "{view}"
+    );
 
-    let effects = update(&mut model, Action::Key(key('e')));
+    // Typing again confirms nothing: a second `e` was all it used to take.
+    let again = update(&mut model, Action::Key(key('e')));
+    assert!(again.is_empty());
+    assert!(model.mcp_profiles.confirm.is_some());
+
+    // Left to the Enable button, Enter confirms.
+    update(&mut model, Action::Key(arrow_left()));
+    let effects = update(&mut model, Action::Key(enter()));
     assert!(
         effects.iter().any(|effect| matches!(
             effect,
@@ -205,7 +444,6 @@ fn enabling_an_mcp_profile_takes_two_presses() {
         )),
         "{effects:?}"
     );
-    assert!(model.mcp_profiles.enabled);
 }
 
 /// The grants section was fixture-only: nothing ever read the ledger, so the screen
@@ -219,20 +457,17 @@ fn selecting_a_profile_shows_its_own_grants() {
         capability: "data_write".into(),
         tools: tools.into(),
         expires_in_secs: 900,
-        diff: "prod db.public.items".into(),
+        connection: "prod".into(),
+        selectors: "db.public.items".into(),
+        ask_secs: 0,
     };
     let profile = |name: &str, grants: Vec<GrantLine>| McpProfileSummary {
         name: name.into(),
-        enabled: false,
-        scopes: vec![],
-        tools: vec![],
         grants,
-    };
-
-    let mut screen = McpProfilesScreen {
-        open: true,
         ..Default::default()
     };
+
+    let mut screen = McpProfilesScreen::default();
     screen.load_profiles(vec![
         profile("assistant", vec![line("g1", "data_insert")]),
         profile(
@@ -256,15 +491,22 @@ fn selecting_a_profile_shows_its_own_grants() {
 }
 
 /// Disabling only takes access away, so it commits on the first press. Enabling grants
-/// it, so it still arms first. The asymmetry is the point.
+/// it, so it asks first. The asymmetry is the point.
 #[test]
-fn disabling_a_profile_takes_one_press_while_enabling_takes_two() {
+fn disabling_a_profile_takes_one_press_while_enabling_asks() {
     let mut model = Model {
         mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
     update(&mut model, Action::Key(key('e')));
-    update(&mut model, Action::Key(key('e')));
+    update(&mut model, Action::Key(arrow_left()));
+    update(&mut model, Action::Key(enter()));
+    // The runtime's reload brings the enabled profile back.
+    let mut profile = model.mcp_profiles.profiles[0].clone();
+    profile.enabled = true;
+    model.mcp_profiles.load_profiles(vec![profile]);
     assert!(model.mcp_profiles.enabled);
 
     let effects = update(&mut model, Action::Key(key('e')));
@@ -277,30 +519,29 @@ fn disabling_a_profile_takes_one_press_while_enabling_takes_two() {
         "{effects:?}"
     );
 
-    // and it is armed again on the way back up
+    // and it asks again on the way back up
     let armed = update(&mut model, Action::Key(key('e')));
     assert!(armed.is_empty());
-    assert!(!model.mcp_profiles.enabled);
+    assert!(model.mcp_profiles.confirm.is_some());
 }
 
-/// `r` acts on the selected row; the global sweep moved to `R`. A screen listing
-/// profiles where an unmodified key hits everything is the surprising one.
+/// `r` acts on the selected row and says what goes; the global sweep is `R`. Both ask in
+/// a dialog that names how many grants are revoked.
 #[test]
 fn revoke_targets_the_selected_profile_and_shift_revokes_everything() {
     let mut model = Model {
         mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
     let armed = update(&mut model, Action::Key(key('r')));
-    assert!(armed.is_empty(), "per-profile revoke must arm first");
-    assert!(
-        model
-            .mcp_profiles
-            .preview
-            .contains("confirm revoke grants for")
-    );
+    assert!(armed.is_empty(), "per-profile revoke must ask first");
+    let view = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(view.contains("Revoke the 1 grant of assistant?"), "{view}");
 
-    let effects = update(&mut model, Action::Key(key('r')));
+    update(&mut model, Action::Key(arrow_left()));
+    let effects = update(&mut model, Action::Key(enter()));
     assert!(
         effects.iter().any(|effect| matches!(
             effect,
@@ -311,10 +552,13 @@ fn revoke_targets_the_selected_profile_and_shift_revokes_everything() {
 
     let mut model = Model {
         mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
     update(&mut model, Action::Key(key('R')));
-    let effects = update(&mut model, Action::Key(key('R')));
+    update(&mut model, Action::Key(arrow_left()));
+    let effects = update(&mut model, Action::Key(enter()));
     assert!(
         effects
             .iter()
@@ -323,38 +567,38 @@ fn revoke_targets_the_selected_profile_and_shift_revokes_everything() {
     );
 }
 
-/// Moving the cursor must not let a confirmation armed on one profile commit on
-/// whichever profile happens to be selected next.
+/// A status line says what was done to the profile it was done to: it does not follow the
+/// pick to another one.
 #[test]
-fn moving_off_a_profile_disarms_its_pending_enable() {
+fn moving_off_a_profile_clears_what_was_said_about_it() {
     use dexo_tui::screens::mcp_profiles::McpProfileSummary;
 
     let summary = |name: &str| McpProfileSummary {
         name: name.into(),
-        enabled: false,
-        scopes: vec![],
-        tools: vec![],
-        grants: vec![],
-    };
-    let mut screen = dexo_tui::screens::mcp_profiles::McpProfilesScreen {
-        open: true,
         ..Default::default()
     };
+    let mut screen = dexo_tui::screens::mcp_profiles::McpProfilesScreen::default();
     screen.load_profiles(vec![summary("assistant"), summary("reviewer")]);
+    screen.status = "Disabled assistant: agents can no longer use it.".into();
     let mut model = Model {
         mcp_profiles: screen,
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
 
-    update(&mut model, Action::Key(key('e')));
-    assert!(model.mcp_profiles.confirm_enable);
     update(&mut model, Action::Key(arrow_down()));
-    assert!(!model.mcp_profiles.confirm_enable);
+    assert!(model.mcp_profiles.status.is_empty());
     assert_eq!(model.mcp_profiles.name, "reviewer");
-
+    // The new profile asks on its own.
     let effects = update(&mut model, Action::Key(key('e')));
-    assert!(effects.is_empty(), "the new profile must arm on its own");
+    assert!(effects.is_empty());
     assert!(!model.mcp_profiles.enabled);
+}
+
+fn arrow_left() -> crossterm::event::KeyEvent {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)
 }
 
 fn key(ch: char) -> crossterm::event::KeyEvent {
@@ -441,16 +685,24 @@ fn destructive_local_commands_open_their_owner_before_confirmation() {
     press(&mut model, 'n');
     let view = dexo_tui::render::render_to_string(&model, 100, 30);
     assert!(
-        view.contains("confirm_discard=true"),
+        view.contains("Press Discard again"),
         "recovery discard confirmation is hidden"
     );
 
     let mut model = model_with_local_state();
     choose(&mut model, "mcp.revoke_all");
+    // The profiles are read again, and the dialog says how many grants go.
+    let fixture = dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture();
+    update(
+        &mut model,
+        Action::McpProfilesLoaded {
+            profiles: fixture.profiles,
+        },
+    );
     let view = dexo_tui::render::render_to_string(&model, 100, 30);
     assert!(
-        view.contains("confirm revoke all grants"),
-        "mcp revoke confirmation is hidden"
+        view.contains("Revoke every grant: 1 grant in 1 profile?"),
+        "mcp revoke confirmation is hidden:\n{view}"
     );
 }
 

@@ -33,6 +33,9 @@ pub struct TransportLease {
     endpoint: SocketAddr,
     cancel: CancellationToken,
     task: Option<tokio::task::JoinHandle<()>>,
+    /// Why the last forward failed to open its far end: a client of the local port sees
+    /// only a socket that closed.
+    failure: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl TransportLease {
@@ -70,6 +73,11 @@ impl TransportLease {
         self.endpoint
     }
 
+    /// The reason the last connection through this lease failed to reach the far end.
+    pub fn failure(&self) -> Option<String> {
+        self.failure.lock().ok().and_then(|failure| failure.clone())
+    }
+
     pub async fn close(mut self) {
         self.cancel.cancel();
         if let Some(task) = self.task.take() {
@@ -88,6 +96,8 @@ impl TransportLease {
         let task_cancel = cancel.clone();
         let target = Arc::new(target);
         let cap = Arc::new(Semaphore::new(MAX_FORWARDS));
+        let failure = Arc::new(std::sync::Mutex::new(None));
+        let task_failure = Arc::clone(&failure);
         let task = tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -99,12 +109,13 @@ impl TransportLease {
                             continue;
                         };
                         let target = Arc::clone(&target);
+                        let failure = Arc::clone(&task_failure);
                         let child = task_cancel.child_token();
                         tokio::spawn(async move {
                             let _permit = permit;
                             tokio::select! {
                                 _ = child.cancelled() => {}
-                                _ = forward_one(local, &target) => {}
+                                _ = forward_one(local, &target, &failure) => {}
                             }
                         });
                     }
@@ -115,6 +126,7 @@ impl TransportLease {
             endpoint,
             cancel,
             task: Some(task),
+            failure,
         })
     }
 }
@@ -125,8 +137,21 @@ impl Drop for TransportLease {
     }
 }
 
-async fn forward_one(mut local: TcpStream, target: &ForwardTarget) -> Result<(), TransportError> {
-    let mut remote = open_remote(target).await?;
+async fn forward_one(
+    mut local: TcpStream,
+    target: &ForwardTarget,
+    failure: &std::sync::Mutex<Option<String>>,
+) -> Result<(), TransportError> {
+    let mut remote = match open_remote(target).await {
+        Ok(remote) => remote,
+        Err(error) => {
+            // Noted before `local` closes, so the client that sees it close can ask why.
+            if let Ok(mut slot) = failure.lock() {
+                *slot = Some(error.to_string());
+            }
+            return Err(error);
+        }
+    };
     tokio::io::copy_bidirectional(&mut local, &mut remote)
         .await
         .map(|_| ())

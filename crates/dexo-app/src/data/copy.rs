@@ -1,5 +1,7 @@
 use dexo_driver_api::DbValue;
 
+use crate::transfer::codec::{FormatOptions, TransferFormat, encode_document, sql_insert};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CopyFormat {
     /// The values alone: no header, a tab between cells, one row per line. A single
@@ -17,6 +19,19 @@ pub enum CopyFormat {
 pub enum SqlDialect {
     Postgres,
     Mysql,
+    Sqlite,
+    Duckdb,
+}
+
+impl From<dexo_sql::Dialect> for SqlDialect {
+    fn from(dialect: dexo_sql::Dialect) -> Self {
+        match dialect {
+            dexo_sql::Dialect::Postgres => Self::Postgres,
+            dexo_sql::Dialect::Mysql => Self::Mysql,
+            dexo_sql::Dialect::Sqlite => Self::Sqlite,
+            dexo_sql::Dialect::Duckdb => Self::Duckdb,
+        }
+    }
 }
 
 pub fn copy_selection(
@@ -24,6 +39,18 @@ pub fn copy_selection(
     rows: &[Vec<DbValue>],
     format: CopyFormat,
     dialect: SqlDialect,
+) -> Result<String, String> {
+    copy_selection_of(columns, rows, format, dialect, None)
+}
+
+/// `copy_selection` for rows of a known table: `table`, unquoted (`schema.table`), is
+/// what a copied INSERT inserts into.
+pub fn copy_selection_of(
+    columns: &[String],
+    rows: &[Vec<DbValue>],
+    format: CopyFormat,
+    dialect: SqlDialect,
+    table: Option<&str>,
 ) -> Result<String, String> {
     for row in rows {
         for value in row {
@@ -36,12 +63,12 @@ pub fn copy_selection(
             .map(|row| row.iter().map(display_value).collect::<Vec<_>>().join("\t"))
             .collect::<Vec<_>>()
             .join("\n")),
-        CopyFormat::Text => Ok(delimited(columns, rows, ' ')),
-        CopyFormat::Csv => Ok(delimited(columns, rows, ',')),
-        CopyFormat::Tsv => Ok(delimited(columns, rows, '\t')),
+        // Text pastes into a spreadsheet as columns: tab-separated, like TSV.
+        CopyFormat::Text | CopyFormat::Tsv => delimited(columns, rows, TransferFormat::Tsv),
+        CopyFormat::Csv => delimited(columns, rows, TransferFormat::Csv),
         CopyFormat::Json => json(columns, rows),
         CopyFormat::Markdown => Ok(markdown(columns, rows)),
-        CopyFormat::Sql => Ok(sql(columns, rows, dialect)),
+        CopyFormat::Sql => Ok(sql(columns, rows, dialect, table.unwrap_or("tbl"))),
     }
 }
 
@@ -79,36 +106,42 @@ pub fn display_value(value: &DbValue) -> String {
     }
 }
 
-fn delimited(columns: &[String], rows: &[Vec<DbValue>], sep: char) -> String {
-    let mut out = columns.join(&sep.to_string());
-    out.push('\n');
-    for row in rows {
-        let cells: Vec<String> = row
-            .iter()
-            .map(|value| match value {
-                DbValue::Null => "\\N".into(),
-                DbValue::Text(text) if text.is_empty() => String::new(),
-                other => display_value(other),
-            })
-            .collect();
-        out.push_str(&cells.join(&sep.to_string()));
-        out.push('\n');
-    }
-    out
+/// CSV and TSV as an export writes them: a value holding the separator, a quote or a
+/// line break is quoted, and NULL is `\N`, apart from an empty string.
+fn delimited(
+    columns: &[String],
+    rows: &[Vec<DbValue>],
+    format: TransferFormat,
+) -> Result<String, String> {
+    let bytes = encode_document(format, &FormatOptions::default(), columns, rows)?;
+    String::from_utf8(bytes).map_err(|error| error.to_string())
 }
 
+/// The rows as an array of objects whose keys keep the columns' order: `serde_json`'s
+/// map sorts them, so the objects are written key by key.
 fn json(columns: &[String], rows: &[Vec<DbValue>]) -> Result<String, String> {
-    let objects: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|row| {
-            let mut map = serde_json::Map::new();
-            for (name, value) in columns.iter().zip(row.iter()) {
-                map.insert(name.clone(), json_value(value));
-            }
-            serde_json::Value::Object(map)
-        })
-        .collect();
-    Ok(serde_json::to_string_pretty(&objects).unwrap_or_default())
+    let pretty = |value: &serde_json::Value| {
+        serde_json::to_string_pretty(value).map_err(|error| error.to_string())
+    };
+    let mut objects = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut members = Vec::with_capacity(columns.len());
+        for (name, value) in columns.iter().zip(row.iter()) {
+            let key = pretty(&serde_json::Value::String(name.clone()))?;
+            let value = pretty(&json_value(value))?.replace('\n', "\n    ");
+            members.push(format!("    {key}: {value}"));
+        }
+        objects.push(if members.is_empty() {
+            "  {}".to_string()
+        } else {
+            format!("  {{\n{}\n  }}", members.join(",\n"))
+        });
+    }
+    Ok(if objects.is_empty() {
+        "[]".to_string()
+    } else {
+        format!("[\n{}\n]", objects.join(",\n"))
+    })
 }
 
 fn json_value(value: &DbValue) -> serde_json::Value {
@@ -126,8 +159,16 @@ fn json_value(value: &DbValue) -> serde_json::Value {
     }
 }
 
+/// A cell stays on its row: a line break becomes `<br>` and a bar is escaped.
+fn markdown_cell(text: &str) -> String {
+    text.replace('|', "\\|")
+        .replace("\r\n", "<br>")
+        .replace(['\n', '\r'], "<br>")
+}
+
 fn markdown(columns: &[String], rows: &[Vec<DbValue>]) -> String {
-    let mut out = format!("| {} |\n", columns.join(" | "));
+    let names: Vec<String> = columns.iter().map(|name| markdown_cell(name)).collect();
+    let mut out = format!("| {} |\n", names.join(" | "));
     out.push_str(&format!(
         "| {} |\n",
         columns
@@ -137,51 +178,44 @@ fn markdown(columns: &[String], rows: &[Vec<DbValue>]) -> String {
             .join(" | ")
     ));
     for row in rows {
-        let cells: Vec<String> = row.iter().map(display_value).collect();
+        let cells: Vec<String> = row
+            .iter()
+            .map(|value| markdown_cell(&display_value(value)))
+            .collect();
         out.push_str(&format!("| {} |\n", cells.join(" | ")));
     }
     out
 }
 
-fn sql(columns: &[String], rows: &[Vec<DbValue>], dialect: SqlDialect) -> String {
-    let ident = |name: &str| match dialect {
-        SqlDialect::Postgres => format!("\"{}\"", name.replace('"', "\"\"")),
-        SqlDialect::Mysql => format!("`{}`", name.replace('`', "``")),
-    };
-    let cols = columns
-        .iter()
-        .map(|name| ident(name))
-        .collect::<Vec<_>>()
-        .join(", ");
+/// One INSERT per row into `table`, each line ended like the other formats' rows.
+fn sql(columns: &[String], rows: &[Vec<DbValue>], dialect: SqlDialect, table: &str) -> String {
     rows.iter()
-        .map(|row| {
-            let values = row
-                .iter()
-                .map(|value| sql_literal(value, dialect))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("INSERT INTO tbl ({cols}) VALUES ({values});")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(|row| format!("{}\n", sql_insert(table, columns, row, dialect)))
+        .collect()
 }
 
-fn sql_literal(value: &DbValue, dialect: SqlDialect) -> String {
+/// `value` as a literal of `dialect`: for a copied INSERT and an exported one alike.
+pub(crate) fn sql_literal(value: &DbValue, dialect: SqlDialect) -> String {
     match value {
         DbValue::Null => "NULL".into(),
         DbValue::Bool(v) => match dialect {
-            SqlDialect::Postgres => if *v { "TRUE" } else { "FALSE" }.into(),
-            SqlDialect::Mysql => if *v { "1" } else { "0" }.into(),
+            SqlDialect::Postgres | SqlDialect::Duckdb => if *v { "TRUE" } else { "FALSE" }.into(),
+            SqlDialect::Mysql | SqlDialect::Sqlite => if *v { "1" } else { "0" }.into(),
         },
         DbValue::I64(v) => v.to_string(),
         DbValue::U64(v) => v.to_string(),
         DbValue::Decimal(v) => v.clone(),
-        DbValue::Text(v) | DbValue::Json(v) | DbValue::Native { text: v, .. } => {
-            format!("'{}'", v.replace('\'', "''"))
-        }
+        DbValue::Text(v) | DbValue::Json(v) | DbValue::Native { text: v, .. } => match dialect {
+            SqlDialect::Mysql => dexo_driver_api::mysql_string_literal(v),
+            SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Duckdb => {
+                format!("'{}'", v.replace('\'', "''"))
+            }
+        },
         DbValue::Bytes(v) => match dialect {
             SqlDialect::Postgres => format!("'\\x{}'", hex(v)),
-            SqlDialect::Mysql => format!("X'{}'", hex(v)),
+            // DuckDB reads `'\x01'` as escaped bytes, not as one hex string.
+            SqlDialect::Duckdb => format!("from_hex('{}')", hex(v)),
+            SqlDialect::Mysql | SqlDialect::Sqlite => format!("X'{}'", hex(v)),
         },
     }
 }
@@ -215,7 +249,7 @@ mod tests {
         assert_eq!(many.unwrap(), "1\tx\nNULL\ty");
     }
 
-    use super::{CopyFormat, SqlDialect, copy_selection};
+    use super::{CopyFormat, SqlDialect, copy_selection, copy_selection_of};
     use dexo_driver_api::DbValue;
 
     #[test]
@@ -272,6 +306,89 @@ mod tests {
         assert!(!sql.contains("'O'Reilly'"));
     }
 
+    fn awkward_rows() -> (Vec<String>, Vec<Vec<DbValue>>) {
+        (
+            vec!["id".into(), "name".into(), "note".into()],
+            vec![
+                vec![
+                    DbValue::I64(1),
+                    DbValue::Text("Ana, \"the\" Silva".into()),
+                    DbValue::Null,
+                ],
+                vec![
+                    DbValue::I64(2),
+                    DbValue::Text("multi\nline|name".into()),
+                    DbValue::Text(String::new()),
+                ],
+            ],
+        )
+    }
+
+    /// A comma, a quote or a line break inside a value no longer splits the record.
+    #[test]
+    fn csv_quotes_what_needs_quoting() {
+        let (columns, rows) = awkward_rows();
+        let csv = copy_selection(&columns, &rows, CopyFormat::Csv, SqlDialect::Postgres).unwrap();
+        assert_eq!(
+            csv,
+            "id,name,note\n1,\"Ana, \"\"the\"\" Silva\",\\N\n2,\"multi\nline|name\",\n"
+        );
+    }
+
+    /// Text is the one that pastes into a spreadsheet as columns.
+    #[test]
+    fn text_is_tab_separated() {
+        let (columns, rows) = awkward_rows();
+        let text = copy_selection(&columns, &rows, CopyFormat::Text, SqlDialect::Postgres).unwrap();
+        assert!(text.starts_with("id\tname\tnote\n1\t"), "{text}");
+    }
+
+    #[test]
+    fn json_keeps_the_columns_order() {
+        let columns = vec!["id".into(), "name".into(), "created_at".into()];
+        let rows = vec![vec![
+            DbValue::I64(1),
+            DbValue::Text("x".into()),
+            DbValue::Json(r#"{"b":1}"#.into()),
+        ]];
+        let json = copy_selection(&columns, &rows, CopyFormat::Json, SqlDialect::Postgres).unwrap();
+        assert_eq!(
+            json,
+            "[\n  {\n    \"id\": 1,\n    \"name\": \"x\",\n    \"created_at\": {\n      \"b\": 1\n    }\n  }\n]"
+        );
+        let empty = copy_selection(&columns, &[], CopyFormat::Json, SqlDialect::Postgres).unwrap();
+        assert_eq!(empty, "[]");
+    }
+
+    #[test]
+    fn markdown_cells_stay_on_their_row() {
+        let (columns, rows) = awkward_rows();
+        let table =
+            copy_selection(&columns, &rows, CopyFormat::Markdown, SqlDialect::Postgres).unwrap();
+        assert_eq!(table.lines().count(), 4, "{table}");
+        assert!(table.contains("multi<br>line\\|name"), "{table}");
+    }
+
+    /// The INSERTs name the table the rows came from, and each ends its line.
+    #[test]
+    fn sql_names_the_table_it_is_given() {
+        let (columns, rows) = awkward_rows();
+        let sql = copy_selection_of(
+            &columns,
+            &rows,
+            CopyFormat::Sql,
+            SqlDialect::Postgres,
+            Some("public.customers"),
+        )
+        .unwrap();
+        assert!(
+            sql.starts_with("INSERT INTO \"public\".\"customers\" (\"id\", \"name\", \"note\")"),
+            "{sql}"
+        );
+        assert!(sql.ends_with(";\n"), "{sql}");
+        assert_eq!(sql.matches("INSERT INTO").count(), 2);
+    }
+
     #[test]
     fn copy_json_embeds_json_columns() {
         let json = copy_selection(
@@ -286,5 +403,36 @@ mod tests {
         assert!(json.contains("\"product_id\": \"abc\""));
         assert!(json.contains("\"quantity\": 1"));
         assert!(!json.contains("\\\"product_id\\\""));
+    }
+
+    /// MySQL reads a backslash in a literal as an escape: copied and exported INSERTs
+    /// both escape it, so `\'` cannot end the literal and run what follows.
+    #[test]
+    fn mysql_inserts_escape_backslashes() {
+        let rows = [vec![
+            DbValue::Text("a\\'); DROP TABLE victim2; -- ".into()),
+            DbValue::Text("C:\\new\\table".into()),
+        ]];
+        let columns = ["v".to_string(), "path".to_string()];
+        let want = "VALUES ('a\\\\''); DROP TABLE victim2; -- ', 'C:\\\\new\\\\table');";
+        let copied = copy_selection(&columns, &rows, CopyFormat::Sql, SqlDialect::Mysql).unwrap();
+        assert!(copied.trim_end().ends_with(want), "{copied}");
+        let options = crate::transfer::codec::FormatOptions {
+            dialect: SqlDialect::Mysql,
+            ..Default::default()
+        };
+        let exported = crate::transfer::codec::encode_document(
+            crate::transfer::codec::TransferFormat::Sql,
+            &options,
+            &columns,
+            &rows,
+        )
+        .unwrap();
+        let exported = String::from_utf8(exported).unwrap();
+        assert!(exported.trim_end().ends_with(want), "{exported}");
+        // Postgres and SQLite take a backslash as itself.
+        let postgres =
+            copy_selection(&columns, &rows, CopyFormat::Sql, SqlDialect::Postgres).unwrap();
+        assert!(postgres.contains("'C:\\new\\table'"), "{postgres}");
     }
 }

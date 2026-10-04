@@ -23,3 +23,14 @@ fn history_and_snippet_round_trip() {
     history.clear_for_connection("c1").unwrap();
     assert!(history.list(Some("c1")).unwrap().is_empty());
 }
+
+#[test]
+fn clearing_all_history_empties_every_connection() {
+    let db = Database::open_in_memory().unwrap();
+    let history = HistoryRepository::new(db.connection());
+    history.insert("h1", Some("a"), "select 1").unwrap();
+    history.insert("h2", Some("b"), "select 2").unwrap();
+    history.insert("h3", None, "select 3").unwrap();
+    history.clear_all().unwrap();
+    assert_eq!(history.count().unwrap(), 0);
+}

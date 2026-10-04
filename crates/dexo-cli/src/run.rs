@@ -5,11 +5,11 @@ use std::time::Duration;
 use crate::args::{
     Args, Command, ConfigCommand, ConnectionsCommand, LaunchMode, McpCommand, McpConfigCommand,
     McpGrantCommand, McpProfileCommand, OnError, OutputFormat, SchemaCommand, SchemaDiffFormat,
-    SessionsCommand, TransferCliFormat,
+    SessionsCommand, TransferCliFormat, TuiStart,
 };
 use crate::presenter;
 use dexo_app::mcp::{
-    Effect, Grant, GrantCapability, GrantLedger, McpConnection, McpProfile, McpService, QueryMode,
+    Effect, GrantCapability, GrantLedger, McpConnection, McpProfile, McpService, QueryMode,
     SelectorRule, ToolRule, advertised_tools, known_tools,
 };
 use dexo_app::schema_diff::{RenameMapping, SchemaSnapshot, plan_migration, render_unquoted};
@@ -23,7 +23,7 @@ use dexo_driver_api::{
     CatalogListOptions, CatalogObject, CatalogReader, DbValue, QueryEvent, RowBatch,
 };
 use dexo_runtime::TaskRegistry;
-use dexo_secrets::{KeyringSecretStore, SecretStore};
+use dexo_secrets::KeyringSecretStore;
 use dexo_storage::{
     AppPaths, CatalogCache, ConnectionRepository, Database, McpProfileRepository,
     SchemaSnapshotStore, SqliteGrantLedger, export_portable, import_portable,
@@ -34,16 +34,67 @@ pub fn run(args: Args) -> anyhow::Result<()> {
 }
 
 pub trait TuiRunner {
-    fn run(self) -> anyhow::Result<()>;
+    fn run(self, start: TuiStart) -> anyhow::Result<()>;
 }
 
+/// A runner that ignores how the workbench was asked to start, for tests.
 impl<F> TuiRunner for F
 where
     F: FnOnce() -> anyhow::Result<()>,
 {
-    fn run(self) -> anyhow::Result<()> {
+    fn run(self, _: TuiStart) -> anyhow::Result<()> {
         self()
     }
+}
+
+/// The connection a `dexo <url>` asks for: parsed, the file of a file URL made absolute,
+/// and the password asked for on the terminal when `--password-prompt` says so.
+pub fn temporary_connection(
+    url: &str,
+    password_prompt: bool,
+) -> anyhow::Result<dexo_app::connection_url::UrlConnection> {
+    let prompt = |name: &str| rpassword::prompt_password(format!("Password for {name}: "));
+    temporary_connection_with(url, password_prompt.then_some(prompt))
+}
+
+fn temporary_connection_with(
+    url: &str,
+    prompt: Option<impl FnOnce(&str) -> std::io::Result<String>>,
+) -> anyhow::Result<dexo_app::connection_url::UrlConnection> {
+    let mut connection = dexo_app::connection_url::parse(url)?;
+    let in_url = connection.password.is_some();
+    // A file has no password to ask for.
+    let warning = match prompt.filter(|_| !connection.profile.is_file()) {
+        Some(prompt) => {
+            // What is typed is the password, an empty answer too: the URL's would
+            // otherwise be used without a word when the prompt is left empty. Without
+            // a terminal to ask on, the error was only "os error 6".
+            let password = prompt(&connection.profile.name).map_err(|error| {
+                anyhow::anyhow!(
+                    "--password-prompt asks on a terminal, and there is none here ({error}); \
+                     without one, save the connection with `dexo connections add` and \
+                     --password-stdin or --password-command"
+                )
+            })?;
+            connection.password =
+                (!password.is_empty()).then(|| secrecy::SecretString::from(password));
+            in_url.then_some(
+                "The URL's password was ignored for the one typed, and other users can see \
+                 it (ps) while Dexo runs; leave it out of the URL.",
+            )
+        }
+        None => in_url.then_some(
+            "Other users can see this URL's password (ps) while Dexo runs; \
+             --password-prompt asks for it instead.",
+        ),
+    };
+    if let Some(warning) = warning {
+        // Printed here for whoever reads the terminal afterwards, and given to the
+        // workbench, whose screen covers this line at once.
+        eprintln!("dexo: {warning}");
+        connection.warning = Some(warning.to_string());
+    }
+    Ok(connection)
 }
 
 pub fn run_with(args: Args, registry: DriverRegistry) -> anyhow::Result<()> {
@@ -58,8 +109,17 @@ pub fn run_dispatch(
     tui: impl TuiRunner,
 ) -> anyhow::Result<()> {
     match args.launch_mode() {
-        LaunchMode::Tui => tui.run(),
-        LaunchMode::Cli(command) => run_cli(command, registry),
+        // The TUI reads Ctrl+C as a key; the command line leaves on it.
+        LaunchMode::Tui(start) => {
+            dexo_app::process::stop_on_signals(false);
+            tui.run(start)
+        }
+        LaunchMode::Cli(command) => {
+            dexo_app::process::stop_on_signals(true);
+            let ran = run_cli(command, registry);
+            dexo_app::process::stop_all();
+            ran
+        }
     }
 }
 
@@ -68,23 +128,36 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
         Command::Doctor { json: true } => println!(r#"{{"status":"ok"}}"#),
         Command::Doctor { json: false } => println!("Dexo: ok"),
         Command::Connections { command } => run_connections(registry, command)?,
-        Command::Completion { shell } => print_completion(&shell)?,
+        Command::Completion { shell } => clap_complete::generate(
+            shell,
+            &mut <Args as clap::CommandFactory>::command(),
+            "dexo",
+            &mut std::io::stdout(),
+        ),
         Command::Config { command } => run_config(command)?,
+        // Nothing here prompts, so --non-interactive changes nothing: what is not
+        // confirmed by a flag is refused.
         Command::Query {
             connection,
             sql,
             file,
             format,
-            non_interactive,
+            non_interactive: _,
             param,
             continue_on_error,
+            confirm,
+            confirm_target,
         } => run_query(
             registry,
             connection,
             sql,
             file,
             format,
-            non_interactive,
+            Confirmed {
+                destructive: confirm,
+                target: confirm_target,
+                reads_only: false,
+            },
             param,
             false,
             continue_on_error,
@@ -93,16 +166,22 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
             connection,
             file,
             format,
-            non_interactive,
+            non_interactive: _,
             param,
             continue_on_error,
+            confirm,
+            confirm_target,
         } => run_query(
             registry,
             connection,
             None,
             file,
             format,
-            non_interactive,
+            Confirmed {
+                destructive: confirm,
+                target: confirm_target,
+                reads_only: false,
+            },
             param,
             true,
             continue_on_error,
@@ -125,7 +204,8 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
             file,
             output,
             format,
-        } => run_export(registry, connection, sql, file, output, format)?,
+            table,
+        } => run_export(registry, connection, sql, file, (output, table), format)?,
         Command::Import {
             connection,
             table,
@@ -150,10 +230,32 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
             file,
             analyze,
             confirm,
+            indexes,
             format,
-        } => run_explain(registry, connection, sql, file, analyze, confirm, format)?,
+        } => run_explain(
+            registry,
+            connection,
+            sql,
+            file,
+            (analyze, confirm),
+            indexes,
+            format,
+        )?,
         Command::Sessions { command } => run_sessions(registry, command)?,
         Command::Mcp { command } => run_mcp(registry, command)?,
+        Command::Lsp { connection } => {
+            let database = AppPaths::discover().ok().map(|paths| paths.database);
+            let mut server = crate::lsp::Server::new(connection, database);
+            let stdin = std::io::stdin();
+            let shut_down = crate::lsp::serve(
+                &mut server,
+                &mut stdin.lock(),
+                &mut std::io::stdout().lock(),
+            )?;
+            if !shut_down {
+                anyhow::bail!("the editor ended the language server without shutting it down");
+            }
+        }
     }
     Ok(())
 }
@@ -173,15 +275,23 @@ fn run_export(
     connection: String,
     sql: Option<String>,
     file: Option<std::path::PathBuf>,
-    output: std::path::PathBuf,
+    (output, table): (std::path::PathBuf, Option<String>),
     format: TransferCliFormat,
 ) -> anyhow::Result<()> {
     let sql = load_sql(sql, file, false)?;
+    // An SQL export is written in the connection's own dialect.
+    let driver =
+        ConnectionRepository::new(Database::open(&AppPaths::discover()?.database)?.connection())
+            .get_by_name(&connection)?
+            .map(|profile| profile.driver);
     let batches = tokio::runtime::Runtime::new()?.block_on(execute_script(
         registry,
         connection,
         sql,
-        false,
+        Confirmed {
+            reads_only: true,
+            ..Confirmed::default()
+        },
         Vec::new(),
         ScriptPolicy::StopOnError,
     ))?;
@@ -198,9 +308,15 @@ fn run_export(
             }
         }
     }
-    let mut options = dexo_app::transfer::FormatOptions::default();
+    let mut options = dexo_app::transfer::FormatOptions {
+        table,
+        ..Default::default()
+    };
     if format == TransferCliFormat::Tsv {
         options.delimiter = b'\t';
+    }
+    if let Some(driver) = driver {
+        options.dialect = dexo_app::dialect_for_driver(&driver).into();
     }
     // ponytail: CLI buffers query events from execute_script; million-row bound lives in export_rows.
     dexo_app::transfer::export_rows(
@@ -228,59 +344,42 @@ fn run_import(
     non_interactive: bool,
 ) -> anyhow::Result<()> {
     let _ = non_interactive;
-    let bytes = if let Some(path) = file {
-        std::fs::read(path)?
-    } else {
-        let mut buf = Vec::new();
-        std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf)?;
-        buf
-    };
-    let mut options = dexo_app::transfer::FormatOptions::default();
-    if format == TransferCliFormat::Tsv {
-        options.delimiter = b'\t';
-    }
-    let detected = dexo_app::transfer::detect(&bytes);
-    let _ = detected;
-    let (columns, decoded) =
-        dexo_app::transfer::decode_document(to_transfer_format(format), &options, &bytes)
-            .map_err(|error| anyhow::anyhow!(error))?;
-    let mapped = if mapping.is_empty() {
-        columns.clone()
-    } else {
-        mapping
-            .into_iter()
-            .map(|item| {
-                item.split_once('=')
-                    .map(|(_, target)| target.to_string())
-                    .ok_or_else(|| anyhow::anyhow!("--mapping must be source=target"))
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    };
+    let mapping =
+        dexo_app::transfer::parse_mapping(&mapping).map_err(|error| anyhow::anyhow!(error))?;
     let strategy = match on_error {
         OnError::Stop => dexo_app::transfer::ErrorStrategy::Stop,
         OnError::Skip => dexo_app::transfer::ErrorStrategy::Skip,
         OnError::Reject => dexo_app::transfer::ErrorStrategy::RejectFile,
     };
-    let rows: Vec<_> = decoded
-        .into_iter()
-        .enumerate()
-        .map(|(index, values)| {
-            let original = values.iter().map(|value| format!("{value:?}")).collect();
-            (index + 2, values, original)
-        })
-        .collect();
-    tokio::runtime::Runtime::new()?.block_on(import_live(
-        registry, connection, table, mapped, rows, strategy,
-    ))
+    // Beside the file, as the TUI writes it; read from standard input, in this folder.
+    let reject_path =
+        (strategy == dexo_app::transfer::ErrorStrategy::RejectFile).then(|| match &file {
+            Some(path) => {
+                let mut name = path.file_name().unwrap_or_default().to_os_string();
+                name.push(".rejects.csv");
+                path.with_file_name(name)
+            }
+            None => std::path::PathBuf::from("stdin.rejects.csv"),
+        });
+    let source = match file {
+        Some(path) => dexo_app::transfer::ImportSource::File(path),
+        None => dexo_app::transfer::ImportSource::Stream(Box::new(std::io::stdin())),
+    };
+    let request = dexo_app::transfer::ImportRequest {
+        source,
+        format: to_transfer_format(format),
+        target: dexo_app::parse_qualified(&table),
+        mapping,
+        strategy,
+        reject_path,
+    };
+    tokio::runtime::Runtime::new()?.block_on(import_live(registry, connection, request))
 }
 
 async fn import_live(
     registry: DriverRegistry,
     connection: String,
-    table: String,
-    columns: Vec<String>,
-    rows: Vec<(usize, Vec<dexo_driver_api::DbValue>, Vec<String>)>,
-    strategy: dexo_app::transfer::ErrorStrategy,
+    request: dexo_app::transfer::ImportRequest,
 ) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
@@ -292,24 +391,37 @@ async fn import_live(
                 format!("unknown connection '{connection}'"),
             )
         })?;
+    if dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)?.read_only {
+        return Err(AppError::new(
+            ErrorCategory::Permission,
+            format!("Not run: {connection} is read-only, and an import writes into it"),
+        )
+        .into());
+    }
     let session = connect_session(&registry, &profile).await?;
     let writer = session
         .bulk()
         .ok_or_else(|| AppError::new(ErrorCategory::Capability, "bulk import is unavailable"))?;
-    let target = dexo_app::parse_qualified(&table);
-    let report = dexo_app::transfer::import_rows(
+    let reject_path = request.reject_path.clone();
+    let report = dexo_app::transfer::import_file(
         writer,
-        &target,
-        &columns,
-        rows,
-        strategy,
+        session.catalog(),
+        request,
         &std::sync::atomic::AtomicBool::new(false),
-        None,
         |_| {},
     )
     .await
     .map_err(|error| anyhow::anyhow!(error))?;
-    println!("committed={} skipped={}", report.committed, report.skipped);
+    print!(
+        "committed={} skipped={} rejected={}",
+        report.committed,
+        report.skipped,
+        report.rejected.len()
+    );
+    match reject_path.filter(|_| !report.rejected.is_empty()) {
+        Some(path) => println!(" rejects={}", path.display()),
+        None => println!(),
+    }
     Ok(())
 }
 
@@ -321,7 +433,10 @@ fn run_config(command: ConfigCommand) -> anyhow::Result<()> {
             print!("{}", export_portable(db.connection())?);
         }
         ConfigCommand::Path => {
-            println!("{}", paths.config.display());
+            println!(
+                "{}",
+                dexo_app::settings::settings_path(&paths.data_dir).display()
+            );
         }
         ConfigCommand::Export { output } => {
             let db = Database::open(&paths.database)?;
@@ -331,6 +446,9 @@ fn run_config(command: ConfigCommand) -> anyhow::Result<()> {
             let db = Database::open(&paths.database)?;
             let toml_text = std::fs::read_to_string(input)?;
             let report = import_portable(db.connection(), &toml_text)?;
+            for command in &report.commands {
+                eprintln!("note: {command}; read it before you connect");
+            }
             if report.connections_needing_secret.is_empty() {
                 println!("Imported 0 connection(s).");
             } else {
@@ -364,14 +482,37 @@ fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> any
             port,
             database,
             username,
+            path,
             environment,
             non_interactive,
             password_stdin,
+            password_command,
+            pre_connect,
             test,
             no_test,
         } => {
-            let password = read_secret(non_interactive, password_stdin)?;
+            // A file has no password to read, and a password command answers for itself.
+            let password = match (&path, &password_command) {
+                (None, None) => read_secret(non_interactive, password_stdin)?,
+                _ => String::new(),
+            };
             let repo = ConnectionRepository::new(db.connection());
+            // The path goes where a file profile keeps it.
+            let mut extra = serde_json::Map::new();
+            if let Some(path) = path {
+                extra.insert("path".into(), path.into());
+            }
+            if let Some(command) = password_command {
+                extra.insert("password_command".into(), command.into());
+            }
+            if let Some(command) = pre_connect {
+                extra.insert("pre_connect".into(), command.into());
+            }
+            let extra_config = if extra.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::Object(extra)
+            };
             let (profile, persist) = create_connection(
                 NewConnection {
                     name,
@@ -381,6 +522,7 @@ fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> any
                     database,
                     username,
                     environment,
+                    extra_config,
                     ..NewConnection::default()
                 },
                 &password,
@@ -457,40 +599,6 @@ fn print_secret_persist(name: &str, persist: SecretPersist) {
     }
 }
 
-fn print_completion(shell: &str) -> anyhow::Result<()> {
-    let names = [
-        "doctor",
-        "connections",
-        "completion",
-        "config",
-        "query",
-        "run",
-        "inspect",
-        "schema",
-        "export",
-        "import",
-        "explain",
-        "sessions",
-        "mcp",
-    ];
-    match shell {
-        "bash" => {
-            println!("complete -W '{}' dexo", names.join(" "));
-        }
-        "powershell" | "pwsh" => {
-            println!(
-                "Register-ArgumentCompleter -CommandName dexo -ScriptBlock {{ '{}' -split ' ' }}",
-                names.join(" ")
-            );
-        }
-        "zsh" | "fish" => {
-            println!("{}", names.join("\n"));
-        }
-        other => anyhow::bail!("unsupported shell '{other}'"),
-    }
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn run_inspect(
     registry: DriverRegistry,
@@ -552,8 +660,11 @@ fn run_inspect(
         }
     } else if snapshot.as_deref() == Some("latest") {
         serde_json::to_value(&cached)?
+    } else if refresh {
+        // Caching was the whole request: what `dexo lsp` and the offline reads use.
+        serde_json::json!({ "connection": connection, "cached": cached.len() })
     } else {
-        anyhow::bail!("provide --object, --search, --grants, or --snapshot latest");
+        anyhow::bail!("provide --object, --search, --grants, --refresh, or --snapshot latest");
     };
     let mut stdout = std::io::stdout();
     match format {
@@ -716,11 +827,16 @@ fn run_schema_diff(
         }
         let connection =
             connection.ok_or_else(|| anyhow::anyhow!("--connection is required with --apply"))?;
+        // The target typed is the confirmation; production takes only its own name.
         let batches = tokio::runtime::Runtime::new()?.block_on(execute_script(
             registry,
             connection,
             script.forward.clone(),
-            true,
+            Confirmed {
+                destructive: true,
+                target: Some(target),
+                reads_only: false,
+            },
             Vec::new(),
             ScriptPolicy::StopOnError,
         ))?;
@@ -791,40 +907,39 @@ async fn collect_snapshot(
     reader: &dyn CatalogReader,
     parent: Option<&dexo_driver_api::ObjectId>,
 ) -> anyhow::Result<Vec<CatalogObject>> {
-    let page =
-        CatalogService::list_children(reader, parent, &CatalogListOptions::default()).await?;
-    let mut objects = page.objects;
-    let children = objects.clone();
-    for child in children {
-        if matches!(
-            child.kind,
-            dexo_driver_api::ObjectKind::Catalog
-                | dexo_driver_api::ObjectKind::Schema
-                | dexo_driver_api::ObjectKind::Table
-                | dexo_driver_api::ObjectKind::View
-                | dexo_driver_api::ObjectKind::MaterializedView
-        ) {
-            objects.extend(Box::pin(collect_snapshot(reader, Some(&child.id))).await?);
-        }
+    Ok(CatalogService::collect_objects(reader, parent).await?)
+}
+
+/// The connection's password: from its password command when it has one, run off the
+/// async workers because it may take seconds, otherwise from the keychain.
+pub(crate) async fn profile_secret(
+    profile: &dexo_app::ConnectionProfile,
+) -> anyhow::Result<secrecy::SecretString> {
+    if let Some(command) = profile.password_command() {
+        let command = command.to_string();
+        return Ok(tokio::task::spawn_blocking(move || {
+            dexo_app::password_command::run(&command, dexo_app::password_command::TIMEOUT)
+        })
+        .await??);
     }
-    Ok(objects)
+    Ok(profile.password(&KeyringSecretStore)?.ok_or_else(|| {
+        AppError::new(
+            ErrorCategory::Authentication,
+            "secret is missing for this connection",
+        )
+    })?)
 }
 
 pub(crate) async fn connect_session(
     registry: &DriverRegistry,
     profile: &dexo_app::ConnectionProfile,
 ) -> anyhow::Result<Box<dyn dexo_driver_api::Session>> {
-    let secret = KeyringSecretStore
-        .get(profile.secret_ref.as_str())?
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCategory::Authentication,
-                "secret is missing for this connection",
-            )
-        })?;
+    let secret = profile_secret(profile).await?;
     let factory = registry.get(&profile.driver)?;
-    let (connect, _) = profile.connect_request(secret)?;
-    Ok(factory.connect(connect).await.map_err(map_driver_error)?)
+    let opened = dexo_app::connect::open(factory.as_ref(), profile, secret, None)
+        .await
+        .map_err(AppError::from)?;
+    Ok(opened.session)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -834,7 +949,7 @@ fn run_query(
     sql: Option<String>,
     file: Option<std::path::PathBuf>,
     format: OutputFormat,
-    non_interactive: bool,
+    confirmed: Confirmed,
     param: Vec<String>,
     from_run: bool,
     continue_on_error: bool,
@@ -843,13 +958,10 @@ fn run_query(
     if sql.trim().is_empty() {
         anyhow::bail!("SQL is required");
     }
-    let mutating = looks_mutating(&sql);
-    if mutating && non_interactive {
-        return Err(AppError::new(
-            ErrorCategory::Permission,
-            "non-interactive mode cannot confirm a mutating statement",
-        )
-        .into());
+    if let Some(target) = confirmed.target.as_deref()
+        && target != connection
+    {
+        anyhow::bail!("--confirm-target does not match the connection '{connection}'");
     }
     let parameters = parse_params(param)?;
     let policy = if continue_on_error {
@@ -858,7 +970,7 @@ fn run_query(
         ScriptPolicy::StopOnError
     };
     let batches = tokio::runtime::Runtime::new()?.block_on(execute_script(
-        registry, connection, sql, mutating, parameters, policy,
+        registry, connection, sql, confirmed, parameters, policy,
     ))?;
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();
@@ -882,12 +994,87 @@ fn run_query(
     Ok(())
 }
 
+/// What the command line confirmed before SQL runs on a connection; the connection's
+/// policy, judged as the editor judges it, says what has to be.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Confirmed {
+    /// `--confirm`: the destructive statements may run, off production.
+    pub destructive: bool,
+    /// `--confirm-target`: the connection's name, typed; production asks it before any
+    /// write.
+    pub target: Option<String>,
+    /// Only reads run, whatever the connection allows: an export.
+    pub reads_only: bool,
+}
+
+/// Holds `statements` to the connection's policy: a read-only connection refuses any
+/// write, production needs its name typed before any write, and elsewhere a destructive
+/// statement needs `--confirm`. Nothing is asked: what is not confirmed is not run.
+fn hold_to_policy(
+    statements: &[String],
+    dialect: dexo_sql::Dialect,
+    policy: &dexo_app::run_guard::RunPolicy,
+    confirmed: &Confirmed,
+) -> Result<(), AppError> {
+    use dexo_app::run_guard::{RunVerdict, judge};
+    let first_line = |sql: &str| sql.trim().lines().next().unwrap_or_default().to_string();
+    let refuse = |message: String| Err(AppError::new(ErrorCategory::Permission, message));
+    match judge(statements, dialect, policy) {
+        RunVerdict::Run => Ok(()),
+        RunVerdict::Refuse { index, sql } => {
+            let why = if confirmed.reads_only {
+                "an export runs only reads".to_string()
+            } else {
+                format!("{} is read-only", policy.connection)
+            };
+            refuse(format!(
+                "Not run: {why}, and statement {} is not a read: {}",
+                index + 1,
+                first_line(&sql),
+            ))
+        }
+        RunVerdict::Confirm { flagged, typed } => {
+            let typed_name = confirmed.target.as_deref() == Some(policy.connection.as_str());
+            let (confirmed, why, flag) = match typed {
+                Some(_) => (
+                    typed_name,
+                    format!("{} is production", policy.connection),
+                    format!("--confirm-target {}", policy.connection),
+                ),
+                None => (
+                    confirmed.destructive || typed_name,
+                    "these statements need confirming".to_string(),
+                    "--confirm".to_string(),
+                ),
+            };
+            if confirmed {
+                return Ok(());
+            }
+            let listed: Vec<String> = flagged
+                .iter()
+                .map(|flagged| {
+                    format!(
+                        "  statement {}, {}: {}",
+                        flagged.index + 1,
+                        flagged.reason,
+                        first_line(&flagged.sql),
+                    )
+                })
+                .collect();
+            refuse(format!(
+                "Not run: {why}:\n{}\nPass {flag} to run them.",
+                listed.join("\n"),
+            ))
+        }
+    }
+}
+
 async fn execute_script(
     registry: DriverRegistry,
     connection: String,
     sql: String,
-    mutating: bool,
-    parameters: Vec<DbValue>,
+    confirmed: Confirmed,
+    parameters: Vec<(String, DbValue)>,
     policy: ScriptPolicy,
 ) -> anyhow::Result<Vec<Result<Vec<QueryEvent>, AppError>>> {
     let paths = AppPaths::discover()?;
@@ -900,28 +1087,44 @@ async fn execute_script(
                 format!("unknown connection '{connection}'"),
             )
         })?;
-    let secret = KeyringSecretStore
-        .get(profile.secret_ref.as_str())?
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCategory::Authentication,
-                "secret is missing for this connection",
-            )
-        })?;
+    // Every SQL the command line sends passes here, so this is the one place the
+    // connection's policy is held to -- before it is dialled.
+    let dialect = dexo_app::dialect_for_driver(&profile.driver);
+    let resolved = dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)?;
+    let read_only = resolved.read_only || confirmed.reads_only;
+    hold_to_policy(
+        &dexo_app::statements_for_dialect(&sql, ExecutionTarget::Document, 0, None, dialect),
+        dialect,
+        &dexo_app::run_guard::RunPolicy {
+            connection: profile.name.clone(),
+            read_only,
+            confirm_destructive: resolved.confirm_destructive,
+            production: dexo_app::Environment::parse_strict(&profile.environment)
+                == dexo_app::Environment::Production,
+        },
+        &confirmed,
+    )?;
+    let secret = profile_secret(&profile).await?;
     let factory = registry.get(&profile.driver)?;
-    let (connect, conn_policy) = profile.connect_request(secret)?;
-    let session = factory.connect(connect).await.map_err(map_driver_error)?;
+    let dexo_app::connect::Opened {
+        session,
+        profile: _,
+        policy: conn_policy,
+    } = dexo_app::connect::open(factory.as_ref(), &profile, secret, None)
+        .await
+        .map_err(AppError::from)?;
     let service = QueryService::new(Arc::new(TaskRegistry::default()));
     let batches = service
         .execute_script(
             Arc::from(session),
             &sql,
+            dialect,
             ExecutionTarget::Document,
             0,
             None,
             policy,
             conn_policy.max_rows,
-            mutating,
+            read_only,
             parameters,
             Duration::from_secs(conn_policy.timeout_secs),
         )
@@ -934,16 +1137,29 @@ fn run_explain(
     connection: String,
     sql: Option<String>,
     file: Option<std::path::PathBuf>,
-    analyze: bool,
-    confirm: bool,
+    (analyze, confirm): (bool, bool),
+    indexes: Vec<String>,
     format: OutputFormat,
 ) -> anyhow::Result<()> {
     let sql = load_sql(sql, file, false)?;
     if analyze && !confirm {
-        anyhow::bail!("EXPLAIN ANALYZE executes the statement; pass --confirm");
+        anyhow::bail!(
+            "EXPLAIN ANALYZE runs the statement, then rolls back what it changed (a sequence or auto-increment counter keeps its advance); pass --confirm"
+        );
     }
-    let plan = tokio::runtime::Runtime::new()?
-        .block_on(explain_live(registry, connection, sql, analyze))?;
+    let request = if indexes.is_empty() {
+        dexo_driver_api::ExplainRequest {
+            analyze,
+            ..dexo_driver_api::ExplainRequest::estimated(sql)
+        }
+    } else {
+        if analyze {
+            anyhow::bail!("--index plans with an index that is not built: drop --analyze");
+        }
+        dexo_driver_api::ExplainRequest::with_indexes(sql, indexes)
+    };
+    let plan =
+        tokio::runtime::Runtime::new()?.block_on(explain_live(registry, connection, request))?;
     let mut stdout = std::io::stdout();
     match format {
         OutputFormat::Json | OutputFormat::Jsonl => {
@@ -960,8 +1176,7 @@ fn run_explain(
 async fn explain_live(
     registry: DriverRegistry,
     connection: String,
-    sql: String,
-    analyze: bool,
+    mut request: dexo_driver_api::ExplainRequest,
 ) -> anyhow::Result<dexo_driver_api::ExplainPlan> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
@@ -973,14 +1188,27 @@ async fn explain_live(
                 format!("unknown connection '{connection}'"),
             )
         })?;
+    // Split as the connection's dialect writes it.
+    let dialect = dexo_app::dialect_for_driver(&profile.driver);
+    request.sql = dexo_app::explain_service::single_statement(&request.sql, dialect)?.to_string();
+    if request.analyze
+        && dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)?.read_only
+        && !dexo_sql::is_read(&request.sql, dialect)
+    {
+        let first = request.sql.lines().next().unwrap_or_default();
+        return Err(AppError::new(
+            ErrorCategory::Permission,
+            format!(
+                "Not run: {connection} is read-only, and EXPLAIN ANALYZE would run a statement that is not a read: {first}"
+            ),
+        )
+        .into());
+    }
     let session = connect_session(&registry, &profile).await?;
     let provider = session
         .explain()
         .ok_or_else(|| AppError::new(ErrorCategory::Capability, "explain is unavailable"))?;
-    Ok(provider
-        .explain(dexo_driver_api::ExplainRequest { sql, analyze })
-        .await
-        .map_err(map_driver_error)?)
+    Ok(provider.explain(request).await.map_err(map_driver_error)?)
 }
 
 fn run_sessions(registry: DriverRegistry, command: SessionsCommand) -> anyhow::Result<()> {
@@ -1096,6 +1324,21 @@ async fn admin_action(
                 format!("unknown connection '{connection}'"),
             )
         })?;
+    // Cancelling a query or ending a session changes the server: the connection's policy
+    // is asked before it is dialled, as the TUI and the MCP server ask it.
+    let resolved = dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)?;
+    let policy = dexo_app::admin_service::AdminPolicy {
+        production: dexo_app::Environment::parse_strict(&profile.environment)
+            == dexo_app::Environment::Production,
+        read_only: resolved.read_only,
+    };
+    if !dexo_app::admin_service::evaluate(&action, "", &policy).allowed {
+        return Err(AppError::new(
+            ErrorCategory::Permission,
+            format!("Not done: {connection} is read-only"),
+        )
+        .into());
+    }
     let session = connect_session(&registry, &profile).await?;
     let admin = session
         .admin()
@@ -1113,12 +1356,14 @@ async fn admin_action(
         .map_err(map_driver_error)?)
 }
 
-fn parse_params(param: Vec<String>) -> anyhow::Result<Vec<DbValue>> {
+/// `name=value` pairs: a `:name` in the SQL takes its value by name; `$1` or `?` take
+/// them in the order given.
+fn parse_params(param: Vec<String>) -> anyhow::Result<Vec<(String, DbValue)>> {
     param
         .into_iter()
         .map(|item| {
             item.split_once('=')
-                .map(|(_, value)| DbValue::Text(value.to_string()))
+                .map(|(name, value)| (name.to_string(), DbValue::Text(value.to_string())))
                 .ok_or_else(|| anyhow::anyhow!("--param must be name=value"))
         })
         .collect()
@@ -1141,18 +1386,6 @@ fn load_sql(
         (Some(_), None, true) => anyhow::bail!("run reads a file or stdin, not --sql"),
         (None, None, false) => anyhow::bail!("provide --sql or --file"),
     }
-}
-
-fn looks_mutating(sql: &str) -> bool {
-    let trimmed = sql.trim_start().to_ascii_lowercase();
-    let explain_analyze = trimmed.starts_with("explain") && trimmed.contains("analyze");
-    trimmed.starts_with("insert")
-        || trimmed.starts_with("update")
-        || trimmed.starts_with("delete")
-        || trimmed.starts_with("drop")
-        || trimmed.starts_with("truncate")
-        || trimmed.starts_with("alter")
-        || explain_analyze
 }
 
 pub fn present_events(
@@ -1200,14 +1433,30 @@ fn run_mcp(registry: DriverRegistry, command: McpCommand) -> anyhow::Result<()> 
             remove,
         } => mcp_allow(&profile, &selector, deny, remove)?,
         McpCommand::Policy { profile } => mcp_policy(&profile)?,
-        McpCommand::Doctor { profile, json } => mcp_doctor(profile.as_deref(), json)?,
+        McpCommand::Doctor {
+            profile,
+            json,
+            probe,
+        } => mcp_doctor(profile.as_deref(), json, probe)?,
+        McpCommand::Setup {
+            client,
+            profile,
+            dry_run,
+            skill,
+        } => mcp_setup(&client, &profile, dry_run, skill)?,
         McpCommand::Config { command } => match command {
             McpConfigCommand::Print { profile, client } => {
                 mcp_config_print(&profile, client.as_deref())?
             }
         },
         McpCommand::Serve { profile } => {
-            tokio::runtime::Runtime::new()?.block_on(mcp_serve(registry, profile))?;
+            let runtime = tokio::runtime::Runtime::new()?;
+            let served = runtime.block_on(mcp_serve(registry, profile));
+            // A connect still starting its pre-connect command when the client left is
+            // not waited for.
+            dexo_app::process::stop_all();
+            runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+            served?;
         }
         McpCommand::Grant { command } => run_mcp_grant(command)?,
         McpCommand::Audit { profile } => mcp_audit(profile.as_deref())?,
@@ -1221,17 +1470,35 @@ fn run_mcp_profile(command: McpProfileCommand) -> anyhow::Result<()> {
     let repo = McpProfileRepository::new(db.connection());
     match command {
         McpProfileCommand::List => {
-            for profile in repo.list()? {
-                println!(
-                    "{} enabled={} access=read_only",
-                    profile.name, profile.enabled
-                );
+            let profiles = repo.list()?;
+            if profiles.is_empty() {
+                println!("no MCP profiles yet: dexo mcp profile create --name NAME");
+            }
+            for profile in profiles {
+                println!("{}", profile_summary(&profile));
             }
         }
         McpProfileCommand::Create { name } => {
+            anyhow::ensure!(
+                valid_profile_name(&name),
+                "a profile name uses letters, digits, '-' and '_' only, since it goes into agents' configs: '{name}' does not"
+            );
+            anyhow::ensure!(
+                repo.get_by_name(&name)?.is_none(),
+                "profile '{name}' already exists"
+            );
             let profile = McpProfile::new(&name);
             repo.save(&profile)?;
-            println!("created {name} enabled=false access=read_only");
+            println!(
+                "created profile {name}: disabled, read-only. Next: dexo mcp profile set --name {name} --connection NAME"
+            );
+        }
+        McpProfileCommand::Delete { name } => {
+            load_profile(&repo, &name)?;
+            let ledger = SqliteGrantLedger::open(&paths.database)?;
+            ledger.revoke_profile(&name)?;
+            repo.delete(&name)?;
+            println!("deleted profile {name} and revoked its grants");
         }
         McpProfileCommand::Show { name } => mcp_policy(&name)?,
         McpProfileCommand::Enable { name, confirm } => {
@@ -1339,15 +1606,67 @@ fn mcp_allow(name: &str, selector: &str, deny: bool, remove: bool) -> anyhow::Re
     Ok(())
 }
 
+/// Letters, digits, `-` and `_`: the name goes into `--profile NAME` and client configs.
+fn valid_profile_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+}
+
+/// A profile on one line, in words.
+fn profile_summary(profile: &McpProfile) -> String {
+    let connections = match profile.connections.len() {
+        0 => "no connection yet".to_string(),
+        1 => format!("connection {}", profile.connections[0]),
+        n => format!("{n} connections: {}", profile.connections.join(", ")),
+    };
+    format!(
+        "{}  {}  {connections}",
+        profile.name,
+        if profile.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    )
+}
+
+/// How a query mode is said to a person.
+fn query_mode_words(mode: QueryMode) -> &'static str {
+    match mode {
+        QueryMode::StructuredOnly => "structured tools only",
+        QueryMode::RawReadSql => "structured tools and raw read-only SQL (query_execute_read)",
+    }
+}
+
+/// A span in words: `45 s`, `29 min`, `3 h`.
+fn span_words(secs: i64) -> String {
+    match secs {
+        i64::MIN..=0 => "now".into(),
+        1..=89 => format!("{secs} s"),
+        90..=5399 => format!("{} min", (secs + 30) / 60),
+        _ => format!("{} h", (secs + 1800) / 3600),
+    }
+}
+
 fn mcp_policy(name: &str) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     let profile = load_profile(&McpProfileRepository::new(db.connection()), name)?;
     println!(
-        "name={} enabled={} access=read_only query_mode={:?} max_rows={} max_bytes={} timeout_secs={} max_concurrency={} audit_retention_days={}",
+        "Profile {}: {}, read-only access",
         profile.name,
-        profile.enabled,
-        profile.query_mode,
+        if profile.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!("Reads: {}", query_mode_words(profile.query_mode));
+    println!(
+        "Limits: {} rows, {} bytes, {} s timeout, {} calls at once; audit kept {} days",
         profile.limits.max_rows,
         profile.limits.max_bytes,
         profile.limits.timeout_secs,
@@ -1362,8 +1681,14 @@ fn mcp_policy(name: &str) -> anyhow::Result<()> {
     } else {
         println!("connections: {}", profile.connections.join(", "));
     }
+    if profile.selectors.is_empty() {
+        println!(
+            "objects: none allowed yet (dexo mcp allow --profile {} --selector db.schema.*)",
+            profile.name
+        );
+    }
     for rule in &profile.selectors {
-        println!("selector {rule}");
+        println!("objects: {rule}");
     }
     for rule in &profile.tool_rules {
         let effect = if rule.allowed { "allow" } else { "deny" };
@@ -1373,7 +1698,9 @@ fn mcp_policy(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn mcp_doctor(name: Option<&str>, json: bool) -> anyhow::Result<()> {
+/// Each profile's tools; with `probe`, what the probe found too -- in one JSON document
+/// with `json`, so nothing but JSON reaches stdout.
+fn mcp_doctor(name: Option<&str>, json: bool, probe: bool) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     let repo = McpProfileRepository::new(db.connection());
@@ -1382,36 +1709,327 @@ fn mcp_doctor(name: Option<&str>, json: bool) -> anyhow::Result<()> {
     } else {
         repo.list()?
     };
+    let probed = probe.then(|| mcp_probe(name)).transpose()?;
     if json {
+        let mut report = serde_json::json!({
+            "profiles": profiles.iter().map(|p| serde_json::json!({
+                "name": p.name,
+                "enabled": p.enabled,
+                "access": "read_only",
+                "tools": advertised_tools(p),
+            })).collect::<Vec<_>>()
+        });
+        if let Some(probed) = probed {
+            report["probe"] = probed;
+        }
+        println!("{report}");
+        return Ok(());
+    }
+    if profiles.is_empty() {
+        println!("no MCP profiles yet: dexo mcp profile create --name NAME");
+    }
+    for profile in profiles {
         println!(
-            "{}",
-            serde_json::json!({
-                "profiles": profiles.iter().map(|p| serde_json::json!({
-                    "name": p.name,
-                    "enabled": p.enabled,
-                    "access": "read_only",
-                    "tools": advertised_tools(p),
-                })).collect::<Vec<_>>()
-            })
+            "{}  tools: {}",
+            profile_summary(&profile),
+            advertised_tools(&profile).join(", ")
         );
-    } else {
-        for profile in profiles {
-            println!(
-                "{} enabled={} tools={}",
-                profile.name,
-                profile.enabled,
-                advertised_tools(&profile).join(",")
-            );
+    }
+    let Some(probed) = probed else {
+        return Ok(());
+    };
+    for server in probed["servers"].as_array().into_iter().flatten() {
+        let profile = server["profile"].as_str().unwrap_or("");
+        match server["error"].as_str() {
+            Some(error) => println!("probe {profile}: failed: {error}"),
+            None => {
+                let tools: Vec<&str> = server["tools"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect();
+                println!(
+                    "probe {profile}: ok, {} answered with {} tools: {}",
+                    server["server"].as_str().unwrap_or("server"),
+                    tools.len(),
+                    tools.join(",")
+                );
+            }
         }
     }
+    for client in probed["clients"].as_array().into_iter().flatten() {
+        println!(
+            "client {}: {} ({})",
+            client["client"].as_str().unwrap_or(""),
+            client["path"].as_str().unwrap_or(""),
+            client["detail"].as_str().unwrap_or("")
+        );
+    }
     Ok(())
+}
+
+/// `dexo mcp setup`: Dexo's server merged into the client's config file, the old file
+/// backed up first; with `--skill`, the skill file beside it.
+fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Result<()> {
+    use dexo_app::mcp::clients::{McpClient, Places, dexo_command, read_config, skill_text};
+    let client =
+        McpClient::parse(client).ok_or_else(|| anyhow::anyhow!("unknown client {client}"))?;
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let profile = load_profile(&McpProfileRepository::new(db.connection()), name)?;
+    let places = Places::discover()?;
+    let exe = dexo_command()?;
+    let args: Vec<String> = ["mcp", "serve", "--profile", name]
+        .map(String::from)
+        .to_vec();
+    let path = client.config_path(&places);
+    let in_file = |error| anyhow::anyhow!("{}: {error}", path.display());
+    let existing = read_config(&path).map_err(in_file)?;
+    let merged = client
+        .merged(existing.as_deref(), &exe, &args)
+        .map_err(in_file)?;
+    let skill_file = skill.then(|| client.skill_path(&places)).flatten();
+    if dry_run {
+        println!(
+            "would write {}:
+{merged}",
+            path.display()
+        );
+        if let Some(skill_path) = &skill_file {
+            println!(
+                "would write {}:
+{}",
+                skill_path.display(),
+                skill_text(client, name)
+            );
+        }
+    } else {
+        let done = client.set_up(&places, &exe, name, skill)?;
+        match done.backup {
+            Some(backup) => println!(
+                "wrote {} (the old one is {})",
+                done.config.display(),
+                backup.display()
+            ),
+            None => println!("wrote {}", done.config.display()),
+        }
+        if let Some(skill_path) = &done.skill {
+            println!("wrote {}", skill_path.display());
+        }
+    }
+    if skill && skill_file.is_none() {
+        println!(
+            "{} has no folder for skill files; nothing else was written",
+            client.id()
+        );
+    }
+    if !profile.enabled {
+        println!("the profile {name} is disabled: dexo mcp profile enable --name {name} --confirm");
+    }
+    if client == McpClient::ClaudeCode {
+        println!(
+            "Claude Code asks to approve a project's MCP servers the first time it starts here"
+        );
+    }
+    Ok(())
+}
+
+/// `dexo mcp doctor --probe`: each enabled profile's server started and asked for its
+/// tools the way an agent would, then every client's config checked for Dexo.
+fn mcp_probe(name: Option<&str>) -> anyhow::Result<serde_json::Value> {
+    use dexo_app::mcp::clients::{McpClient, Places, read_config, resolve_command};
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let repo = McpProfileRepository::new(db.connection());
+    let profiles = match name {
+        Some(name) => vec![load_profile(&repo, name)?],
+        None => repo
+            .list()?
+            .into_iter()
+            .filter(|profile| profile.enabled)
+            .collect(),
+    };
+    let exe = std::env::current_exe()?;
+    let servers: Vec<serde_json::Value> = profiles
+        .iter()
+        .map(|profile| {
+            match probe_server(&exe, &profile.name, std::time::Duration::from_secs(10)) {
+                Ok((server, tools)) => serde_json::json!({
+                    "profile": profile.name, "server": server, "tools": tools,
+                }),
+                Err(error) => serde_json::json!({
+                    "profile": profile.name, "error": error.to_string(),
+                }),
+            }
+        })
+        .collect();
+    let places = Places::discover()?;
+    let clients: Vec<serde_json::Value> = McpClient::ALL
+        .into_iter()
+        .map(|client| {
+            let path = client.config_path(&places);
+            let configured = read_config(&path)
+                .map(|contents| contents.map(|contents| client.configured_command(&contents)));
+            let (status, command, detail) = match configured {
+                Err(error) => ("unreadable", None, error.to_string()),
+                Ok(None) => ("no_file", None, "no config file".to_string()),
+                Ok(Some(Err(error))) => ("unparseable", None, error.to_string()),
+                Ok(Some(Ok(None))) => (
+                    "no_entry",
+                    None,
+                    "no dexo entry; dexo mcp setup adds one".to_string(),
+                ),
+                Ok(Some(Ok(Some(command)))) => match resolve_command(&command) {
+                    Some(found) if found.as_os_str() == command.as_str() => (
+                        "ok",
+                        Some(command.clone()),
+                        format!("dexo entry runs {command}"),
+                    ),
+                    Some(found) => (
+                        "ok",
+                        Some(command.clone()),
+                        format!("dexo entry runs {command}, found at {}", found.display()),
+                    ),
+                    None => (
+                        "command_missing",
+                        Some(command.clone()),
+                        format!("dexo entry runs {command}, which does not exist"),
+                    ),
+                },
+            };
+            serde_json::json!({
+                "client": client.id(),
+                "path": path.display().to_string(),
+                "status": status,
+                "command": command,
+                "detail": detail,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "servers": servers, "clients": clients }))
+}
+
+/// Starts `dexo mcp serve --profile name`, sends initialize, initialized and tools/list
+/// as JSON lines, and returns the server's name and its tools. The server is stopped
+/// whatever happens.
+fn probe_server(
+    exe: &std::path::Path,
+    name: &str,
+    timeout: std::time::Duration,
+) -> anyhow::Result<(String, Vec<String>)> {
+    use std::io::{BufRead, Write as _};
+    let mut child = std::process::Command::new(exe)
+        .args(["mcp", "serve", "--profile", name])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    // What the server said on stderr, for when it stops before answering.
+    let said = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    if let Some(stderr) = child.stderr.take() {
+        let said = std::sync::Arc::clone(&said);
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stderr)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if let Ok(mut said) = said.lock() {
+                    *said = line;
+                }
+            }
+        });
+    }
+    let result = (|| -> anyhow::Result<(String, Vec<String>)> {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("no stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("no stdout"))?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let deadline = std::time::Instant::now() + timeout;
+        let answer = |id: u64| -> anyhow::Result<serde_json::Value> {
+            loop {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                let line = match receiver.recv_timeout(left) {
+                    Ok(line) => line,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        anyhow::bail!("no answer within {}s", timeout.as_secs())
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        let said = said.lock().map(|said| said.clone()).unwrap_or_default();
+                        anyhow::bail!("the server stopped before it answered: {said}")
+                    }
+                };
+                let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    continue;
+                };
+                if message["id"] == id {
+                    if let Some(error) = message.get("error") {
+                        anyhow::bail!("{}", error["message"].as_str().unwrap_or("error"));
+                    }
+                    return Ok(message["result"].clone());
+                }
+            }
+        };
+        let mut send = |message: serde_json::Value| -> anyhow::Result<()> {
+            writeln!(stdin, "{message}")?;
+            stdin.flush()?;
+            Ok(())
+        };
+        send(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "dexo-doctor", "version": env!("CARGO_PKG_VERSION")}
+            }
+        }))?;
+        let initialized = answer(1)?;
+        let server = format!(
+            "{} {}",
+            initialized["serverInfo"]["name"]
+                .as_str()
+                .unwrap_or("server"),
+            initialized["serverInfo"]["version"].as_str().unwrap_or("")
+        )
+        .trim()
+        .to_string();
+        send(serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))?;
+        send(serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}))?;
+        let tools = answer(2)?["tools"]
+            .as_array()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok((server, tools))
+    })();
+    let _ = child.kill();
+    let _ = child.wait();
+    result
 }
 
 fn mcp_config_print(name: &str, client: Option<&str>) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     load_profile(&McpProfileRepository::new(db.connection()), name)?;
-    let exe = std::env::current_exe()?.display().to_string();
+    let exe = dexo_app::mcp::clients::dexo_command()?;
     match client.unwrap_or("json") {
         "claude-code" => println!("claude mcp add dexo -- {exe} mcp serve --profile {name}"),
         _ => println!(
@@ -1481,54 +2099,87 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
             selector,
             expires,
             confirm_target,
+            ask,
+            approval_timeout,
         } => {
-            if confirm_target.as_deref() != Some(connection.as_str())
-                && confirm_target.as_deref() != Some(selector.as_str())
-            {
-                anyhow::bail!("type the connection or selector as --confirm-target");
-            }
             let loaded = load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
-            if !loaded.connections.is_empty()
-                && !loaded.connections.iter().any(|name| name == &connection)
-            {
-                anyhow::bail!("connection is not allowed for this profile");
-            }
             let saved = ConnectionRepository::new(db.connection())
                 .get_by_name(&connection)?
                 .ok_or_else(|| anyhow::anyhow!("unknown connection '{connection}'"))?;
-            McpConnection::from_profile(&saved)?.accepts_writes()?;
-            let ttl = dexo_app::mcp::parse_ttl(&expires)?;
-            let grant = Grant::new(
-                &loaded,
+            // The same request the TUI's New MCP Grant makes, so both make one grant.
+            let grant = dexo_app::mcp::GrantRequest {
                 connection,
-                GrantCapability::parse(&capability)?,
-                tool,
-                vec![SelectorRule::parse(Effect::Allow, &selector)?],
-                now,
-                ttl,
-            )?;
-            println!("grant {} expires_at={} uses=1", grant.id, grant.expires_at);
+                capability,
+                tools: tool,
+                selector,
+                expires,
+                confirm_target: confirm_target.unwrap_or_default(),
+                ask_secs: ask.then_some(approval_timeout),
+            }
+            .issue(&loaded, &saved, now)?;
+            let lasts = span_words(grant.expires_at - now);
+            if grant.asks() {
+                println!(
+                    "granted {} {} on {}, ends in {lasts}: each write waits up to {} for your approval under Agents, Approvals, in the TUI (grant id {})",
+                    grant.capability.as_str(),
+                    grant.tools.join(", "),
+                    grant.connection,
+                    span_words(i64::from(grant.ask_secs)),
+                    grant.id
+                );
+            } else {
+                println!(
+                    "granted {} {} on {}, ends in {lasts}: one write, then it is spent (grant id {})",
+                    grant.capability.as_str(),
+                    grant.tools.join(", "),
+                    grant.connection,
+                    grant.id
+                );
+            }
             ledger.insert_grant(grant)?;
         }
         McpGrantCommand::List { profile } => {
-            for grant in ledger.active_grants(&profile, now) {
+            load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
+            let grants = ledger.active_grants(&profile, now);
+            if grants.is_empty() {
+                println!("{profile} has no grants: agents cannot write through it");
+            }
+            for grant in grants {
+                let uses = if grant.asks() {
+                    format!(
+                        "asks before each write ({})",
+                        span_words(i64::from(grant.ask_secs))
+                    )
+                } else {
+                    "one write, then it is spent".to_string()
+                };
                 println!(
-                    "{} {} {} uses={} expires={}",
+                    "{}  {} on {}  {} {}: {uses}, ends in {}",
                     grant.id,
+                    grant.tools.join(", "),
+                    grant.connection,
                     capability_label(grant.capability),
-                    grant.tools.join(","),
-                    grant.remaining_uses,
-                    grant.expires_at - now
+                    grant
+                        .selectors
+                        .iter()
+                        .map(|rule| rule.selector.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    span_words(grant.expires_at - now)
                 );
             }
         }
         McpGrantCommand::Revoke { id } => {
+            anyhow::ensure!(
+                id.len() == 36 && id.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-'),
+                "no grant has the id '{id}': `dexo mcp grant list --profile NAME` shows them"
+            );
             ledger.revoke_str(&id)?;
-            println!("revoked {id}");
+            println!("revoked the grant {id}");
         }
         McpGrantCommand::RevokeAll { profile } => {
             ledger.revoke_profile(&profile)?;
-            println!("revoked all grants for {profile}");
+            println!("revoked every grant of {profile}");
         }
     }
     Ok(())
@@ -1546,10 +2197,12 @@ fn mcp_audit(profile: Option<&str>) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let _db = Database::open(&paths.database)?;
     let ledger = SqliteGrantLedger::open(&paths.database)?;
+    let mut printed = 0;
     for event in ledger.audits() {
         if profile.is_some_and(|name| event.profile != name) {
             continue;
         }
+        printed += 1;
         let line = event.export_line();
         anyhow::ensure!(
             !line.contains("SUPER_SECRET_SENTINEL"),
@@ -1557,5 +2210,73 @@ fn mcp_audit(profile: Option<&str>) -> anyhow::Result<()> {
         );
         println!("{line}");
     }
+    if printed == 0 {
+        println!("no audit events yet: nothing an agent did has been recorded");
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod mcp_words_tests {
+    use super::{span_words, valid_profile_name};
+
+    #[test]
+    fn a_profile_name_is_what_fits_in_an_agents_config() {
+        assert!(valid_profile_name("pg-dev_2"));
+        for bad in ["", "bad name!", "a/b", "é"] {
+            assert!(!valid_profile_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn spans_read_as_words() {
+        assert_eq!(span_words(45), "45 s");
+        assert_eq!(span_words(1796), "30 min");
+        assert_eq!(span_words(86_400), "24 h");
+    }
+}
+
+#[cfg(test)]
+mod temporary_tests {
+    use secrecy::ExposeSecret;
+
+    use super::temporary_connection_with;
+
+    /// With --password-prompt, the typed password is the one used -- an empty one too
+    /// -- and a password left in the URL is ignored, with a warning.
+    #[test]
+    fn the_prompt_wins_over_the_url_and_says_so() {
+        let url = "postgres://ana:in-url@db/shop";
+        let typed =
+            temporary_connection_with(url, Some(|_: &str| Ok("typed".to_string()))).unwrap();
+        assert_eq!(typed.password.unwrap().expose_secret(), "typed");
+        assert!(typed.warning.unwrap().contains("ignored"));
+        let empty = temporary_connection_with(url, Some(|_: &str| Ok(String::new()))).unwrap();
+        assert!(empty.password.is_none());
+        let asked = temporary_connection_with(
+            "postgres://ana@db/shop",
+            Some(|_: &str| Ok("typed".to_string())),
+        )
+        .unwrap();
+        assert!(asked.warning.is_none());
+        let none: Option<fn(&str) -> std::io::Result<String>> = None;
+        let unasked = temporary_connection_with(url, none).unwrap();
+        assert_eq!(unasked.password.unwrap().expose_secret(), "in-url");
+        assert!(unasked.warning.unwrap().contains("--password-prompt"));
+    }
+
+    /// With no terminal to ask on, the error says so and what to do instead.
+    #[test]
+    fn a_prompt_without_a_terminal_says_what_it_needs() {
+        let error = temporary_connection_with(
+            "postgres://ana@db/shop",
+            Some(|_: &str| Err(std::io::Error::from_raw_os_error(6))),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("terminal") && error.contains("--password-stdin"),
+            "{error}"
+        );
+    }
 }

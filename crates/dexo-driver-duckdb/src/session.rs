@@ -1,0 +1,656 @@
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
+
+use dexo_driver_api::{
+    CapabilityState, ColumnMeta, DbValue, DriverError, DriverErrorCategory, QueryEvent, QueryId,
+    QueryRequest, QueryStream, RowBatch, Session, TransactionControl, TransactionMode,
+    TransactionState,
+};
+use dexo_sql::Dialect;
+use duckdb::arrow::array::{Array, ArrayRef};
+use duckdb::arrow::datatypes::{DataType, Schema};
+use duckdb::{Connection, InterruptHandle};
+use tokio::sync::mpsc::Sender;
+
+use crate::decode::{column_meta, decode_column, to_sql};
+use crate::error::{internal, map_error, writes_refused};
+use crate::factory::capabilities;
+
+pub const ROW_BATCH_SIZE: usize = 256;
+
+type Events = Sender<Result<QueryEvent, DriverError>>;
+
+/// One DuckDB connection. duckdb-rs is blocking, so every call runs on a blocking thread
+/// with the connection locked; the interrupt handle lives outside the lock, so a cancel
+/// reaches a statement that is holding it.
+pub struct DuckdbSession {
+    conn: Arc<Mutex<Connection>>,
+    interrupt: Arc<InterruptHandle>,
+    /// Which query holds the connection, and one cancelled before it got there. The
+    /// interrupt reaches whatever is running -- a catalog load the query waits behind,
+    /// say -- so it is only sent when that is the query being cancelled.
+    live: Arc<Mutex<Live>>,
+    read_only: bool,
+    capabilities: Vec<CapabilityState>,
+    tx_state: Mutex<TransactionState>,
+    /// The file's database, shared with every other session on it and kept open while
+    /// this one is.
+    _database: Option<Arc<crate::factory::SharedDatabase>>,
+}
+
+impl DuckdbSession {
+    pub(crate) fn new(
+        conn: Connection,
+        read_only: bool,
+        database: Option<Arc<crate::factory::SharedDatabase>>,
+    ) -> Self {
+        let interrupt = conn.interrupt_handle();
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+            interrupt,
+            live: Arc::new(Mutex::new(Live::default())),
+            read_only,
+            capabilities: capabilities(),
+            tx_state: Mutex::new(TransactionState::Idle),
+            _database: database,
+        }
+    }
+
+    pub(crate) fn read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// Runs `work` on a blocking thread with the connection to itself. A panic in an
+    /// earlier call leaves the connection as usable as DuckDB left it, so a poisoned lock
+    /// is taken anyway. A caller that stops waiting -- an EXPLAIN ANALYZE or a page of
+    /// rows cancelled -- stops the work too: before it starts, or by interrupting it.
+    pub(crate) async fn with_conn<T, F>(&self, work: F) -> Result<T, DriverError>
+    where
+        F: FnOnce(&Connection) -> Result<T, DriverError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let conn = Arc::clone(&self.conn);
+        let state = Arc::new(AtomicU8::new(WAITING));
+        let _abandon = Abandon {
+            state: Arc::clone(&state),
+            interrupt: Arc::clone(&self.interrupt),
+        };
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(PoisonError::into_inner);
+            if state
+                .compare_exchange(WAITING, RUNNING, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return Err(cancelled_error());
+            }
+            let result = work(&conn);
+            // Before the connection is let go, so an interrupt for this work can never
+            // reach the next.
+            let _ = state.compare_exchange(RUNNING, DONE, Ordering::SeqCst, Ordering::SeqCst);
+            result
+        })
+        .await
+        .map_err(internal)?
+    }
+
+    async fn exec_batch(&self, sql: &'static str) -> Result<(), DriverError> {
+        self.with_conn(move |conn| conn.execute_batch(sql).map_err(map_error))
+            .await
+    }
+
+    fn set_state(&self, state: TransactionState) {
+        *self.tx_state.lock().unwrap_or_else(PoisonError::into_inner) = state;
+    }
+
+    /// A COMMIT DuckDB refuses -- a conflict with another writer -- rolls the transaction
+    /// back, so whether one is still open is asked, not assumed.
+    async fn end(&self, sql: &'static str, failed: TransactionState) -> Result<(), DriverError> {
+        let (result, open) = self
+            .with_conn(move |conn| {
+                let result = conn.execute_batch(sql).map_err(map_error);
+                let open = result.is_err() && in_transaction(conn);
+                Ok((result, open))
+            })
+            .await?;
+        self.set_state(match (&result, open) {
+            (Ok(()), _) | (Err(_), false) => TransactionState::Idle,
+            (Err(_), true) => failed,
+        });
+        result
+    }
+}
+
+const WAITING: u8 = 0;
+const RUNNING: u8 = 1;
+const DONE: u8 = 2;
+const ABANDONED: u8 = 3;
+
+/// Dropped with the future of a [`DuckdbSession::with_conn`] call: one dropped before
+/// its work finished was abandoned by its caller.
+struct Abandon {
+    state: Arc<AtomicU8>,
+    interrupt: Arc<InterruptHandle>,
+}
+
+impl Drop for Abandon {
+    fn drop(&mut self) {
+        let abandon = |from| {
+            self.state
+                .compare_exchange(from, ABANDONED, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        };
+        if !abandon(WAITING) && abandon(RUNNING) {
+            self.interrupt.interrupt();
+        }
+    }
+}
+
+#[derive(Default)]
+struct Live {
+    running: Option<QueryId>,
+    /// Queries asked to stop, newest last: one still waiting for the connection, and the
+    /// one running, whose next statement must not start. DuckDB clears an interrupt as
+    /// each statement begins, so one that landed between two was lost and the script ran
+    /// on.
+    cancelled: Vec<QueryId>,
+}
+
+/// Cancels of queries that never ran are forgotten past this many.
+const CANCELS_KEPT: usize = 64;
+
+impl Live {
+    fn is_cancelled(&self, query: QueryId) -> bool {
+        self.cancelled.contains(&query)
+    }
+
+    fn forget(&mut self, query: QueryId) {
+        self.cancelled.retain(|cancelled| *cancelled != query);
+    }
+}
+
+/// Stops `query`: marks it, so it never starts if it is still waiting for the
+/// connection and runs no further statement if it is running, and interrupts the
+/// statement it is running.
+fn stop(live: &Mutex<Live>, interrupt: &InterruptHandle, query: QueryId) {
+    let mut live = live.lock().unwrap_or_else(PoisonError::into_inner);
+    if !live.is_cancelled(query) {
+        live.cancelled.push(query);
+        if live.cancelled.len() > CANCELS_KEPT {
+            live.cancelled.remove(0);
+        }
+    }
+    if live.running == Some(query) {
+        interrupt.interrupt();
+    }
+}
+
+fn cancelled_error() -> DriverError {
+    DriverError::new(DriverErrorCategory::Cancelled, "query cancelled")
+}
+
+/// The statements of `sql`, split as the editor splits them: DuckDB's own prepare runs
+/// every statement but the last as it parses them, before Dexo could look at one.
+pub(crate) fn statements(sql: &str) -> Vec<&str> {
+    dexo_sql::split_statements_in(sql, Dialect::Duckdb)
+        .into_iter()
+        .map(|span| sql[span.byte_range].trim())
+        .filter(|text| !text.trim_end_matches(';').trim().is_empty())
+        .collect()
+}
+
+pub(crate) fn is_read(sql: &str) -> bool {
+    dexo_sql::is_read(sql, Dialect::Duckdb)
+}
+
+/// The first word of `sql` past its comments, in capitals.
+pub(crate) fn first_word(sql: &str) -> Option<String> {
+    dexo_sql::tokenize(sql, Dialect::Duckdb)
+        .into_iter()
+        .find(|token| token.kind != dexo_sql::TokenKind::Comment)
+        .filter(|token| token.kind == dexo_sql::TokenKind::Word)
+        .map(|token| sql[token.span].to_ascii_uppercase())
+}
+
+/// Whether `sql` only reads, by both readings: DuckDB's own parser takes every statement
+/// in it for a query, and Dexo's finds no query that writes on the side.
+/// Text DuckDB cannot parse is its error, not a write.
+pub(crate) fn reads(conn: &Connection, sql: &str) -> Result<bool, DriverError> {
+    crate::parse::parse(sql)?;
+    Ok(crate::parse::only_queries(conn, sql)? && statements(sql).iter().all(|text| is_read(text)))
+}
+
+/// Whether the connection has a transaction open. duckdb-rs answers that it never has;
+/// trying a BEGIN to find out failed inside the user's transaction, and a failure aborts
+/// a DuckDB transaction. Two statements in a row share a transaction id only inside
+/// one: outside, each is a transaction of its own.
+pub(crate) fn in_transaction(conn: &Connection) -> bool {
+    let id = || conn.query_row("SELECT txid_current()", [], |row| row.get::<_, i64>(0));
+    match (id(), id()) {
+        (Ok(first), Ok(second)) => first == second,
+        _ => true,
+    }
+}
+
+/// Rolls back a transaction Dexo opened, again if the first try failed and it is still
+/// open: one left open made every later request run inside it, as if it were the
+/// user's, with no fence of its own.
+pub(crate) fn close_own(conn: &Connection) -> Result<(), DriverError> {
+    if conn.execute_batch("ROLLBACK").is_ok() || !in_transaction(conn) {
+        return Ok(());
+    }
+    conn.execute_batch("ROLLBACK").map_err(map_error)
+}
+
+/// Opens a transaction for Dexo's own use, or says the user already has one open:
+/// DuckDB has no savepoint to nest one inside theirs.
+pub(crate) fn begin_own(conn: &Connection, sql: &str) -> Result<bool, DriverError> {
+    if in_transaction(conn) {
+        return Ok(false);
+    }
+    conn.execute_batch(sql).map_err(map_error)?;
+    Ok(true)
+}
+
+#[async_trait::async_trait]
+impl Session for DuckdbSession {
+    fn capabilities(&self) -> &[CapabilityState] {
+        &self.capabilities
+    }
+
+    async fn execute(&self, request: QueryRequest) -> Result<QueryStream, DriverError> {
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let conn = Arc::clone(&self.conn);
+        let interrupt = Arc::clone(&self.interrupt);
+        let live = Arc::clone(&self.live);
+        let read_only = self.read_only;
+        let QueryRequest {
+            id,
+            sql,
+            parameters,
+            row_limit,
+            timeout,
+            read_only: reads_only,
+            ..
+        } = request;
+        let events = tx.clone();
+        let running = Arc::clone(&live);
+        tokio::spawn(async move {
+            let mut run = tokio::task::spawn_blocking(move || {
+                let conn = conn.lock().unwrap_or_else(PoisonError::into_inner);
+                {
+                    let mut live = running.lock().unwrap_or_else(PoisonError::into_inner);
+                    if live.is_cancelled(id) {
+                        live.forget(id);
+                        drop(live);
+                        let _ = events.blocking_send(Err(cancelled_error()));
+                        return;
+                    }
+                    live.running = Some(id);
+                }
+                let cancelled = || {
+                    running
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .is_cancelled(id)
+                };
+                let outcome = run_script(
+                    &conn,
+                    &sql,
+                    &parameters,
+                    row_limit,
+                    Guard {
+                        read_only,
+                        reads_only,
+                    },
+                    &events,
+                    &cancelled,
+                );
+                {
+                    let mut live = running.lock().unwrap_or_else(PoisonError::into_inner);
+                    live.running = None;
+                    live.forget(id);
+                }
+                if let Err(error) = outcome {
+                    let _ = events.blocking_send(Err(error));
+                }
+            });
+            if timeout == Duration::ZERO {
+                let _ = run.await;
+                return;
+            }
+            if tokio::time::timeout(timeout, &mut run).await.is_err() {
+                let _ = tx
+                    .send(Err(DriverError::new(
+                        DriverErrorCategory::Timeout,
+                        "query timed out",
+                    )))
+                    .await;
+                stop(&live, &interrupt, id);
+            }
+        });
+        Ok(Box::pin(futures_util::stream::unfold(rx, |mut rx| async {
+            rx.recv().await.map(|item| (item, rx))
+        })))
+    }
+
+    /// Interrupts the query asked about if it is the one running, or stops it from
+    /// starting if it is still queued; never whatever else holds the connection.
+    async fn cancel(&self, query: QueryId) -> Result<(), DriverError> {
+        stop(&self.live, &self.interrupt, query);
+        Ok(())
+    }
+
+    async fn close(self: Box<Self>) -> Result<(), DriverError> {
+        Ok(())
+    }
+
+    fn transactions(&self) -> Option<&dyn TransactionControl> {
+        Some(self)
+    }
+
+    fn catalog(&self) -> Option<&dyn dexo_driver_api::CatalogReader> {
+        Some(self)
+    }
+
+    fn data(&self) -> Option<&dyn dexo_driver_api::DataMutator> {
+        Some(self)
+    }
+
+    fn bulk(&self) -> Option<&dyn dexo_driver_api::BulkWriter> {
+        Some(self)
+    }
+
+    fn explain(&self) -> Option<&dyn dexo_driver_api::ExplainProvider> {
+        Some(self)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Guard {
+    /// A read-only profile: the file is open read-only, and a statement that would write
+    /// anywhere else -- `COPY ... TO` a file, `ATTACH` another database -- is refused.
+    read_only: bool,
+    /// Text asked to only read, around Dexo's own.
+    reads_only: bool,
+}
+
+/// Each statement of `sql` in turn, as its own result set. Where it may only read, every
+/// statement has to read; asked to only read, outside a transaction it also runs in a
+/// read-only one rolled back after it. Inside the user's, DuckDB has no savepoint to
+/// fence it with, and the check is all there is.
+fn run_script(
+    conn: &Connection,
+    sql: &str,
+    parameters: &[DbValue],
+    row_limit: u64,
+    guard: Guard,
+    events: &Events,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), DriverError> {
+    if (guard.read_only || guard.reads_only) && !reads(conn, sql)? {
+        return Err(writes_refused());
+    }
+    let statements = statements(sql);
+    let fenced = guard.reads_only && begin_own(conn, "BEGIN TRANSACTION READ ONLY")?;
+    let outcome = run_statements(conn, &statements, parameters, row_limit, events, cancelled);
+    if fenced {
+        let rolled_back = close_own(conn);
+        outcome?;
+        rolled_back?;
+        return Ok(());
+    }
+    outcome
+}
+
+/// Returns early, without an error, when the receiver has gone.
+fn run_statements(
+    conn: &Connection,
+    statements: &[&str],
+    parameters: &[DbValue],
+    row_limit: u64,
+    events: &Events,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), DriverError> {
+    let send = |event| events.blocking_send(Ok(event)).is_ok();
+    let mut last_affected = None;
+    let mut index = 0;
+    for text in statements {
+        // DuckDB's prepare runs every statement but the last of what it is given, so
+        // each piece Dexo split has to be one statement to DuckDB too.
+        match crate::parse::statement_count(text) {
+            Some(0) => continue,
+            Some(1) | None => {}
+            Some(_) => return Err(split_differently(text)),
+        }
+        let mut statement = conn.prepare(text).map_err(map_error)?;
+        // A cancel that came between two statements stops the next one from starting.
+        if cancelled() {
+            return Err(cancelled_error());
+        }
+        let expected = statement.parameter_count();
+        if parameters.len() != expected {
+            return Err(DriverError::new(
+                DriverErrorCategory::Syntax,
+                format!(
+                    "expected {expected} query parameters, received {}",
+                    parameters.len()
+                ),
+            ));
+        }
+        let values = parameters.iter().map(to_sql);
+        // The stream borrows the statement; its chunks are read with `step`, which
+        // reports a failure where the iterator would panic.
+        let _ = statement
+            .stream_arrow(duckdb::params_from_iter(values))
+            .map_err(map_error)?;
+        let schema = statement.schema();
+        if !send(QueryEvent::ResultSetStarted { index }) {
+            return Ok(());
+        }
+        let effect = dexo_sql::split_statements_in(text, Dialect::Duckdb)
+            .first()
+            .map(|span| span.effect);
+        if let Some(status) = Status::of(&schema).filter(|_| answers_with_status(text, effect)) {
+            let mut affected = 0;
+            while let Some(chunk) = statement.step().map_err(map_error)? {
+                affected += status.count(chunk.columns().first());
+            }
+            // A CREATE answers with a count too, of nothing it changed.
+            let schema_write = effect == Some(dexo_sql::StatementEffect::SchemaWrite);
+            let rows_affected =
+                (matches!(status, Status::Count) && !schema_write).then_some(affected);
+            last_affected = rows_affected;
+            if !send(QueryEvent::Columns(Vec::new()))
+                || !send(QueryEvent::ResultSetFinished {
+                    index,
+                    rows_affected,
+                    truncated: false,
+                })
+            {
+                return Ok(());
+            }
+            index += 1;
+            continue;
+        }
+        let columns: Vec<ColumnMeta> = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(column, field)| {
+                column_meta(field.name(), &statement.column_logical_type(column))
+            })
+            .collect();
+        let type_names: Vec<String> = columns
+            .iter()
+            .map(|column| column.type_name.clone())
+            .collect();
+        if !send(QueryEvent::Columns(columns)) {
+            return Ok(());
+        }
+        let mut emitted = 0_u64;
+        let mut truncated = false;
+        let mut batch_rows = Vec::new();
+        'chunks: while let Some(chunk) = statement.step().map_err(map_error)? {
+            let rows = decode_rows(chunk.columns(), &schema, &type_names);
+            for row in rows {
+                if row_limit > 0 && emitted == row_limit {
+                    truncated = true;
+                    break 'chunks;
+                }
+                batch_rows.push(row);
+                emitted += 1;
+                if batch_rows.len() >= ROW_BATCH_SIZE
+                    && !send(QueryEvent::Rows(RowBatch {
+                        rows: std::mem::take(&mut batch_rows),
+                    }))
+                {
+                    return Ok(());
+                }
+            }
+        }
+        drop(statement);
+        if !batch_rows.is_empty() && !send(QueryEvent::Rows(RowBatch { rows: batch_rows })) {
+            return Ok(());
+        }
+        last_affected = None;
+        if !send(QueryEvent::ResultSetFinished {
+            index,
+            rows_affected: None,
+            truncated,
+        }) {
+            return Ok(());
+        }
+        index += 1;
+    }
+    send(QueryEvent::Finished {
+        rows_affected: last_affected,
+    });
+    Ok(())
+}
+
+/// The rows of one chunk, its columns decoded together.
+/// The rows of one chunk, its columns decoded together. `schema` is the result's, whose
+/// fields name the DuckDB types Arrow has none for.
+pub(crate) fn decode_rows(
+    arrays: &[ArrayRef],
+    schema: &Schema,
+    type_names: &[String],
+) -> Vec<Vec<DbValue>> {
+    let len = arrays.first().map_or(0, |array| array.len());
+    let mut rows: Vec<Vec<DbValue>> = (0..len).map(|_| Vec::with_capacity(arrays.len())).collect();
+    for ((array, field), type_name) in arrays.iter().zip(schema.fields()).zip(type_names) {
+        for (row, cell) in rows.iter_mut().zip(decode_column(array, field, type_name)) {
+            row.push(cell);
+        }
+    }
+    rows
+}
+
+/// Whether a `Count` or `Success` column is DuckDB's answer about `text` rather than rows
+/// it returns: not for a query -- `SELECT count(*) AS "Count"` -- nor for a write that
+/// returns rows of its own, `INSERT ... RETURNING id AS "Count"`.
+fn answers_with_status(text: &str, effect: Option<dexo_sql::StatementEffect>) -> bool {
+    let returning = || {
+        dexo_sql::tokenize(text, Dialect::Duckdb)
+            .iter()
+            .any(|token| {
+                token.kind == dexo_sql::TokenKind::Word
+                    && text[token.span.clone()].eq_ignore_ascii_case("returning")
+            })
+    };
+    match effect {
+        Some(dexo_sql::StatementEffect::ReadOnly) => false,
+        Some(dexo_sql::StatementEffect::DataWrite) => !returning(),
+        _ => true,
+    }
+}
+
+/// What DuckDB answers a statement that returns no rows of its own with: a `Count` of
+/// the rows an INSERT, UPDATE, DELETE or COPY changed, or a `Success` flag for the rest.
+#[derive(Clone, Copy)]
+enum Status {
+    Count,
+    Success,
+}
+
+impl Status {
+    fn of(schema: &Schema) -> Option<Self> {
+        let [field] = schema.fields().iter().collect::<Vec<_>>()[..] else {
+            return None;
+        };
+        match (field.name().as_str(), field.data_type()) {
+            ("Count", DataType::Int64) => Some(Self::Count),
+            // A BOOLEAN arrives as a byte, Arrow's `bool8`.
+            ("Success", DataType::Boolean | DataType::Int8) => Some(Self::Success),
+            _ => None,
+        }
+    }
+
+    fn count(self, column: Option<&ArrayRef>) -> u64 {
+        let Some(counts) = column.filter(|_| matches!(self, Self::Count)) else {
+            return 0;
+        };
+        let counts = counts
+            .as_any()
+            .downcast_ref::<duckdb::arrow::array::Int64Array>();
+        counts.map_or(0, |counts| {
+            counts
+                .iter()
+                .flatten()
+                .map(|count| count.max(0) as u64)
+                .sum()
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl TransactionControl for DuckdbSession {
+    async fn begin(&self, mode: TransactionMode) -> Result<(), DriverError> {
+        match mode {
+            TransactionMode::ReadWrite => self.exec_batch("BEGIN TRANSACTION").await?,
+            TransactionMode::ReadOnly => self.exec_batch("BEGIN TRANSACTION READ ONLY").await?,
+        }
+        self.set_state(TransactionState::Active);
+        Ok(())
+    }
+
+    async fn commit(&self) -> Result<(), DriverError> {
+        self.end("COMMIT", TransactionState::Failed).await
+    }
+
+    async fn rollback(&self) -> Result<(), DriverError> {
+        self.end("ROLLBACK", TransactionState::Unknown).await
+    }
+
+    async fn savepoint(&self, _name: &str) -> Result<(), DriverError> {
+        Err(no_savepoints())
+    }
+
+    async fn rollback_to(&self, _name: &str) -> Result<(), DriverError> {
+        Err(no_savepoints())
+    }
+
+    async fn release_savepoint(&self, _name: &str) -> Result<(), DriverError> {
+        Err(no_savepoints())
+    }
+
+    fn state(&self) -> TransactionState {
+        *self.tx_state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// What a piece of a script gets when DuckDB reads more than one statement in it.
+pub(crate) fn split_differently(text: &str) -> DriverError {
+    DriverError::new(
+        DriverErrorCategory::Syntax,
+        format!(
+            "DuckDB reads more than one statement in `{}`; end each with `;` on a line of its own",
+            text.lines().next().unwrap_or(text)
+        ),
+    )
+}
+
+fn no_savepoints() -> DriverError {
+    DriverError::unsupported("DuckDB has no savepoints")
+}

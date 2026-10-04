@@ -2,31 +2,29 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
-demo  local  public                                                                                                                                             
+[Workbench] Connections  Agents  Server  History   demo  local  public                                                                                          
 ┌  Sidebar─────────────────┐ scratch.sql ×  +                                                                                                                   
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ● local▾  [offline]     ││   1▸select 1                                                                                                                     │
+│  ● local▾                ││   1▸select 1                                                                                                                     │
 │>   ▸ public              ││                                                                                                                                  │
-│      mysql.users [restric││                                                                                                                                  │
+│      mysql.u… [no access]││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││             ┌Schema────────────────────────────────────────────────────────────────────┐                                         │
-│                          ││             │schema table                                                              │                                         │
+│                          ││             ┌Schema · local────────────────────────────────────────────────────────────┐                                         │
+│                          ││             │New table:                                                                │                                         │
 │                          ││             │> target: public.orders                                                   │                                         │
 │                          ││             │  columns:                                                                │                                         │
-│                          ││             │  defaults:                                                               │                                         │
-│                          ││             │  indexes:                                                                │                                         │
 │                          ││             │  constraints:                                                            │                                         │
 │                          ││             │  foreign_keys:                                                           │                                         │
 │                          ││             │error: columns are required                                               │                                         │
 │                          ││             │                                                                          │                                         │
-│                          ││             │  tab next field  enter apply  esc close                                  │                                         │
+│                          ││             │  columns: name type [pk] [not null] [unique] [identity] [default x], ... │                                         │
+│                          ││             │  a type may hold commas: numeric(10,2)                                   │                                         │
+│                          ││             │  constraints: check (price > 0), unique (a, b)                           │                                         │
+│                          ││             │  foreign_keys: customer_id references customers(id)                      │                                         │
 │                          ││             │                                                                          │                                         │
-│                          ││             │                                                                          │                                         │
-│                          ││             │                                                                          │                                         │
-│                          ││             │                                                                          │                                         │
+│                          ││             │ [Preview]   [Cancel]                                                     │                                         │
+│                          ││             │  Tab/arrows move  Enter preview  Esc cancel                              │                                         │
 │                          ││             │                                                                          │                                         │
 │                          ││             │                                                                          │                                         │
 │                          ││             │                                                                          │                                         │
@@ -38,8 +36,10 @@ demo  local  public
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-│                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                          │┌  Results─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                          ││[Grid] Explain  Messages                                                                                                          │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
@@ -51,4 +51,4 @@ demo  local  public
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-local  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                                                                                   Ctrl+P  F1
+local                                                                                                                                                 Ctrl+P  F1

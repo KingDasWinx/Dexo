@@ -1,3 +1,4 @@
+use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::Write as _;
 
@@ -34,7 +35,17 @@ impl<'a> FromSql<'a> for Raw<'a> {
 }
 
 pub fn decode_row(row: &Row) -> Vec<DbValue> {
-    (0..row.len()).map(|idx| decode_at(row, idx)).collect()
+    decode_row_named(row, &RegNames::default())
+}
+
+/// A row whose reg* values show the names `names` holds for them.
+pub fn decode_row_named(row: &Row, names: &RegNames) -> Vec<DbValue> {
+    (0..row.len())
+        .map(|idx| match row.try_get::<_, Option<Raw<'_>>>(idx) {
+            Ok(Some(Raw(raw))) => decode_with(row.columns()[idx].type_(), raw, names),
+            _ => DbValue::Null,
+        })
+        .collect()
 }
 
 pub fn decode_at(row: &Row, idx: usize) -> DbValue {
@@ -45,15 +56,106 @@ pub fn decode_at(row: &Row, idx: usize) -> DbValue {
     }
 }
 
+/// What psql prints for reg* values -- `pg_class` for a regclass, `integer` for a
+/// regtype -- by the type's OID and the value's. Their binary form is the OID alone, and
+/// only the server can name it: as it does for psql, against this session's search_path.
+#[derive(Default)]
+pub struct RegNames(HashMap<(u32, u32), String>);
+
+fn is_reg(ty: &Type) -> bool {
+    matches!(
+        *ty,
+        Type::REGCLASS
+            | Type::REGTYPE
+            | Type::REGPROC
+            | Type::REGPROCEDURE
+            | Type::REGOPER
+            | Type::REGOPERATOR
+            | Type::REGNAMESPACE
+            | Type::REGROLE
+            | Type::REGCONFIG
+            | Type::REGDICTIONARY
+            | Type::REGCOLLATION
+    )
+}
+
+/// Whether a column holds reg* values, alone, in an array or under a domain.
+fn holds_reg(ty: &Type) -> bool {
+    match ty.kind() {
+        Kind::Domain(inner) | Kind::Array(inner) => holds_reg(inner),
+        _ => is_reg(ty),
+    }
+}
+
+pub fn needs_names(columns: &[tokio_postgres::Column]) -> bool {
+    columns.iter().any(|column| holds_reg(column.type_()))
+}
+
+/// The names of the reg* values in `rows`, one query per reg type for the OIDs the rows
+/// hold. The rows must all have arrived: a query sent while a result still streams on
+/// the connection waits behind it. A lookup that fails leaves the OIDs showing.
+pub async fn reg_names(client: &tokio_postgres::Client, rows: &[Row]) -> RegNames {
+    fn collect(ty: &Type, raw: &[u8], wanted: &mut HashMap<Type, BTreeSet<u32>>) {
+        match ty.kind() {
+            Kind::Domain(inner) => collect(inner, raw, wanted),
+            Kind::Array(inner) => {
+                let Ok(array) = wire::array_from_sql(raw) else {
+                    return;
+                };
+                let mut values = array.values();
+                while let Ok(Some(value)) = values.next() {
+                    if let Some(bytes) = value {
+                        collect(inner, bytes, wanted);
+                    }
+                }
+            }
+            _ if is_reg(ty) => {
+                if let Ok(oid) = wire::oid_from_sql(raw) {
+                    wanted.entry(ty.clone()).or_default().insert(oid);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut wanted = HashMap::new();
+    for row in rows {
+        for (idx, column) in row.columns().iter().enumerate() {
+            if holds_reg(column.type_())
+                && let Ok(Some(Raw(raw))) = row.try_get::<_, Option<Raw<'_>>>(idx)
+            {
+                collect(column.type_(), raw, &mut wanted);
+            }
+        }
+    }
+    let mut names = RegNames::default();
+    for (ty, oids) in wanted {
+        let oids: Vec<u32> = oids.into_iter().collect();
+        let sql = format!(
+            "SELECT o, o::{}::text FROM unnest($1::oid[]) AS o",
+            ty.name()
+        );
+        if let Ok(found) = client.query(&sql, &[&oids]).await {
+            for row in found {
+                names.0.insert((ty.oid(), row.get(0)), row.get(1));
+            }
+        }
+    }
+    names
+}
+
 pub fn decode_value(ty: &Type, raw: &[u8]) -> DbValue {
+    decode_with(ty, raw, &RegNames::default())
+}
+
+fn decode_with(ty: &Type, raw: &[u8], names: &RegNames) -> DbValue {
     match ty.kind() {
         // A domain is its base type with a constraint bolted on; the wire format is the
         // base type's.
-        Kind::Domain(inner) => return decode_value(inner, raw),
+        Kind::Domain(inner) => return decode_with(inner, raw, names),
         // An enum is sent as its label, even in binary format.
         Kind::Enum(_) => return text(raw).unwrap_or_else(|| undecoded(ty, raw)),
         Kind::Array(inner) => {
-            return array_text(inner, raw)
+            return array_text(inner, raw, names)
                 .map(|text| native(ty, raw, text))
                 .unwrap_or_else(|| undecoded(ty, raw));
         }
@@ -62,9 +164,16 @@ pub fn decode_value(ty: &Type, raw: &[u8]) -> DbValue {
                 .map(|text| native(ty, raw, text))
                 .unwrap_or_else(|| undecoded(ty, raw));
         }
+        Kind::Multirange(inner) => {
+            return multirange_text(inner, raw)
+                .map(|text| native(ty, raw, text))
+                .unwrap_or_else(|| undecoded(ty, raw));
+        }
         _ => {}
     }
-    scalar(ty, raw).unwrap_or_else(|| undecoded(ty, raw))
+    scalar(ty, raw)
+        .or_else(|| other(ty, raw, names))
+        .unwrap_or_else(|| undecoded(ty, raw))
 }
 
 fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
@@ -73,11 +182,9 @@ fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
         Type::INT2 => DbValue::I64(wire::int2_from_sql(raw).ok()?.into()),
         Type::INT4 => DbValue::I64(wire::int4_from_sql(raw).ok()?.into()),
         Type::INT8 => DbValue::I64(wire::int8_from_sql(raw).ok()?),
-        Type::OID | Type::REGCLASS | Type::REGPROC | Type::REGTYPE => {
-            DbValue::U64(wire::oid_from_sql(raw).ok()?.into())
-        }
-        Type::FLOAT4 => native(ty, raw, wire::float4_from_sql(raw).ok()?.to_string()),
-        Type::FLOAT8 => native(ty, raw, wire::float8_from_sql(raw).ok()?.to_string()),
+        Type::OID => DbValue::U64(wire::oid_from_sql(raw).ok()?.into()),
+        Type::FLOAT4 => native(ty, raw, float4_text(wire::float4_from_sql(raw).ok()?)),
+        Type::FLOAT8 => native(ty, raw, float8_text(wire::float8_from_sql(raw).ok()?)),
         Type::NUMERIC => DbValue::Decimal(numeric_text(raw)?),
         Type::MONEY => native(ty, raw, money_text(wire::int8_from_sql(raw).ok()?)),
         Type::CHAR => DbValue::Text((wire::char_from_sql(raw).ok()? as u8 as char).to_string()),
@@ -85,6 +192,8 @@ fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
             DbValue::Text(wire::text_from_sql(raw).ok()?.to_string())
         }
         Type::BYTEA => DbValue::Bytes(wire::bytea_from_sql(raw).to_vec()),
+        // `pg_sleep()` answers with nothing: not bytes to be written as `\x`.
+        Type::VOID => DbValue::Text(String::new()),
         Type::JSON => DbValue::Json(wire::text_from_sql(raw).ok()?.to_string()),
         // jsonb prefixes the document with a format version byte.
         Type::JSONB => match raw.split_first() {
@@ -120,7 +229,11 @@ fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
         Type::BIT | Type::VARBIT => native(ty, raw, varbit_text(raw)?),
         Type::POINT => {
             let point = wire::point_from_sql(raw).ok()?;
-            native(ty, raw, format!("({},{})", point.x(), point.y()))
+            native(
+                ty,
+                raw,
+                format!("({},{})", float8_text(point.x()), float8_text(point.y())),
+            )
         }
         Type::PG_LSN => {
             let lsn = wire::lsn_from_sql(raw).ok()?;
@@ -129,6 +242,332 @@ fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
         _ => return None,
     };
     Some(value)
+}
+
+/// Types outside the common ones, which used to show as hex: the built-ins made of
+/// plain numbers, known by their OID, and extensions' -- `citext` is sent as its text,
+/// `ltree` and its queries as a version byte and their text, pgvector's `vector` as its
+/// floats -- known by name, and only as the plain types they are: a composite type of
+/// the user's called `vector` read as an empty one.
+fn other(ty: &Type, raw: &[u8], names: &RegNames) -> Option<DbValue> {
+    let utf8 = |bytes: &[u8]| std::str::from_utf8(bytes).ok().map(str::to_string);
+    let versioned = || match raw.split_first() {
+        Some((1, rest)) => utf8(rest),
+        _ => None,
+    };
+    let u32_at = |at: usize| Some(u32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?));
+    let f8_at = |at: usize| {
+        Some(float8_text(f64::from_be_bytes(
+            raw.get(at..at + 8)?.try_into().ok()?,
+        )))
+    };
+    let point_at = |at: usize| Some(format!("({},{})", f8_at(at)?, f8_at(at + 8)?));
+    let points = |from: usize, count: usize| {
+        (0..count)
+            .map(|index| point_at(from + index * 16))
+            .collect::<Option<Vec<_>>>()
+            .map(|points| points.join(","))
+    };
+    let text = match *ty {
+        Type::JSONPATH => versioned()?,
+        // Numbers, but kept as the type they are: read as a plain integer, a value went
+        // back as a bigint, and the grid's delete, which compares every column, failed
+        // with "operator does not exist: xid = bigint".
+        Type::XID | Type::CID => u32_at(0)?.to_string(),
+        // The name the server gave it, or its OID where none was asked for.
+        _ if is_reg(ty) => {
+            let oid = u32_at(0)?;
+            match names.0.get(&(ty.oid(), oid)) {
+                Some(name) => name.clone(),
+                None => oid.to_string(),
+            }
+        }
+        Type::XID8 => u64::from_be_bytes(raw.try_into().ok()?).to_string(),
+        Type::TID => format!(
+            "({},{})",
+            u32_at(0)?,
+            u16::from_be_bytes(raw.get(4..6)?.try_into().ok()?)
+        ),
+        Type::MACADDR8 if raw.len() == 8 => raw
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(":"),
+        Type::LSEG => format!("[{},{}]", point_at(0)?, point_at(16)?),
+        Type::BOX => format!("{},{}", point_at(0)?, point_at(16)?),
+        Type::LINE => format!("{{{},{},{}}}", f8_at(0)?, f8_at(8)?, f8_at(16)?),
+        Type::CIRCLE => format!("<{},{}>", point_at(0)?, f8_at(16)?),
+        Type::PATH => {
+            let closed = *raw.first()? == 1;
+            let count = usize::try_from(u32_at(1)?).ok()?;
+            let points = points(5, count)?;
+            if closed {
+                format!("({points})")
+            } else {
+                format!("[{points}]")
+            }
+        }
+        Type::POLYGON => format!("({})", points(4, usize::try_from(u32_at(0)?).ok()?)?),
+        Type::TS_VECTOR => tsvector_text(raw)?,
+        Type::TSQUERY => tsquery_text(raw)?,
+        // Its binary form is its text.
+        Type::REFCURSOR => utf8(raw)?,
+        Type::PG_SNAPSHOT | Type::TXID_SNAPSHOT => snapshot_text(raw)?,
+        _ if matches!(ty.kind(), Kind::Simple) => match ty.name() {
+            "citext" => return Some(DbValue::Text(utf8(raw)?)),
+            "ltree" | "lquery" | "ltxtquery" => versioned()?,
+            "vector" => {
+                let dimensions = usize::from(u16::from_be_bytes(raw.get(0..2)?.try_into().ok()?));
+                let values = (0..dimensions)
+                    .map(|index| {
+                        let at = 4 + index * 4;
+                        Some(float4_text(f32::from_be_bytes(
+                            raw.get(at..at + 4)?.try_into().ok()?,
+                        )))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                format!("[{}]", values.join(","))
+            }
+            // pgvector's half-precision vector: its halves are printed as the float4s
+            // they widen to.
+            "halfvec" => {
+                let dimensions = usize::from(u16::from_be_bytes(raw.get(0..2)?.try_into().ok()?));
+                let values = (0..dimensions)
+                    .map(|index| {
+                        let at = 4 + index * 2;
+                        let half = u16::from_be_bytes(raw.get(at..at + 2)?.try_into().ok()?);
+                        Some(float4_text(half_to_f32(half)))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                format!("[{}]", values.join(","))
+            }
+            "sparsevec" => sparsevec_text(raw)?,
+            "hstore" => hstore_text(raw)?,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(native(ty, raw, text))
+}
+
+/// A float8 as Postgres 12 on prints it: the shortest digits that read back as the
+/// same value, written out from 1e-4 up to 1e15 and in exponent form outside it, the
+/// way `%g` places it -- `1e+20`, `1e-07` -- and the non-numbers by name. Rust's own
+/// form wrote 1e300 as 301 digits and infinity as `inf`.
+fn float8_text(value: f64) -> String {
+    float_text(&format!("{value}"), &format!("{value:e}"), 15)
+}
+
+/// A float4 the same way, written out up to 1e6.
+fn float4_text(value: f32) -> String {
+    float_text(&format!("{value}"), &format!("{value:e}"), 6)
+}
+
+/// `plain` and `scientific` are the same shortest digits, written out and as `1.5e20`.
+fn float_text(plain: &str, scientific: &str, written_below: i32) -> String {
+    match plain {
+        "NaN" => return "NaN".into(),
+        "inf" => return "Infinity".into(),
+        "-inf" => return "-Infinity".into(),
+        _ => {}
+    }
+    let Some((digits, exponent)) = scientific.split_once('e') else {
+        return plain.to_string();
+    };
+    match exponent.parse::<i32>() {
+        Ok(exponent) if !(-4..written_below).contains(&exponent) => {
+            let sign = if exponent < 0 { '-' } else { '+' };
+            format!("{digits}e{sign}{:02}", exponent.unsigned_abs())
+        }
+        _ => plain.to_string(),
+    }
+}
+
+/// `'fat':2,4A 'cat':3`: each lexeme quoted, with its positions and their weights.
+fn tsvector_text(raw: &[u8]) -> Option<String> {
+    let count = u32::from_be_bytes(raw.get(0..4)?.try_into().ok()?);
+    let mut at = 4;
+    let mut lexemes = Vec::new();
+    for _ in 0..count {
+        let end = at + raw.get(at..)?.iter().position(|byte| *byte == 0)?;
+        let word = std::str::from_utf8(&raw[at..end]).ok()?;
+        at = end + 1;
+        let positions = u16::from_be_bytes(raw.get(at..at + 2)?.try_into().ok()?);
+        at += 2;
+        let mut lexeme = format!("'{}'", word.replace('\\', "\\\\").replace('\'', "''"));
+        for index in 0..positions {
+            let entry = u16::from_be_bytes(raw.get(at..at + 2)?.try_into().ok()?);
+            at += 2;
+            lexeme.push(if index == 0 { ':' } else { ',' });
+            let _ = write!(lexeme, "{}", entry & 0x3fff);
+            match entry >> 14 {
+                3 => lexeme.push('A'),
+                2 => lexeme.push('B'),
+                1 => lexeme.push('C'),
+                _ => {}
+            }
+        }
+        lexemes.push(lexeme);
+    }
+    Some(lexemes.join(" "))
+}
+
+/// `'fat' & ( 'rat' | !'cat' ) <-> 'a':*B`, from the items in the order the server keeps
+/// them: an operator, then its right operand, then its left. Parentheses where the
+/// operators' priority asks for them, as the server's own output puts them.
+fn tsquery_text(raw: &[u8]) -> Option<String> {
+    enum Item {
+        Operand(String),
+        Not,
+        /// The operator, its priority, and for a phrase that it is one.
+        Binary(String, i32, bool),
+    }
+    fn infix(items: &[Item], at: &mut usize, parent: i32, right_of_phrase: bool) -> Option<String> {
+        let item = items.get(*at)?;
+        *at += 1;
+        match item {
+            Item::Operand(text) => Some(text.clone()),
+            // NOT binds tightest, so it never needs parentheses of its own.
+            Item::Not => Some(format!("!{}", infix(items, at, 4, false)?)),
+            Item::Binary(symbol, priority, phrase) => {
+                let right = infix(items, at, *priority, *phrase)?;
+                let left = infix(items, at, *priority, false)?;
+                Some(if *priority < parent || (*phrase && right_of_phrase) {
+                    format!("( {left} {symbol} {right} )")
+                } else {
+                    format!("{left} {symbol} {right}")
+                })
+            }
+        }
+    }
+    let count = u32::from_be_bytes(raw.get(0..4)?.try_into().ok()?);
+    let mut at = 4;
+    let mut items = Vec::new();
+    for _ in 0..count {
+        let item = match raw.get(at..at + 2)? {
+            [1, weight] => {
+                let weight = *weight;
+                let prefix = *raw.get(at + 2)? != 0;
+                at += 3;
+                let end = at + raw.get(at..)?.iter().position(|byte| *byte == 0)?;
+                let word = std::str::from_utf8(&raw[at..end]).ok()?;
+                at = end + 1;
+                let mut operand = format!("'{}'", word.replace('\\', "\\\\").replace('\'', "''"));
+                if weight != 0 || prefix {
+                    operand.push(':');
+                    if prefix {
+                        operand.push('*');
+                    }
+                    for (bit, letter) in [(8, 'A'), (4, 'B'), (2, 'C'), (1, 'D')] {
+                        if weight & bit != 0 {
+                            operand.push(letter);
+                        }
+                    }
+                }
+                Item::Operand(operand)
+            }
+            [2, operator] => {
+                let operator = *operator;
+                at += 2;
+                match operator {
+                    1 => Item::Not,
+                    2 => Item::Binary("&".into(), 2, false),
+                    3 => Item::Binary("|".into(), 1, false),
+                    4 => {
+                        let distance = i16::from_be_bytes(raw.get(at..at + 2)?.try_into().ok()?);
+                        at += 2;
+                        let symbol = if distance == 1 {
+                            "<->".to_string()
+                        } else {
+                            format!("<{distance}>")
+                        };
+                        Item::Binary(symbol, 3, true)
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        items.push(item);
+    }
+    if items.is_empty() {
+        return Some(String::new());
+    }
+    infix(&items, &mut 0, -1, false)
+}
+
+/// `10:20:12,15`: the oldest transaction still running, the first not yet started, and
+/// the ones between them still in progress.
+fn snapshot_text(raw: &[u8]) -> Option<String> {
+    let u64_at = |at: usize| Some(u64::from_be_bytes(raw.get(at..at + 8)?.try_into().ok()?));
+    let running = u32::from_be_bytes(raw.get(0..4)?.try_into().ok()?);
+    let xips = (0..running as usize)
+        .map(|index| u64_at(20 + index * 8).map(|xid| xid.to_string()))
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!("{}:{}:{}", u64_at(4)?, u64_at(12)?, xips.join(",")))
+}
+
+/// `"k"=>"v", "n"=>NULL`, a quote or a backslash in either escaped.
+fn hstore_text(raw: &[u8]) -> Option<String> {
+    let quoted = |bytes: &[u8]| {
+        let text = std::str::from_utf8(bytes).ok()?;
+        Some(format!(
+            "\"{}\"",
+            text.replace('\\', "\\\\").replace('"', "\\\"")
+        ))
+    };
+    let count = u32::from_be_bytes(raw.get(0..4)?.try_into().ok()?);
+    let mut at = 4;
+    let mut pairs = Vec::new();
+    for _ in 0..count {
+        let mut next = || {
+            let len = i32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?);
+            at += 4;
+            let Ok(len) = usize::try_from(len) else {
+                return Some(None);
+            };
+            let bytes = raw.get(at..at + len)?;
+            at += len;
+            Some(Some(bytes))
+        };
+        let key = quoted(next()??)?;
+        let value = match next()? {
+            Some(bytes) => quoted(bytes)?,
+            None => "NULL".into(),
+        };
+        pairs.push(format!("{key}=>{value}"));
+    }
+    Some(pairs.join(", "))
+}
+
+/// pgvector's `{1:0.5,3:2}/5`: the non-zero elements, counted from one, and the length.
+fn sparsevec_text(raw: &[u8]) -> Option<String> {
+    let i32_at = |at: usize| Some(i32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?));
+    let dimensions = i32_at(0)?;
+    let stored = usize::try_from(i32_at(4)?).ok()?;
+    let values_at = 12 + stored * 4;
+    let elements = (0..stored)
+        .map(|index| {
+            let position = i32_at(12 + index * 4)?;
+            let at = values_at + index * 4;
+            let value = f32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?);
+            Some(format!("{}:{}", position + 1, float4_text(value)))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!("{{{}}}/{dimensions}", elements.join(",")))
+}
+
+/// An IEEE half-precision float, exactly, as the float4 it widens to.
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 == 0 { 1.0 } else { -1.0 };
+    let exponent = i32::from((bits >> 10) & 0x1f);
+    let fraction = f32::from(bits & 0x3ff);
+    match exponent {
+        0 => sign * fraction * 2f32.powi(-24),
+        31 if fraction == 0.0 => sign * f32::INFINITY,
+        31 => f32::NAN,
+        _ => sign * (1.0 + fraction / 1024.0) * 2f32.powi(exponent - 15),
+    }
 }
 
 fn text(raw: &[u8]) -> Option<DbValue> {
@@ -156,8 +595,8 @@ fn undecoded(ty: &Type, raw: &[u8]) -> DbValue {
 
 /// The display form of a decoded value, for the types that nest others: arrays and
 /// ranges hold element payloads, not text.
-fn element_text(ty: &Type, raw: &[u8]) -> String {
-    match decode_value(ty, raw) {
+fn element_text(ty: &Type, raw: &[u8], names: &RegNames) -> String {
+    match decode_with(ty, raw, names) {
         DbValue::Null => "NULL".into(),
         DbValue::Bool(value) => value.to_string(),
         DbValue::I64(value) => value.to_string(),
@@ -173,7 +612,7 @@ fn element_text(ty: &Type, raw: &[u8]) -> String {
     }
 }
 
-fn array_text(inner: &Type, raw: &[u8]) -> Option<String> {
+fn array_text(inner: &Type, raw: &[u8], names: &RegNames) -> Option<String> {
     let array = wire::array_from_sql(raw).ok()?;
     let dimensions: Vec<usize> = array
         .dimensions()
@@ -185,7 +624,7 @@ fn array_text(inner: &Type, raw: &[u8]) -> Option<String> {
     while let Some(element) = values.next().ok()? {
         elements.push(match element {
             None => "NULL".to_string(),
-            Some(bytes) => quote_element(&element_text(inner, bytes)),
+            Some(bytes) => quote_element(&element_text(inner, bytes, names)),
         });
     }
     Some(nest(&dimensions, &elements))
@@ -223,9 +662,23 @@ fn quote_element(text: &str) -> String {
 fn range_text(inner: &Type, raw: &[u8]) -> Option<String> {
     use wire::{Range, RangeBound};
 
+    // A bound is quoted as the server quotes it, a quote or a backslash in it doubled: a
+    // timestamp's space, unquoted, read as two words.
     let bound_text = |bound: &RangeBound<Option<&[u8]>>| match bound {
         RangeBound::Inclusive(value) | RangeBound::Exclusive(value) => value
-            .map(|bytes| element_text(inner, bytes))
+            .map(|bytes| {
+                let text = element_text(inner, bytes, &RegNames::default());
+                let quoted = text.is_empty()
+                    || text.chars().any(|ch| {
+                        matches!(ch, '"' | '\\' | '(' | ')' | '[' | ']' | ',')
+                            || ch.is_ascii_whitespace()
+                    });
+                if quoted {
+                    format!("\"{}\"", text.replace('"', "\"\"").replace('\\', "\\\\"))
+                } else {
+                    text
+                }
+            })
             .unwrap_or_default(),
         RangeBound::Unbounded => String::new(),
     };
@@ -247,6 +700,21 @@ fn range_text(inner: &Type, raw: &[u8]) -> Option<String> {
             ))
         }
     }
+}
+
+/// `{[1,3),[5,7)}`: a count, then each range with its length before it.
+fn multirange_text(inner: &Type, raw: &[u8]) -> Option<String> {
+    let count = u32::from_be_bytes(raw.get(0..4)?.try_into().ok()?);
+    let mut at = 4;
+    let mut ranges = Vec::new();
+    for _ in 0..count {
+        let len =
+            usize::try_from(u32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?)).ok()?;
+        at += 4;
+        ranges.push(range_text(inner, raw.get(at..at + len)?)?);
+        at += len;
+    }
+    Some(format!("{{{}}}", ranges.join(",")))
 }
 
 fn inet_text(ty: &Type, raw: &[u8]) -> Option<String> {
@@ -476,6 +944,12 @@ mod tests {
     use dexo_driver_api::DbValue;
     use tokio_postgres::types::Type;
 
+    /// `select pg_sleep(1)` came back as the empty byte string, shown as `\x`.
+    #[test]
+    fn void_is_empty_text() {
+        assert_eq!(decode_value(&Type::VOID, &[]), DbValue::Text(String::new()));
+    }
+
     fn text_of(value: &DbValue) -> String {
         match value {
             DbValue::Decimal(text) | DbValue::Text(text) | DbValue::Native { text, .. } => {
@@ -504,6 +978,150 @@ mod tests {
                 "{ty} reported a value as NULL"
             );
         }
+    }
+
+    /// pgvector's `vector` is not in the image the live tests use; its wire form is a
+    /// dimension count, an unused word, and the floats.
+    #[test]
+    fn a_pgvector_reads_as_its_floats() {
+        let ty = Type::new(
+            "vector".into(),
+            99_999,
+            tokio_postgres::types::Kind::Simple,
+            "public".into(),
+        );
+        let mut raw = vec![0, 3, 0, 0];
+        for value in [1.0f32, 0.5, -2.0] {
+            raw.extend(value.to_be_bytes());
+        }
+        assert_eq!(text_of(&decode_value(&ty, &raw)), "[1,0.5,-2]");
+    }
+
+    fn named(name: &str) -> Type {
+        Type::new(
+            name.into(),
+            99_997,
+            tokio_postgres::types::Kind::Simple,
+            "public".into(),
+        )
+    }
+
+    /// pgvector's half and sparse vectors are not in the image the live tests use.
+    #[test]
+    fn pgvector_half_and_sparse_vectors_read_as_their_values() {
+        let mut half = vec![0, 4, 0, 0];
+        for bits in [0x3C00u16, 0x3800, 0xC000, 0x2E66] {
+            half.extend(bits.to_be_bytes());
+        }
+        assert_eq!(
+            text_of(&decode_value(&named("halfvec"), &half)),
+            "[1,0.5,-2,0.099975586]"
+        );
+        let mut sparse = Vec::new();
+        for word in [5i32, 2, 0, 0, 2] {
+            sparse.extend(word.to_be_bytes());
+        }
+        for value in [1.5f32, -2.0] {
+            sparse.extend(value.to_be_bytes());
+        }
+        assert_eq!(
+            text_of(&decode_value(&named("sparsevec"), &sparse)),
+            "{1:1.5,3:-2}/5"
+        );
+    }
+
+    #[test]
+    fn hstore_tsquery_snapshots_and_cursors_read_as_postgres_prints_them() {
+        let mut hstore = vec![0, 0, 0, 2];
+        for (len, bytes) in [(1i32, &b"a"[..]), (1, b"1"), (3, b"b\"q"), (-1, b"")] {
+            hstore.extend(len.to_be_bytes());
+            hstore.extend(bytes);
+        }
+        assert_eq!(
+            text_of(&decode_value(&named("hstore"), &hstore)),
+            r#""a"=>"1", "b\"q"=>NULL"#
+        );
+        // 'fat' & ( 'rat' | 'cat' ): each operator before its right operand, then its left.
+        let mut query = vec![0, 0, 0, 5, 2, 2, 2, 3];
+        for word in ["cat", "rat", "fat"] {
+            query.extend([1, 0, 0]);
+            query.extend(word.as_bytes());
+            query.push(0);
+        }
+        assert_eq!(
+            text_of(&decode_value(&Type::TSQUERY, &query)),
+            "'fat' & ( 'rat' | 'cat' )"
+        );
+        let mut snapshot = 2u32.to_be_bytes().to_vec();
+        for xid in [10u64, 20, 12, 15] {
+            snapshot.extend(xid.to_be_bytes());
+        }
+        assert_eq!(
+            text_of(&decode_value(&Type::PG_SNAPSHOT, &snapshot)),
+            "10:20:12,15"
+        );
+        assert_eq!(text_of(&decode_value(&Type::REFCURSOR, b"cur")), "cur");
+    }
+
+    /// Floats read as psql prints them, in every type made of them.
+    #[test]
+    fn floats_read_as_postgres_prints_them() {
+        use super::{float4_text, float8_text};
+        for (value, text) in [
+            (1e300, "1e+300"),
+            (1e-7, "1e-07"),
+            (1e20, "1e+20"),
+            (1e15, "1e+15"),
+            (1e14, "100000000000000"),
+            (1.5e-5, "1.5e-05"),
+            (0.0001, "0.0001"),
+            (0.1, "0.1"),
+            (-2.5, "-2.5"),
+            (-0.0, "-0"),
+            (1.2345678901234567e19, "1.2345678901234567e+19"),
+            (f64::INFINITY, "Infinity"),
+            (f64::NEG_INFINITY, "-Infinity"),
+            (f64::NAN, "NaN"),
+        ] {
+            assert_eq!(float8_text(value), text);
+        }
+        for (value, text) in [
+            (1e6f32, "1e+06"),
+            (100_000.0, "100000"),
+            (1_234_567.0, "1.234567e+06"),
+            (0.1, "0.1"),
+            (f32::INFINITY, "Infinity"),
+        ] {
+            assert_eq!(float4_text(value), text);
+        }
+        let mut point = Vec::new();
+        point.extend(1e300f64.to_be_bytes());
+        point.extend(1e-7f64.to_be_bytes());
+        assert_eq!(
+            text_of(&decode_value(&Type::POINT, &point)),
+            "(1e+300,1e-07)"
+        );
+    }
+
+    /// An extension's type is known by name only as the plain type it is: a composite
+    /// of the user's called `vector (a int, b int)` read as an empty vector, `[]`.
+    #[test]
+    fn a_composite_named_like_an_extension_type_is_not_read_as_one() {
+        use tokio_postgres::types::{Field, Kind};
+        let ty = Type::new(
+            "vector".into(),
+            99_998,
+            Kind::Composite(vec![
+                Field::new("a".into(), Type::INT4),
+                Field::new("b".into(), Type::INT4),
+            ]),
+            "public".into(),
+        );
+        // Two fields: a = 1, b = 2.
+        let raw = [
+            0, 0, 0, 2, 0, 0, 0, 23, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 23, 0, 0, 0, 4, 0, 0, 0, 2,
+        ];
+        assert_ne!(text_of(&decode_value(&ty, &raw)), "[]");
     }
 
     #[test]

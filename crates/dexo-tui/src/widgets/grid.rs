@@ -3,19 +3,26 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::model::{
-    Focus, Model, ResultsView, Severity, allocate_column_widths, format_value, truncate_cell,
-};
+use crate::model::{Focus, Model, ResultsView, Severity, allocate_column_widths, truncate_cell};
 use crate::mouse::{HitMap, HitTarget};
 use crate::theme::Role;
 
 /// Rows the grid spends on chrome inside its border: the toolbar, then the column
 /// header. `Model::sync_grid_viewport` sizes the row viewport against this, and the two
 /// must agree -- believing in one row more than the pane draws walks the cursor off the
-/// bottom, where the selection is invisible.
-pub const CHROME_ROWS: u16 = TOOLBAR_ROWS + HEADER_ROWS;
+/// bottom, where the selection is invisible. The WHERE / ORDER BY row is one more when
+/// the grid shows it.
+pub fn chrome_rows(model: &Model) -> u16 {
+    TOOLBAR_ROWS + HEADER_ROWS + u16::from(bars_row(model))
+}
+
 const TOOLBAR_ROWS: u16 = 1;
 const HEADER_ROWS: u16 = 1;
+
+/// The WHERE / ORDER BY row is over the grid of anything that can run again.
+fn bars_row(model: &Model) -> bool {
+    model.results.view == ResultsView::Grid && crate::update::clause_bars_shown(model)
+}
 
 pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     if area.width == 0 || area.height == 0 {
@@ -26,10 +33,24 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         return;
     }
     let extra = result_banner(model);
-    let title = if model.results.truncated() {
-        format!("Results ({}) …{extra}", model.results.row_count())
+    let affected = affected_label(model);
+    // Nothing has run into the pane: no count to give.
+    let title = if model.results.columns().is_empty() {
+        match &affected {
+            Some(label) => format!("Results ({label}){extra}"),
+            None => format!("Results{extra}"),
+        }
+    } else if model.results.truncated() {
+        format!("Results ({}) …{extra}", rows_label(model))
     } else {
-        format!("Results ({}){extra}", model.results.row_count())
+        format!("Results ({}){extra}", rows_label(model))
+    };
+    // Rows staged for the database say so where the user is looking.
+    let pending = model.data.changes.pending().len();
+    let title = if model.active_document().kind.is_table() && pending > 0 {
+        format!("{title} · {pending} pending")
+    } else {
+        title
     };
     let focused = model.effective_focus() == Focus::Results;
     let block = crate::render::pane_block(model, &title, focused);
@@ -51,24 +72,298 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     );
     match model.results.view {
         ResultsView::Explain => {
-            let plan = model.explain.lines();
+            let styles = crate::screens::explain::ExplainStyles {
+                muted: model.theme.style(Role::Muted, model.capabilities),
+                warning: model.theme.style(Role::Warning, model.capabilities),
+                unicode: model.capabilities.unicode,
+            };
+            let plan = model.results.explain.lines(body.width, &styles);
             let max_scroll = plan.len().saturating_sub((body.height as usize).max(1));
             hits.set_scroll_limit(crate::mouse::ScrollArea::Explain, max_scroll);
             let scroll = (model.results.explain_scroll as usize).min(max_scroll) as u16;
-            frame.render_widget(Paragraph::new(plan.join("\n")).scroll((scroll, 0)), body);
+            frame.render_widget(Paragraph::new(plan).scroll((scroll, 0)), body);
         }
         ResultsView::Messages => {
+            let lines = message_lines(model);
+            // The log stops with its last row at the bottom of the pane: scrolled on, it
+            // left two lines and a blank pane.
+            let rows: usize = lines
+                .iter()
+                .map(|line| {
+                    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                    wrapped_rows(&text, body.width as usize)
+                })
+                .sum();
+            let max_scroll = rows.saturating_sub((body.height as usize).max(1));
+            hits.set_scroll_limit(crate::mouse::ScrollArea::Messages, max_scroll);
+            let scroll = (model.results.messages_scroll as usize).min(max_scroll) as u16;
             frame.render_widget(
-                Paragraph::new(message_lines(model))
+                Paragraph::new(lines)
                     .wrap(Wrap { trim: false })
-                    .scroll((model.results.messages_scroll, 0)),
+                    .scroll((scroll, 0)),
                 body,
             );
         }
+        ResultsView::Structure | ResultsView::Ddl | ResultsView::Privileges => {
+            let lines = crate::render::object_view_lines(model, model.results.view);
+            let max_scroll = lines.len().saturating_sub((body.height as usize).max(1));
+            hits.set_scroll_limit(crate::mouse::ScrollArea::Inspector, max_scroll);
+            // The picked role stays in sight as it moves.
+            let scroll = if model.results.view == ResultsView::Privileges {
+                crate::palette::scroll_to_selection(
+                    model.security.selected + crate::render::PRIVILEGE_ROLES_FROM,
+                    usize::from(model.inspector.scroll),
+                    lines.len(),
+                    usize::from(body.height).max(1),
+                )
+            } else {
+                usize::from(model.inspector.scroll)
+            }
+            .min(max_scroll);
+            // The roles of Privileges are rows to pick, a grant away.
+            if model.results.view == ResultsView::Privileges {
+                for index in 0..model.security.principals.len() {
+                    if let Some(row) = (index + crate::render::PRIVILEGE_ROLES_FROM)
+                        .checked_sub(scroll)
+                        .filter(|row| *row < usize::from(body.height))
+                    {
+                        hits.register(
+                            HitTarget::ListRow(index),
+                            crate::mouse::line_rect(body, row),
+                        );
+                    }
+                }
+            }
+            frame.render_widget(
+                Paragraph::new(lines.join("\n")).scroll((scroll as u16, 0)),
+                body,
+            );
+        }
+        ResultsView::Grid if model.expanded_records && model.results.row_count() > 0 => {
+            frame.render_widget(Paragraph::new(record_lines(model, body)), body);
+        }
         ResultsView::Grid => {
-            frame.render_widget(Paragraph::new(preview_lines(model, body, hits)), body);
+            let body = if bars_row(model) {
+                render_clause_bars(frame, Rect { height: 1, ..body }, model, hits);
+                Rect {
+                    y: body.y + 1,
+                    height: body.height.saturating_sub(1),
+                    ..body
+                }
+            } else {
+                body
+            };
+            let lines = match affected {
+                Some(label) if model.results.columns().is_empty() => vec![Line::from(label)],
+                _ => preview_lines(model, body, hits),
+            };
+            frame.render_widget(Paragraph::new(lines), body);
         }
     }
+}
+
+/// What a statement that returns no rows changed, once it finished: `4 rows affected`.
+/// Without it a DELETE or an UPDATE left the pane blank, as if nothing had run.
+fn affected_label(model: &Model) -> Option<String> {
+    let tab = model.results.tabs.get(model.results.active)?;
+    let rows = tab
+        .rows_affected
+        .filter(|_| model.results.columns().is_empty())?;
+    Some(if rows == 1 {
+        "1 row affected".to_string()
+    } else {
+        format!("{} rows affected", grouped(rows))
+    })
+}
+
+/// `WHERE [...]  ORDER BY [...]`: the text typed, or what the key is when there is none,
+/// and the terminal cursor in the bar that has the keys. Each bar is a click target.
+fn render_clause_bars(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
+    use crate::screens::data::ClauseBar;
+    let bars = &model.data.bars;
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let focus = crate::update::focused_bar(model);
+    let label = |bar: ClauseBar| {
+        if focus == Some(bar) {
+            model
+                .theme
+                .style(Role::Focus, model.capabilities)
+                .add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            muted
+        }
+    };
+    const WHERE: &str = "WHERE ";
+    const ORDER: &str = " ORDER BY ";
+    // Each bar gets what its text needs, and the room left over is shared: a long sort
+    // next to a short filter used to be cut at the left for want of columns the line
+    // had to spare.
+    let text_width = |input: &crate::widgets::text_input::TextInput, hint: &str| {
+        let text = if input.is_empty() {
+            hint
+        } else {
+            input.as_str()
+        };
+        unicode_width::UnicodeWidthStr::width(text) + 1
+    };
+    let total = (area.width as usize).saturating_sub(WHERE.len() + ORDER.len());
+    let need_where = text_width(&bars.where_input, "w to filter");
+    let need_order = text_width(&bars.order_input, "o to sort");
+    let where_field = if need_where + need_order <= total {
+        need_where + (total - need_where - need_order) / 2
+    } else {
+        (total * need_where / (need_where + need_order))
+            .clamp(8.min(total), total.saturating_sub(8))
+    };
+    let order_start = WHERE.len() + where_field + ORDER.len();
+    let order_field = (area.width as usize).saturating_sub(order_start);
+    let error = model.theme.style(Role::Error, model.capabilities);
+    let field = |input: &crate::widgets::text_input::TextInput,
+                 hint: &str,
+                 width: usize,
+                 refused: bool,
+                 focused: bool| {
+        if input.is_empty() {
+            return (
+                ratatui::text::Span::styled(
+                    format!("{:width$}", truncate_cell(hint, width)),
+                    muted,
+                ),
+                0,
+            );
+        }
+        // Typing follows the cursor; a bar left alone shows its text from the start.
+        let (shown, cursor) = if focused {
+            input.window(width)
+        } else {
+            (truncate_cell(input.as_str(), width), 0)
+        };
+        if input.is_selected() {
+            let selected =
+                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED);
+            return (ratatui::text::Span::styled(shown, selected), cursor);
+        }
+        // Text the server refused is not what the grid shows: it is drawn struck out in
+        // the error colour, so the bar cannot be read as the filter that ran.
+        if refused {
+            let struck = error.add_modifier(ratatui::style::Modifier::CROSSED_OUT);
+            return (ratatui::text::Span::styled(shown, struck), cursor);
+        }
+        (ratatui::text::Span::raw(shown), cursor)
+    };
+    let (where_span, where_cursor) = field(
+        &bars.where_input,
+        "w to filter",
+        where_field,
+        bars.refused(ClauseBar::Where),
+        focus == Some(ClauseBar::Where),
+    );
+    let (order_span, order_cursor) = field(
+        &bars.order_input,
+        "o to sort",
+        order_field,
+        bars.refused(ClauseBar::Order),
+        focus == Some(ClauseBar::Order),
+    );
+    let line = ratatui::text::Line::from(vec![
+        ratatui::text::Span::styled(WHERE, label(ClauseBar::Where)),
+        where_span,
+        ratatui::text::Span::styled(ORDER, label(ClauseBar::Order)),
+        order_span,
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+    let span = |start: usize, width: usize| {
+        let start = (start as u16).min(area.width);
+        Rect::new(
+            area.x + start,
+            area.y,
+            (width as u16).min(area.width - start),
+            1,
+        )
+    };
+    hits.register(
+        HitTarget::ClauseBar(ClauseBar::Where),
+        span(0, WHERE.len() + where_field),
+    );
+    hits.register(
+        HitTarget::ClauseBar(ClauseBar::Order),
+        span(WHERE.len() + where_field, ORDER.len() + order_field),
+    );
+    if let Some(bar) = focus {
+        let x = match bar {
+            ClauseBar::Where => WHERE.len() + where_cursor,
+            ClauseBar::Order => order_start + order_cursor,
+        };
+        if x < area.width as usize {
+            frame.set_cursor_position(ratatui::layout::Position::new(area.x + x as u16, area.y));
+        }
+    }
+}
+
+/// Lines the record view can draw: the grid's rows, plus the header and the clause bars
+/// it does not draw.
+pub fn record_rows(model: &Model) -> usize {
+    model.results.viewport().height + usize::from(HEADER_ROWS) + usize::from(bars_row(model))
+}
+
+/// `\\x`: from the cursor's row on, each row as psql's expanded display shows it -- a
+/// `-[ RECORD n ]-` rule, then one field per line -- as many as fit. The field the
+/// cursor is on is drawn as the grid draws its row, and a record taller than the pane
+/// scrolls under it.
+fn record_lines(model: &Model, area: Rect) -> Vec<ratatui::text::Line<'static>> {
+    use crate::widgets::row_detail::{RowDetailValue, null_style, row_detail_fields};
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let null = null_style(&model.theme, model.capabilities);
+    let first = model.results.cursor_row().unwrap_or(0);
+    let cursor_field = model.results.selection().map(|(_, col)| col);
+    let scroll = model.results.record_scroll;
+    let wanted = scroll + area.height as usize;
+    let mut lines = Vec::new();
+    for row in first..model.results.row_count() {
+        if lines.len() >= wanted {
+            break;
+        }
+        let rule = format!("-[ RECORD {} ]", row + 1);
+        let fill = (area.width as usize).saturating_sub(rule.chars().count());
+        lines.push(ratatui::text::Line::styled(
+            format!("{rule}{}", "-".repeat(fill)),
+            muted,
+        ));
+        let fields = row_detail_fields(&model.results, row);
+        let width = fields
+            .iter()
+            .map(|field| unicode_width::UnicodeWidthStr::width(field.name.as_str()))
+            .max()
+            .unwrap_or(0);
+        let room = (area.width as usize).saturating_sub(width + 3);
+        for (index, field) in fields.into_iter().enumerate() {
+            let value = match field.value {
+                RowDetailValue::Null => Span::styled(truncate_cell("NULL", room), null),
+                // One line a field, as psql prints it; the value's own breaks would push
+                // the next field off the screen, so they show as spaces.
+                RowDetailValue::Text(value) if value.is_empty() => {
+                    Span::styled(truncate_cell("\"\"", room), null)
+                }
+                RowDetailValue::Text(value) | RowDetailValue::Json(value) => {
+                    let value = value.replace(['\n', '\r'], " ").replace('\t', "    ");
+                    Span::raw(truncate_cell(&value, room))
+                }
+            };
+            let mut line = Line::from(vec![
+                Span::styled(crate::model::fit_cell(&field.name, width) + " │ ", muted),
+                value,
+            ]);
+            if row == first && cursor_field == Some(index) {
+                line = line.style(model.theme.active_row(model.capabilities));
+            }
+            lines.push(line);
+        }
+    }
+    lines
+        .into_iter()
+        .skip(scroll)
+        .take(area.height as usize)
+        .collect()
 }
 
 /// One row inside the pane holding the view selector and, after a divider, the result
@@ -87,7 +382,8 @@ fn output_toolbar(model: &Model, hits: &mut HitMap, area: Rect) -> String {
         out.push_str(&text);
     };
 
-    for (index, view) in ResultsView::ALL.iter().enumerate() {
+    let table = model.active_document().kind.is_table();
+    for (index, view) in ResultsView::views(table).iter().enumerate() {
         // The count is how you know there is anything in there without switching.
         let label = match view {
             ResultsView::Messages if !model.messages.is_empty() => {
@@ -106,7 +402,7 @@ fn output_toolbar(model: &Model, hits: &mut HitMap, area: Rect) -> String {
     if model.results.view == ResultsView::Explain {
         // cycling the sub-view used to be invisible; the divider keeps it from reading
         // as a fourth view now that Messages sits next to it
-        out.push_str(&format!(" │ {:?}", model.explain.view));
+        out.push_str(&format!(" │ {:?}", model.results.explain.view));
     } else if model.results.view == ResultsView::Grid && model.results.tabs.len() > 1 {
         out.push_str(" │");
         x = x.saturating_add(2);
@@ -122,6 +418,128 @@ fn output_toolbar(model: &Model, hits: &mut HitMap, area: Rect) -> String {
     out
 }
 
+/// How many rows there are, and how sure that is: `843 rows` when every row is in, `~4.3M
+/// rows` from the server's statistics, `300+ rows` when only a floor is known, and
+/// `10,000+ rows, limit reached` when a statement's rows stopped at the limit. A count
+/// asked for with `t` replaces all of them while the grid still shows what it counted.
+fn rows_label(model: &Model) -> String {
+    use crate::screens::data::CountState;
+    let counted = model
+        .data
+        .count
+        .as_ref()
+        .filter(|count| crate::update::count_key(model).as_ref() == Some(&count.key));
+    let shown = model.results.row_count() as u64;
+    let offset = model.data.page_offset;
+    // One page of a longer list reads as the rows it holds: `rows 101-200 of ~1.0K`.
+    let page_of = |total: String| format!("rows {}-{} of {total}", offset + 1, offset + shown);
+    if let Some(CountState::Exact(rows)) = counted.map(|count| count.state) {
+        let in_pages = model.active_document().kind.is_table()
+            || model
+                .results
+                .tabs
+                .get(model.results.active)
+                .is_some_and(|tab| tab.paged);
+        // A statement's rows stopped at the limit: the count says how many there are, the
+        // grid how many it holds.
+        let stopped = !in_pages
+            && model
+                .results
+                .tabs
+                .get(model.results.active)
+                .is_some_and(|tab| tab.truncated)
+            && shown < rows;
+        return if stopped {
+            format!("{} of {} rows", grouped(shown), grouped(rows))
+        } else if in_pages && offset > 0 && shown > 0 {
+            page_of(grouped(rows))
+        } else {
+            rows_of(&grouped(rows), rows)
+        };
+    }
+    let label = if model.active_document().kind.is_table() {
+        let seen = offset + shown;
+        match (model.data.has_more, model.data.estimated_total) {
+            (false, _) if offset > 0 && shown > 0 => page_of(grouped(seen)),
+            (false, _) => rows_of(&grouped(seen), seen),
+            (true, Some(total)) if total > seen => page_of(format!("~{}", compact(total))),
+            (true, _) => page_of(format!("{}+", grouped(seen))),
+        }
+    } else if model
+        .results
+        .tabs
+        .get(model.results.active)
+        .is_some_and(|tab| tab.paged)
+    {
+        // One page of the result: a full one may have more after it.
+        let seen = offset + shown;
+        if shown >= u64::from(model.data.page_limit) {
+            page_of(format!("{}+", grouped(seen)))
+        } else if offset > 0 && shown > 0 {
+            page_of(grouped(seen))
+        } else {
+            rows_of(&grouped(seen), seen)
+        }
+    } else if model
+        .results
+        .tabs
+        .get(model.results.active)
+        .is_some_and(|tab| tab.truncated)
+    {
+        format!("{}+ rows, limit reached", grouped(shown))
+    } else {
+        rows_of(&grouped(shown), shown)
+    };
+    if counted.is_some() {
+        let dots = if model.capabilities.unicode {
+            "…"
+        } else {
+            "..."
+        };
+        format!("{label}, counting{dots}")
+    } else {
+        label
+    }
+}
+
+/// `1 row`, `12 rows`.
+fn rows_of(number: &str, count: u64) -> String {
+    if count == 1 {
+        format!("{number} row")
+    } else {
+        format!("{number} rows")
+    }
+}
+
+/// `10000` as `10,000`.
+fn grouped(number: u64) -> String {
+    let digits = number.to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+/// An estimate as it reads best: `843`, `12.4K`, `4.3M`, `1.2B`. A number that rounds
+/// up to the next unit is written in it: 999,950 is `1.0M`, not `1000.0K`.
+fn compact(number: u64) -> String {
+    if number < 1_000 {
+        return number.to_string();
+    }
+    let mut value = number as f64;
+    for unit in ["K", "M", "B"] {
+        value /= 1_000.0;
+        if (value * 10.0).round() < 10_000.0 || unit == "B" {
+            return format!("{value:.1}{unit}");
+        }
+    }
+    unreachable!("B is the last unit")
+}
+
 fn result_banner(model: &Model) -> String {
     let mut extra = String::new();
     if let Some(tab) = model.results.tabs.get(model.results.active) {
@@ -132,34 +550,64 @@ fn result_banner(model: &Model) -> String {
             extra.push_str(reason);
         }
     }
-    if !model.data.crumbs.is_empty() {
-        extra.push_str(" crumbs:");
-        extra.push_str(&model.data.crumbs.len().to_string());
-    }
-    if model.data.page_offset > 0 || model.data.has_more {
-        extra.push_str(&format!(
-            " page:{}+{}",
-            model.data.page_offset, model.data.page_limit
-        ));
-    }
-    if model.data.has_more {
-        extra.push_str(" more");
+    // The rows a foreign key led to: the WHERE bar does not hold this filter, so the
+    // title says it.
+    if model.active_document().kind.is_table()
+        && let Some(filter) = &model.data.filter
+    {
+        extra.push_str(" WHERE ");
+        extra.push_str(&crate::screens::data_browser::describe_filter(filter));
     }
     extra
+}
+
+/// Each sorted column's marker -- `▲1`, `▼2`, or `^1`, `v2` without Unicode -- read from
+/// the ORDER BY that ran. Text no header can show marks nothing.
+fn sort_markers(model: &Model) -> impl Fn(&str) -> Option<String> {
+    let keys = model
+        .data
+        .bars
+        .applied
+        .order_by
+        .as_deref()
+        .filter(|_| crate::update::clause_bars_shown(model))
+        .and_then(|text| dexo_sql::order_keys(text, crate::screens::editor::editor_dialect(model)))
+        .unwrap_or_default();
+    let (up, down) = if model.capabilities.unicode {
+        ("▲", "▼")
+    } else {
+        ("^", "v")
+    };
+    move |name: &str| {
+        let at = keys.iter().position(|key| key.names(name))?;
+        let arrow = if keys[at].descending { down } else { up };
+        Some(format!("{arrow}{}", at + 1))
+    }
 }
 
 fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'static>> {
     let grid = &model.results;
     let col_indices = grid.visible_column_indices();
     let widths = grid.column_widths();
+    let sorted = sort_markers(model);
+    // A sorted column is as wide as its name and its marker.
     let natural_widths: Vec<u16> = col_indices
         .iter()
-        .map(|&index| widths.get(index).copied().unwrap_or(8))
+        .map(|&index| {
+            let width = widths.get(index).copied().unwrap_or(8);
+            let marked = grid.columns().get(index).and_then(|column| {
+                let marker = sorted(&column.name)?;
+                let wide = unicode_width::UnicodeWidthStr::width;
+                u16::try_from(wide(column.name.as_str()) + 1 + wide(marker.as_str())).ok()
+            });
+            width.max(marked.unwrap_or(0))
+        })
         .collect();
     let (cell_widths, overflowed) = allocate_column_widths(&natural_widths, area.width as usize);
     let mut header = Vec::new();
     let mut remaining = area.width as usize;
     let header_style = model.theme.header(model.capabilities);
+    let current_column = grid.selection().map(|(_, col)| col);
     for (&index, &width) in col_indices.iter().zip(cell_widths.iter()) {
         let Some(column) = grid.columns().get(index) else {
             continue;
@@ -172,13 +620,28 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
             HitTarget::GridHeader(index),
             Rect::new(header_x, area.y, cell_width as u16, 1),
         );
+        // The marker stays whole; the name gives way to it.
+        let label = match sorted(&column.name) {
+            Some(marker) => {
+                let room = cell_width
+                    .saturating_sub(unicode_width::UnicodeWidthStr::width(marker.as_str()) + 1);
+                format!("{} {marker}", truncate_cell(&column.name, room))
+            }
+            None => column.name.clone(),
+        };
+        // The current column -- the one `s` sorts -- is marked without colour too.
+        let style = if current_column == Some(index) {
+            header_style.add_modifier(ratatui::style::Modifier::REVERSED)
+        } else {
+            header_style
+        };
         header.push(Span::styled(
             format!(
                 "{:width$}",
-                truncate_cell(&column.name, cell_width),
+                truncate_cell(&label, cell_width),
                 width = cell_width
             ),
-            header_style,
+            style,
         ));
         remaining = remaining.saturating_sub(cell_width);
         if remaining > 0 {
@@ -195,6 +658,10 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
     let active_style = model.theme.active_row(model.capabilities);
     let selected_style = model.theme.selected_row(model.capabilities);
     let cursor_row = grid.cursor_row();
+    let selected_column = match grid.kind {
+        crate::model::GridSelection::Column { col } => Some(col),
+        _ => None,
+    };
     for (visible_i, row) in grid
         .visible_slice(grid.viewport().row_offset, body_height)
         .into_iter()
@@ -215,8 +682,18 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
             model.data.row_changes.get(&row.source_index),
             Some(dexo_app::data::RowEditState::Deleted)
         );
+        let is_pending_insert = matches!(
+            model.data.row_changes.get(&row.source_index),
+            Some(dexo_app::data::RowEditState::Inserted)
+        );
         let row_style = if is_pending_delete {
-            model.theme.style(Role::Error, model.capabilities)
+            // Struck out, so it reads as going away with no colour at all.
+            model
+                .theme
+                .style(Role::Error, model.capabilities)
+                .add_modifier(ratatui::style::Modifier::CROSSED_OUT)
+        } else if is_pending_insert {
+            model.theme.style(Role::Success, model.capabilities)
         } else if is_active {
             active_style
         } else if is_sel {
@@ -225,6 +702,12 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
             model
                 .theme
                 .zebra(row.source_index % 2 == 1, model.capabilities)
+        };
+        // The cursor on a staged row would otherwise vanish into its colour.
+        let row_style = if (is_pending_delete || is_pending_insert) && (is_active || is_sel) {
+            row_style.add_modifier(ratatui::style::Modifier::REVERSED)
+        } else {
+            row_style
         };
         let (row_widths, row_overflowed) = if is_active || is_sel {
             let marker = sel_marker.chars().count() + 1;
@@ -256,13 +739,31 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
                 },
                 Rect::new(cell_x, hit_y, cell_width as u16, 1),
             );
+            // A column picked with `c` is drawn down its length: nothing else says that
+            // the next copy takes the column, not the row.
+            let mut cell_style = if selected_column == Some(index) && !is_pending_delete {
+                selected_style
+            } else {
+                row_style
+            };
+            // NULL and the empty string are drawn as what they are, dim and slanted, so
+            // neither can be taken for the text `NULL` or for a blank.
+            let shown = crate::model::cell_text(value, model.capabilities.unicode);
+            if matches!(value, dexo_driver_api::DbValue::Null)
+                || matches!(value, dexo_driver_api::DbValue::Text(text) if text.is_empty())
+            {
+                cell_style = cell_style.patch(crate::widgets::row_detail::null_style(
+                    &model.theme,
+                    model.capabilities,
+                ));
+            }
             spans.push(Span::styled(
                 format!(
                     "{:width$}",
-                    truncate_cell(&format_value(value), cell_width),
+                    truncate_cell(&shown, cell_width),
                     width = cell_width
                 ),
-                row_style,
+                cell_style,
             ));
             remaining = remaining.saturating_sub(cell_width);
             cell_x = cell_x.saturating_add(cell_width as u16);
@@ -277,7 +778,40 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
         }
         lines.push(Line::from(spans));
     }
+    // Columns and no rows: the header alone looked like a grid that had not loaded.
+    if grid.row_count() == 0 && !grid.columns().is_empty() {
+        lines.push(Line::styled(
+            "no rows",
+            model.theme.style(Role::Muted, model.capabilities),
+        ));
+    }
     lines
+}
+
+/// Rows `text` takes in a pane `width` columns wide, wrapped at spaces the way the
+/// paragraph wraps it; a word wider than the pane breaks across rows.
+fn wrapped_rows(text: &str, width: usize) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    if width == 0 {
+        return 1;
+    }
+    let mut rows = 1;
+    let mut used = 0;
+    for word in text.split_inclusive(' ') {
+        let full = word.width();
+        let bare = word.trim_end().width();
+        if used + bare <= width {
+            used = (used + full).min(width);
+            continue;
+        }
+        if used > 0 {
+            rows += 1;
+        }
+        let extra = bare.saturating_sub(1) / width;
+        rows += extra;
+        used = (full - extra * width).min(width);
+    }
+    rows
 }
 
 /// The log, oldest first so the newest is where you land after scrolling down -- and so a
@@ -318,6 +852,19 @@ fn message_lines(model: &Model) -> Vec<Line<'static>> {
 
 #[cfg(test)]
 mod tests {
+    /// Estimates roll over to the next unit when they round up to it, and one row is a
+    /// row.
+    #[test]
+    fn labels_read_right_at_their_edges() {
+        assert_eq!(super::compact(999), "999");
+        assert_eq!(super::compact(12_400), "12.4K");
+        assert_eq!(super::compact(999_949), "999.9K");
+        assert_eq!(super::compact(999_950), "1.0M");
+        assert_eq!(super::compact(999_999_999), "1.0B");
+        assert_eq!(super::rows_of("1", 1), "1 row");
+        assert_eq!(super::rows_of("2", 2), "2 rows");
+    }
+
     use super::*;
     use crate::action::Action;
     use crate::model::{GridModel, truncate_cell};
@@ -862,6 +1409,18 @@ mod tests {
         assert!(view.contains("info "), "{view}");
         assert!(view.contains("warn "), "{view}");
         assert!(view.contains("error"), "{view}");
+    }
+
+    /// A write that returns no rows says how many it changed, in the pane and its title.
+    #[test]
+    fn a_write_says_how_many_rows_it_changed() {
+        let mut model = Model::default();
+        *model.results = GridModel::default();
+        model.results.tabs[0].rows_affected = Some(1_204);
+        let view = render_to_string(&model, 120, 40);
+        assert_eq!(view.matches("1,204 rows affected").count(), 2, "{view}");
+        model.results.tabs[0].rows_affected = Some(1);
+        assert!(render_to_string(&model, 120, 40).contains("Results (1 row affected)"));
     }
 
     /// The log is the one list in the pane that only grows, so it scrolls on its own

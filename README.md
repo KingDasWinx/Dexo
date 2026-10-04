@@ -1,7 +1,6 @@
 <div align="center">
-  <img src="assets/dexo_icon.png" width="128" alt="Dexo">
   <h1>Dexo</h1>
-  <p>A local-first database workbench for the terminal.</p>
+  <p>A terminal database workbench with guardrails for AI agents.</p>
 
   <p>
     <a href="https://github.com/kingdaswinx/Dexo/releases/latest"><img src="https://img.shields.io/github/v/release/kingdaswinx/Dexo" alt="Release"></a>
@@ -11,43 +10,73 @@
   </p>
 </div>
 
-Dexo is a keyboard-driven workbench for PostgreSQL and MySQL. It ships as a terminal UI, a command-line interface, and a local MCP server, all built on the same application layer. Everything it stores stays on your machine: workspace state lives in a local SQLite database, passwords live in the operating system's keychain, and the only request Dexo makes on its own is a once-a-day check for a newer release.
+```sh
+brew install kingdaswinx/tap/dexo   # or any install below
+dexo --demo                         # a sample shop, nothing to connect to
+```
+
+Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, with DuckDB as a build option: a terminal UI, a command line and an MCP server for AI agents. A `DELETE` without `WHERE` on production waits for you to type the connection's name, a read-only connection is read-only on the server too, and an agent writes only through a grant you make. Everything stays on your machine.
 
 <div align="center">
-  <img src="assets/demo.gif" alt="Dexo demo: connecting, browsing a table, writing SQL with autocomplete, opening a record, and switching to the light theme">
+  <img src="assets/guardrails.gif" width="100%" alt="Dexo holding a DELETE without WHERE on the production connection shop-prod: a wrong name runs nothing, the full name runs it and four rows are deleted; then an AI agent's UPDATE waits on the Agents screen until it is approved">
+</div>
+
+<div align="center">
+  <img src="assets/demo.gif" width="100%" alt="Dexo demo: connecting, browsing a table, writing SQL with autocomplete, opening a record, and switching to the light theme">
 </div>
 
 ## Features
 
-- **Workbench** — catalog explorer, SQL editor, results grid, inspector, and a command palette. Every document belongs to a connection, keeps its own results, and reconnects when you return to it. Layouts persist per project.
-- **Drivers** — official PostgreSQL and MySQL drivers compiled into the binary, with TLS, SSH tunnels, and SOCKS5/HTTP proxies.
-- **Query execution** — run a statement, a selection, or a whole script, with streamed pages, cancellation, and explicit transactions.
-- **Data and schema** — lazily loaded catalog, editable grids with a review step before any write, object forms, DDL preview, and schema diff across live databases, saved snapshots, and files.
-- **Data transfer** — streaming import and export, plus native backup and restore that never overwrite the source.
-- **Command line** — query, inspect, diff, export, import, explain, and diagnose without opening the TUI.
-- **MCP server** — stdio only. Profiles start disabled and read-only; write tools appear only while a temporary grant is active.
-- **Local-first** — no telemetry, crash recovery for unsaved work, and diagnostics that are generated only on request and previewed before they are written.
+- **Workbench**: catalog tree, SQL editor with Vim mode and live diagnostics, results grid and a command palette.
+- **Data**: insert and delete rows in the grid with a review before anything is written, filter and sort, import, export, backup and restore.
+- **Schema**: object forms with a DDL preview, and schema diff between databases, snapshots and files.
+- **Query plans**: EXPLAIN drawn as a tree; on Postgres with hypopg, try an index before building it.
+- **Connections**: TLS, SSH tunnels, proxies, password managers, and databases found in Docker.
+- **AI agents**: an MCP server with read-only profiles, allowlists, timed write grants and approval for each write.
+- **Command line**: query, export, import, explain and diff from scripts, with the same guardrails.
+- **Local-first**: no telemetry; passwords stay in the operating system's keychain or your password manager.
 
 ## Screenshots
 
-<table>
-  <tr>
-    <td width="50%"><img src="assets/screenshots/table-data.webp" alt="Browsing a table"><br><sub><b>Table data.</b> Open a table from the tree; the grid pages on demand and the console logs each fetch.</sub></td>
-    <td width="50%"><img src="assets/screenshots/record.webp" alt="Record detail"><br><sub><b>Record detail.</b> Enter on a row shows every field, with copy, filter, and refresh actions.</sub></td>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/actions.webp" alt="Connection actions"><br><sub><b>Node actions.</b> <kbd>a</kbd> on any tree node lists what it supports, with each shortcut.</sub></td>
-    <td><img src="assets/screenshots/palette.webp" alt="Command palette"><br><sub><b>Command palette.</b> <kbd>Ctrl</kbd>+<kbd>P</kbd> reaches every command, grouped by area.</sub></td>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/connection-form.webp" alt="Add connection form"><br><sub><b>Connections.</b> TLS, SSH, and proxy settings sit under advanced options.</sub></td>
-    <td><img src="assets/screenshots/help.webp" alt="Keybindings reference"><br><sub><b>Keybindings.</b> <kbd>F1</kbd> lists the active keymap for each pane.</sub></td>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/workbench-light.webp" alt="Light theme"><br><sub><b>Light theme.</b> The same workbench in light mode with the violet accent.</sub></td>
-    <td><img src="assets/screenshots/settings-light.webp" alt="Settings"><br><sub><b>Settings.</b> Theme, accent, keymap (Default, Vim, Emacs), mouse, animation, and Unicode.</sub></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="assets/screenshots/table-data.webp" width="100%" alt="Browsing a table"><br>
+  <sub>Browse a table: the grid pages on demand.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/record.webp" width="100%" alt="Record detail"><br>
+  <sub><kbd>Enter</kbd> on a row shows every field.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/palette.webp" width="100%" alt="Command palette"><br>
+  <sub><kbd>Ctrl</kbd>+<kbd>P</kbd> reaches every command.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/actions.webp" width="100%" alt="Node actions"><br>
+  <sub><kbd>a</kbd> on a tree node lists what it can do.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/connection-form.webp" width="100%" alt="Connection form"><br>
+  <sub>TLS, SSH and proxies under advanced options.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/help.webp" width="100%" alt="Keybindings"><br>
+  <sub><kbd>F1</kbd> lists every key.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/workbench-light.webp" width="100%" alt="Light theme"><br>
+  <sub>The light theme, with the violet accent.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/settings-light.webp" width="100%" alt="Settings"><br>
+  <sub>Theme, accent, keymap and more, applied at once.</sub>
+</p>
 
 ## Installation
 
@@ -83,66 +112,53 @@ sudo apt install ./dexo_*_amd64.deb
 sudo dnf install ./dexo-*.x86_64.rpm
 ```
 
+**Arch Linux** — the community-maintained [`dexo-bin`](https://aur.archlinux.org/packages/dexo-bin) package in the AUR:
+
+```sh
+yay -S dexo-bin    # or paru -S dexo-bin
+```
+
 **From source** (Rust 1.93 or later)
 
 ```sh
 cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo
 ```
 
+The release binaries leave DuckDB out: its engine is large. Build it in with the `duckdb` feature:
+
+```sh
+cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo --features duckdb
+```
+
 Every release also ships archives for each platform, SHA-256 checksums, and a CycloneDX SBOM. See the [install guide](docs/src/install.md) for details.
 
 ## Getting started
 
-Start the workbench:
-
 ```sh
-dexo
-```
-
-Add a connection from the sidebar with <kbd>n</kbd>, or from the command line. Passwords are stored in the operating system's keychain, never in the local database.
-
-```sh
+dexo                                         # start the workbench
+dexo postgres://user@localhost:5432/shop     # open a database from its URL, without saving it
 dexo connections add --name local --driver postgres --host 127.0.0.1 --username postgres --database postgres
-dexo query --connection local --sql "select version()" --non-interactive
+dexo query --connection local --sql "select version()"
 ```
 
 | Key | Action |
 | --- | --- |
 | <kbd>Ctrl</kbd>+<kbd>P</kbd> | Command palette |
-| <kbd>Ctrl</kbd>+<kbd>Enter</kbd> | Run the statement under the cursor |
-| <kbd>Ctrl</kbd>+<kbd>N</kbd> / <kbd>Ctrl</kbd>+<kbd>W</kbd> | New / close document |
-| <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>O</kbd> | Save / open a SQL file |
-| <kbd>Ctrl</kbd>+<kbd>R</kbd> | Refresh the table in the grid |
-| <kbd>Alt</kbd>+<kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>0</kbd> | Focus sidebar, editor, results, tabs |
-| <kbd>F1</kbd> | Keybindings reference |
+| <kbd>Ctrl</kbd>+<kbd>Enter</kbd> or <kbd>Ctrl</kbd>+<kbd>J</kbd> | Run the statement under the cursor (<kbd>Ctrl</kbd>+<kbd>J</kbd> wherever the terminal sends <kbd>Ctrl</kbd>+<kbd>Enter</kbd> as <kbd>Enter</kbd>, as tmux does) |
+| <kbd>F1</kbd> | Every key, for the keymap in use (Default, Vim or Emacs) |
 | <kbd>Ctrl</kbd>+<kbd>Q</kbd> | Quit |
 
-The Vim and Emacs keymaps are available under Settings.
-
-## Command line
-
-Running `dexo` without a subcommand starts the TUI. Subcommands share the same application layer.
+## AI agents
 
 ```sh
-dexo connections list
-dexo query --connection local --sql "select 1" --format jsonl --non-interactive
-dexo schema snapshot --connection local --name before
-dexo schema diff --from before --to after
-dexo doctor --json
+dexo mcp profile create --name assistant
+dexo mcp profile set --name assistant --connection local --query-mode raw-read
+dexo mcp allow --profile assistant --selector 'postgres.public.*'
+dexo mcp profile enable --name assistant --confirm
+dexo mcp setup --client claude-code --profile assistant   # or codex, cursor, claude-desktop
 ```
 
-Also available: `run`, `inspect`, `export`, `import`, `explain`, `sessions`, `config`, `mcp`, and `completion`. With `--non-interactive`, Dexo never prompts, and destructive actions require an explicit confirmation flag.
-
-## MCP server
-
-Dexo is an MCP server only, over stdio; it opens no network listener.
-
-```sh
-dexo mcp config print --profile assistant
-dexo mcp serve --profile assistant
-```
-
-Profiles start disabled and read-only. Write tools require a temporary grant created from the TUI or the CLI. The MCP process cannot create grants, list objects outside its allowlist, or write secrets to stdout. Audit logs stay local and sanitized.
+The agent reads only what the profile allows. To let it write, make a grant for a while; with `--ask`, each write waits for your approval on the Agents screen (<kbd>Ctrl</kbd>+<kbd>G</kbd> <kbd>a</kbd>). See the [MCP guide](docs/src/mcp.md).
 
 ## Compatibility
 
@@ -150,47 +166,20 @@ Profiles start disabled and read-only. Write tools require a temporary grant cre
 | --- | --- |
 | PostgreSQL | 14.18, 16.9, 17.5 |
 | MySQL | 8.0.42, 8.4.5, 9.3.0 |
+| MariaDB | 10.11, 11.4 |
+| SQLite | 3.53.2, built in |
+| DuckDB | 1.5.6, built in with the `duckdb` feature |
 
-Other server versions may work, but Dexo reports them as unverified. MySQL 5.7 is end-of-life. MariaDB and other PostgreSQL derivatives are not supported until they have a dedicated driver and test matrix.
+Linux, macOS and Windows.
 
-Dexo is tested on Linux, macOS, and Windows in CI. Each driver runs its integration suite against the database versions above.
+## Privacy
 
-## Security and privacy
-
-- Secrets are stored in the platform keychain and referenced only by an opaque identifier.
-- TLS verifies certificates by default; disabling verification is an explicit, visible setting.
-- SSH tunnels check known hosts, and a changed host key requires confirmation.
-- There is no telemetry. Diagnostics are generated only on request, previewed, and written locally.
-- Once a day, Dexo asks GitHub which release is the latest, to tell you when an update is out. The request carries only the running version in its `User-Agent`. Turn it off under Settings → Updates, or with `DEXO_NO_UPDATE_CHECK=1`.
-
-Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
-
-## Architecture
-
-The TUI, CLI, and MCP server are adapters over `dexo-app`. Drivers implement shared contracts and are registered only in the `dexo` binary; there is no plugin ABI.
-
-| Crate | Role |
-| --- | --- |
-| `dexo` | Binary and official driver registry |
-| `dexo-app` | Use cases |
-| `dexo-tui`, `dexo-cli`, `dexo-mcp` | Adapters |
-| `dexo-driver-postgres`, `dexo-driver-mysql` | Official drivers |
-| `dexo-sql`, `dexo-storage`, `dexo-secrets`, `dexo-transport` | Shared engines |
-
-Local state is a single SQLite database with versioned migrations.
+No telemetry. Passwords live in the operating system's keychain or come from your password manager, never from Dexo's files. Once a day Dexo asks GitHub for the latest release, to tell you about updates; turn it off under Settings → Updates or with `DEXO_NO_UPDATE_CHECK=1`. Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
 ## Documentation
 
-- [User guide](docs/src/SUMMARY.md)
-- [Changelog](CHANGELOG.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
-- [Code of conduct](CODE_OF_CONDUCT.md)
-
-## Reporting bugs
-
-Found a bug or something that behaves oddly? Tell us through the [bug report form](https://forms.gle/gw1i6tGgVsJsgCxGA). Security issues go privately through [SECURITY.md](SECURITY.md) instead.
+[User guide](docs/src/SUMMARY.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Bug report form](https://forms.gle/gw1i6tGgVsJsgCxGA)
 
 ## License
 
-Dexo is dual-licensed under the MIT License or the Apache License 2.0, at your option.
+MIT or Apache 2.0, at your option.

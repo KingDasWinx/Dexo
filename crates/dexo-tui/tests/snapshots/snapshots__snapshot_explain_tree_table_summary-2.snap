@@ -2,12 +2,12 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 100, 30)"
 ---
-demo  local  public                                                                                 
-┌  Sidebar─────────────────┐ scratch.sql ×  +                                                       
+[Workbench] Connections  Agents  Server  History   demo  local  public                              
+┌  Sidebar─────────────────┐ local·scratch.sql ×  +                                                 
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
-│  ● local▾  [offline]     ││   1▸select 1                                                         │
-│>   ▸ public              ││                                                                      │
-│      mysql.users [restric││                                                                      │
+│> ● local▾                ││   1▸select 1                                                         │
+│    ▸ public              ││                                                                      │
+│      mysql.u… [no access]││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
@@ -19,16 +19,16 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          │└──────────────────────────────────────────────────────────────────────┘
-│                          │┌  Results (0)─────────────────────────────────────────────────────────┐
+│                          │┌  Results─────────────────────────────────────────────────────────────┐
 │                          ││ Grid [Explain] Messages  │ Table                                     │
-│                          ││explain captured_at=1710000000 paused=false analyze=true confirmed=tru│
-│                          ││pathkindrelationcostrows_estrows_acttime_msloopsheuristic             │
-│                          ││0Seq Scanitems22.51010000.181actual rows >> estimate (heuristic)      │
-│                          ││raw_bytes=59                                                          │
+│                          ││Analyzed · 0.21 ms execution · 0.04 ms planning                       │
+│                          ││                              self     time  rows est  rows act  loops│
+│                          ││Seq Scan on items  rows …  0.18 ms  0.18 ms        10      1000      1│
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-local  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                       Ctrl+P  F1
+local  Ctrl+J run  Ctrl+N new sql  Ctrl+W close                                           Ctrl+P  F1

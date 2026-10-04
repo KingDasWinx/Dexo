@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 
 use dexo_driver_api::{
-    ConnectRequest, ConnectionSecrets, RouteRequest, SshRequest, TlsRequest, TransportRequest,
-    split_endpoint,
+    ConnectRequest, ConnectionSecrets, DriverDescriptor, RouteRequest, SshRequest, TlsRequest,
+    TransportRequest, split_endpoint,
 };
+use dexo_secrets::{SecretError, SecretStore};
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -73,12 +75,100 @@ impl ConnectionProfile {
         }
     }
 
+    /// The command that prints this connection's password, when it takes the password
+    /// from a password manager instead of the keychain.
+    pub fn password_command(&self) -> Option<&str> {
+        self.config
+            .get("password_command")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+    }
+
+    /// Whether the driver opens a file (SQLite) rather than dialling a host.
+    pub fn is_file(&self) -> bool {
+        DriverDescriptor::for_id(&self.driver).is_some_and(|descriptor| descriptor.file)
+    }
+
+    /// The database password `store` holds for this connection. A file has none, so it
+    /// is never looked up and nothing ever asks for it.
+    pub fn password(&self, store: &dyn SecretStore) -> Result<Option<SecretString>, SecretError> {
+        if self.is_file() {
+            return Ok(Some(SecretString::from(String::new())));
+        }
+        store.get(self.secret_ref.as_str())
+    }
+
+    /// The user the connection logs in as; a file has none.
+    pub fn username(&self) -> Option<String> {
+        if self.is_file() {
+            return None;
+        }
+        config_str(&self.config, &["username", "user"])
+    }
+
+    /// The key file the SSH tunnel authenticates with, when it has one.
+    pub fn ssh_key_file(&self) -> Option<std::path::PathBuf> {
+        match parse_route(&self.config) {
+            Ok(RouteRequest::Ssh(ssh)) => ssh.key_file,
+            _ => None,
+        }
+    }
+
+    /// Where the passphrase of the SSH key is kept, next to the database password's entry.
+    pub fn ssh_passphrase_key(&self) -> Option<String> {
+        self.ssh_key_file()
+            .map(|_| format!("{}:ssh_passphrase", self.secret_ref.as_str()))
+    }
+
+    /// Where the connection dials, as `host:port` -- or the file it opens -- for a message
+    /// that says what did not answer.
+    pub fn target(&self) -> String {
+        if self.is_file() {
+            return config_str(&self.config, &["path"]).unwrap_or_default();
+        }
+        dial_target(&self.config, &self.driver)
+            .map(|(host, port, _)| format!("{host}:{port}"))
+            .unwrap_or_default()
+    }
+
+    /// Where the SSH password is kept, when the connection tunnels through SSH without a
+    /// key file and so needs one: next to the database password's entry, under a key
+    /// derived from it, so deleting the connection can find both.
+    pub fn ssh_password_key(&self) -> Option<String> {
+        match parse_route(&self.config) {
+            Ok(RouteRequest::Ssh(ssh)) if ssh.key_file.is_none() => {
+                Some(format!("{}:ssh_password", self.secret_ref.as_str()))
+            }
+            _ => None,
+        }
+    }
+
+    /// A file's request is its `config.path` and nothing else: no host, user or secret,
+    /// and no transport to validate. A policy's verified-TLS requirement guards a network
+    /// path, so production and staging do not refuse a file for having none.
     pub fn connect_request(
         &self,
         secrets: impl Into<ConnectionSecrets>,
     ) -> Result<(ConnectRequest, ConnectionPolicy), AppError> {
         let secrets = secrets.into();
         let policy = ConnectionPolicy::resolve(&self.environment, &self.policy)?;
+        if self.is_file() {
+            let path = config_str(&self.config, &["path"]).ok_or_else(|| {
+                AppError::new(
+                    ErrorCategory::Configuration,
+                    "the path of the database file is required",
+                )
+            })?;
+            let request = ConnectRequest::new(
+                path,
+                None,
+                String::new(),
+                SecretString::from(String::new()),
+                policy.read_only,
+            );
+            return Ok((request, policy));
+        }
         let transport = transport_from_config(&self.config, &self.driver)?;
         transport
             .validate_for_policy(policy.require_verified_tls)
@@ -156,6 +246,18 @@ fn endpoint_from_config(config: &serde_json::Value, driver: &str) -> Result<Stri
         ));
     }
     Ok(format!("{host}:{port}"))
+}
+
+/// The host and port the profile dials -- an `endpoint`, or `host` and `port` with the
+/// driver's default port -- and whether it goes through SSH or a proxy to get there.
+pub(crate) fn dial_target(
+    config: &serde_json::Value,
+    driver: &str,
+) -> Result<(String, u16, bool), AppError> {
+    let endpoint = endpoint_from_config(config, driver)?;
+    let (host, port) = split_endpoint(&endpoint).map_err(map_driver_config)?;
+    let routed = !matches!(parse_route(config)?, RouteRequest::Direct);
+    Ok((host, port, routed))
 }
 
 fn transport_from_config(
@@ -272,6 +374,20 @@ mod tests {
     }
 
     #[test]
+    fn a_tunnel_without_a_key_file_keeps_its_password_apart() {
+        let mut profile = sample("local");
+        assert_eq!(profile.ssh_password_key(), None);
+        profile.config["ssh"] =
+            serde_json::json!({"host": "bastion", "port": 22, "username": "me"});
+        assert_eq!(
+            profile.ssh_password_key().as_deref(),
+            Some("r:ssh_password")
+        );
+        profile.config["ssh"]["key_file"] = serde_json::json!("/home/me/.ssh/id");
+        assert_eq!(profile.ssh_password_key(), None);
+    }
+
+    #[test]
     fn connect_request_builds_host_port_endpoint() {
         let (request, policy) = sample("local")
             .connect_request(SecretString::from("s"))
@@ -325,6 +441,27 @@ mod tests {
         );
         let error = profile.connect_request(secret_map()).unwrap_err();
         assert_eq!(error.category(), ErrorCategory::Configuration);
+    }
+
+    #[test]
+    fn a_file_needs_no_host_user_secret_or_tls() {
+        let profile = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::nil()),
+            None,
+            "shop",
+            "sqlite",
+            "production",
+            serde_json::json!({ "path": "/data/shop.db" }),
+            SecretRef::new("r".into()),
+        );
+        let (request, policy) = profile
+            .connect_request(dexo_driver_api::ConnectionSecrets::default())
+            .unwrap();
+        assert_eq!(request.endpoint, "/data/shop.db");
+        assert!(request.database.is_none() && request.username.is_empty());
+        assert!(policy.require_verified_tls);
+        let store = dexo_secrets::MemorySecretStore::default();
+        assert!(profile.password(&store).unwrap().is_some());
     }
 
     #[test]

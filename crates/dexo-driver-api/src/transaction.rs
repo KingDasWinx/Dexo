@@ -23,6 +23,13 @@ pub trait TransactionControl: Send + Sync {
     async fn rollback_to(&self, name: &str) -> Result<(), DriverError>;
     async fn release_savepoint(&self, name: &str) -> Result<(), DriverError>;
     fn state(&self) -> TransactionState;
+
+    /// What the server said about the last COMMIT or ROLLBACK that the person should be
+    /// told, once: MySQL ends a rollback "successfully" and warns that MyISAM tables kept
+    /// their changes.
+    fn take_notice(&self) -> Option<String> {
+        None
+    }
 }
 
 pub fn validate_savepoint(name: &str) -> Result<(), DriverError> {

@@ -20,12 +20,17 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
+toml_edit = "0.25.13"
+indexmap = { version = "2.14", features = ["serde"] }
 uuid.workspace = true
 sha2.workspace = true
 csv.workspace = true
 encoding_rs.workspace = true
 tempfile.workspace = true
 image.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 dexo-test-support = { path = "../dexo-test-support" }

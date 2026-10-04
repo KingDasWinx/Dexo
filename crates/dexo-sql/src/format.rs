@@ -8,6 +8,18 @@ use crate::statement::{segments, split_statements};
 /// written if the result would not mean the same thing, so one the formatter cannot
 /// handle never costs the others. `FormatUnsafe` only when none could be formatted.
 pub fn format_sql(sql: &str, dialect: Dialect) -> Result<String, SqlError> {
+    format_sql_with(sql, dialect, Indent::Spaces(2))
+}
+
+/// One level of indentation in formatted SQL.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Indent {
+    Spaces(u8),
+    Tab,
+}
+
+/// [`format_sql`] with `indent` for each level, as an editor asks for it.
+pub fn format_sql_with(sql: &str, dialect: Dialect, indent: Indent) -> Result<String, SqlError> {
     let mut pieces = Vec::new();
     let mut formatted_any = false;
     let mut kept_any = false;
@@ -16,7 +28,7 @@ pub fn format_sql(sql: &str, dialect: Dialect) -> Result<String, SqlError> {
         if text.is_empty() {
             continue;
         }
-        match format_statement(text, dialect) {
+        match format_statement(text, dialect, indent) {
             Some(formatted) => {
                 formatted_any = true;
                 pieces.push(formatted);
@@ -37,7 +49,7 @@ pub fn format_sql(sql: &str, dialect: Dialect) -> Result<String, SqlError> {
     Ok(out)
 }
 
-fn format_statement(text: &str, dialect: Dialect) -> Option<String> {
+fn format_statement(text: &str, dialect: Dialect, indent: Indent) -> Option<String> {
     // sqlformat misreads string bodies it does not know -- `$$it's$$` derails it for the
     // rest of the statement -- so it never sees one: each literal goes in as a plain
     // word and comes back out afterwards.
@@ -60,14 +72,17 @@ fn format_statement(text: &str, dialect: Dialect) -> Option<String> {
     masked.push_str(&text[at..]);
 
     let options = sqlformat::FormatOptions {
-        indent: sqlformat::Indent::Spaces(2),
+        indent: match indent {
+            Indent::Spaces(width) => sqlformat::Indent::Spaces(width),
+            Indent::Tab => sqlformat::Indent::Tabs,
+        },
         // Capitals are applied below, to reserved words only: sqlformat's own list
         // takes in names like `level`, and a MySQL table name is case-sensitive.
         uppercase: None,
         lines_between_queries: 1,
         dialect: match dialect {
-            Dialect::Postgres => sqlformat::Dialect::PostgreSql,
-            Dialect::Mysql => sqlformat::Dialect::Generic,
+            Dialect::Postgres | Dialect::Duckdb => sqlformat::Dialect::PostgreSql,
+            Dialect::Mysql | Dialect::Sqlite => sqlformat::Dialect::Generic,
         },
         ..Default::default()
     };
@@ -150,6 +165,17 @@ mod tests {
              o.user_id = u.id\nWHERE\n  u.id IN (\n    SELECT\n      user_id\n    FROM\n      \
              vip\n  )\nGROUP BY\n  u.id\nORDER BY\n  total DESC"
         );
+    }
+
+    /// An editor's indent is kept: its width in spaces, or a tab.
+    #[test]
+    fn the_indent_is_the_one_asked_for() {
+        use super::{Indent, format_sql_with};
+        let sql = "select a from t";
+        let with = |indent| format_sql_with(sql, Dialect::Postgres, indent).unwrap();
+        assert_eq!(with(Indent::Spaces(4)), "SELECT\n    a\nFROM\n    t");
+        assert_eq!(with(Indent::Tab), "SELECT\n\ta\nFROM\n\tt");
+        assert_eq!(with(Indent::Spaces(2)), format(sql));
     }
 
     /// sqlformat alone turned `$$it's$$` into `$$it ' s` and scrambled everything after.

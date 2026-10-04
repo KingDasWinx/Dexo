@@ -11,6 +11,7 @@ fn sample_plan() -> ExplainPlan {
         root: PlanNode {
             kind: "Seq Scan".into(),
             relation: Some("items".into()),
+            detail: None,
             estimates: PlanMetrics {
                 cost: Some(22.5),
                 rows: Some(10.0),
@@ -96,16 +97,17 @@ fn explain_and_sessions_args_parse() {
 fn explain_cli_goldens_tree_table_summary_and_compare() {
     let plan = sample_plan();
     let tree = render_tree(&plan);
-    assert!(tree.contains("Seq Scan"));
-    assert!(tree.contains("actual rows >> estimate (heuristic)"));
+    assert!(tree.contains("Seq Scan on items"));
+    assert!(tree.contains("rows off x100"));
     let table = render_table(&plan);
-    assert!(table.contains("Seq Scan\titems"));
+    assert!(table.contains("Seq Scan on items"));
     let summary = render_summary(&plan);
-    assert!(summary.contains("scans=1"));
+    assert!(summary.contains("1 node · 1 scan"));
     let other = ExplainPlan {
         root: PlanNode {
             kind: "Index Scan".into(),
             relation: Some("items".into()),
+            detail: None,
             ..plan.root.clone()
         },
         ..plan.clone()

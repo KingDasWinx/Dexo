@@ -6,6 +6,14 @@ use tokio_postgres::error::ErrorPosition;
 /// refused connection) keeps its own text instead of a generic "query failed".
 pub fn map_error(error: tokio_postgres::Error) -> DriverError {
     if error.code().is_some_and(|code| code.code() == "57014") {
+        // The server's own statement_timeout cancels the statement too: that is a
+        // timeout, not a cancel the person asked for.
+        if error
+            .as_db_error()
+            .is_some_and(|db| db.message().contains("statement timeout"))
+        {
+            return DriverError::new(DriverErrorCategory::Timeout, "query timed out");
+        }
         return DriverError::new(DriverErrorCategory::Cancelled, "query cancelled");
     }
     let Some(db) = error.as_db_error() else {
@@ -30,8 +38,19 @@ fn category(error: &tokio_postgres::Error) -> DriverErrorCategory {
         return DriverErrorCategory::Network;
     }
     if let Some(db) = error.as_db_error() {
-        if db.code().code() == "42501" {
+        let code = db.code().code();
+        if code == "42501" {
             return DriverErrorCategory::Permission;
+        }
+        // Class 28 is a rejected login (a wrong password is 28P01); class 08 a
+        // connection that failed. Neither is the statement's fault.
+        if code.starts_with("28") {
+            return DriverErrorCategory::Authentication;
+        }
+        // 57P01 to 57P03: the server ended this session, shut down or is not taking
+        // connections -- the statement is not what failed.
+        if code.starts_with("08") || matches!(code, "57P01" | "57P02" | "57P03") {
+            return DriverErrorCategory::Network;
         }
         return DriverErrorCategory::Syntax;
     }

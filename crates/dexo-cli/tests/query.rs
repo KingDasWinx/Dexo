@@ -58,3 +58,60 @@ fn continue_on_error_flag_parses() {
         })
     ));
 }
+
+fn events(rows: Vec<Vec<dexo_driver_api::DbValue>>) -> Vec<dexo_driver_api::QueryEvent> {
+    use dexo_driver_api::{ColumnMeta, QueryEvent, RowBatch};
+    let column = |name: &str| ColumnMeta {
+        name: name.into(),
+        type_name: "text".into(),
+        nullable: true,
+    };
+    vec![
+        QueryEvent::Columns(vec![column("name"), column("note")]),
+        QueryEvent::Rows(RowBatch { rows }),
+    ]
+}
+
+fn render(format: OutputFormat, rows: Vec<Vec<dexo_driver_api::DbValue>>) -> String {
+    let mut stdout = Vec::new();
+    present_events(format, &events(rows), &mut stdout, &mut Vec::new()).unwrap();
+    String::from_utf8(stdout).unwrap()
+}
+
+/// CSV quotes a value holding a comma, a quote or a line break, and tells NULL from an
+/// empty string, as `dexo export` does.
+#[test]
+fn csv_quotes_what_needs_quoting_and_keeps_null_apart() {
+    use dexo_driver_api::DbValue::{Null, Text};
+    let csv = render(
+        OutputFormat::Csv,
+        vec![
+            vec![
+                Text("Silva, Ana".into()),
+                Text("said \"hi\"\nthen left".into()),
+            ],
+            vec![Text(String::new()), Null],
+        ],
+    );
+    assert_eq!(
+        csv,
+        "name,note\n\"Silva, Ana\",\"said \"\"hi\"\"\nthen left\"\n,\\N\n"
+    );
+}
+
+/// The table lines its columns up under their names, and shows NULL as `<null>`.
+#[test]
+fn the_table_lines_up_and_shows_null() {
+    use dexo_driver_api::DbValue::{Null, Text};
+    let table = render(
+        OutputFormat::Table,
+        vec![
+            vec![Text("Ana".into()), Null],
+            vec![Text("Bernardo".into()), Text("two\nlines".into())],
+        ],
+    );
+    assert_eq!(
+        table,
+        "name     | note\n---------+----------\nAna      | <null>\nBernardo | two lines\n"
+    );
+}

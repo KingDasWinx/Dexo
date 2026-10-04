@@ -2,7 +2,7 @@
 source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
-default  no connection  —                                                                                                                                       
+[Workbench] Connections  Agents  Server  History   default  no connection  —                                                                                    
 ┌  Sidebar─────────────────┐ scratch.sql ×  +                                                                                                                   
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │No connections — press n  ││   1                                                                                                                              │
@@ -10,17 +10,13 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
 │                          ││                   ┌Session recovery──────────────────────────────────────────────┐                                               │
-│                          ││                   │recovery open=true                                            │                                               │
-│                          ││                   │transaction=unknown                                           │                                               │
-│                          ││                   │confirm_discard=false                                         │                                               │
-│                          ││                   │document scratch.sql                                          │                                               │
+│                          ││                   │Dexo closed unexpectedly and kept these unsaved documents:    │                                               │
+│                          ││                   │  scratch.sql                                                 │                                               │
+│                          ││                   │A transaction was open: its state is unknown.                 │                                               │
 │                          ││                   │                                                              │                                               │
-│                          ││                   │                                                              │                                               │
+│                          ││                   │Keep leaves them open; Discard closes them.                   │                                               │
+│                          ││                   │ [Keep]   [Discard]                                           │                                               │
 │                          ││                   │                                                              │                                               │
 │                          ││                   │                                                              │                                               │
 │                          ││                   │                                                              │                                               │
@@ -38,8 +34,12 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-│                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                          │┌  Results─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                          ││[Grid] Explain  Messages                                                                                                          │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
@@ -51,4 +51,4 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-disconnected  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                                                                            Ctrl+P  F1
+disconnected                                                                                                                                          Ctrl+P  F1

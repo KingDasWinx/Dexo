@@ -8,16 +8,23 @@ A profile decides what a client may do: which saved connections it may use, whic
 
 ## Set up
 
+The TUI does all of this on the Agents screen's Setup view (`Ctrl+G a`, then `4`): pick the agent -- the list says which are on this machine -- the connections the profile may use, and `[s Set up]`. A profile's connections and whether it reads SQL are changed later on Profiles, with `c` and `q`. A profile made there sees every object of its connections, read-only; narrow it with `mcp allow` and `--deny` below. From a shell:
+
 ```sh
 dexo mcp profile create --name assistant
 dexo mcp profile set --name assistant --connection local --query-mode raw-read
 dexo mcp allow --profile assistant --selector 'app.public.*'
 dexo mcp allow --profile assistant --selector 'app.public.secrets' --deny
 dexo mcp profile enable --name assistant --confirm
-dexo mcp config print --profile assistant --client claude-code
+dexo mcp setup --client claude-code --profile assistant --skill
+dexo mcp doctor --probe
 ```
 
-`profile set` also takes `--max-rows`, `--max-bytes`, `--timeout-secs`, `--max-concurrency`, `--allow-tool` and `--deny-tool`; it refuses unknown connections and misspelt tool names. `mcp allow --remove` takes a rule back, and `mcp policy --profile assistant` shows the result. `config print` prints a JSON `mcpServers` entry by default, or a `claude mcp add` line with `--client claude-code`, naming the running binary by its full path.
+`mcp setup --client claude-code|codex|cursor|claude-desktop|gemini-cli|windsurf|vscode` merges a `dexo` server entry -- the running binary (through the `dexo` on PATH when that is the same file, so a Homebrew upgrade does not break it), `mcp serve --profile <name>` -- into that client's config file and leaves every other entry as it was -- an existing `dexo` entry keeps its other keys, such as `env` or `cwd`, and only its command and arguments change: the project's `.mcp.json` for Claude Code, `~/.codex/config.toml` for Codex (edited in place, comments kept), `~/.cursor/mcp.json` for Cursor, `claude_desktop_config.json` in the platform's config directory for Claude Desktop, `~/.gemini/settings.json` for Gemini CLI, `~/.codeium/windsurf/mcp_config.json` for Windsurf, and the project's `.vscode/mcp.json` for VS Code (under `servers`, as a `stdio` server). The old file is copied to `<file>.dexo-backup` first (or to `.dexo-backup.1`, `.2` and on, so the file as it was before Dexo is never overwritten), a file Dexo cannot parse is left alone, and `--dry-run` prints what would be written. `--skill` also writes a skill file (`.claude/skills/dexo/SKILL.md`, `~/.codex/skills/dexo/SKILL.md`, or a Cursor rule) telling the agent that access is read-only, how grants work, and to read the notes on tables. `mcp doctor --probe` starts each enabled profile's server, asks it for its tools the way an agent would, and checks every client's file for a `dexo` entry whose command exists -- a bare command is looked up on PATH, as the client would -- or says the file cannot be parsed; with `--json` the probe comes in the same JSON document as the profiles.
+
+A profile name uses letters, digits, `-` and `_`, since it goes into agents' configs; `profile delete --name assistant` removes a profile with its grants, and the TUI's Agents screen does the same with `x` in its Profiles view. `--expires` takes `90s`, `15m`, `2h`, `1d` or joined, `1h30m`; a bare number is refused.
+
+`profile set` also takes `--max-rows`, `--max-bytes`, `--timeout-secs`, `--max-concurrency`, `--allow-tool` and `--deny-tool`; it refuses unknown connections and misspelt tool names. `mcp allow --remove` takes a rule back, and `mcp policy --profile assistant` shows the result. `config print` prints a JSON `mcpServers` entry by default, or a `claude mcp add` line with `--client claude-code`, naming the running binary by its full path, the same way.
 
 Connections open on the first tool call that needs them. A server whose database is down still starts and reports `CONNECTION_FAILED` for each call, and the next call tries again.
 
@@ -35,14 +42,14 @@ Every database tool takes an optional `connection`; it is required only when the
 | --- | --- | --- |
 | `list_connections` | The profile's connections, their environment, and whether writes are possible | Always |
 | `catalog_list` | Children of a catalog node, live from the server | Always |
-| `catalog_search` | Table, view and column names in the connection's indexed catalog | Always |
-| `object_describe` | Columns of a table or view, with type and key role | Always |
+| `catalog_search` | Tables, views and columns by name, or by what their notes say, in the connection's indexed catalog | Always |
+| `object_describe` | Columns of a table or view, with type, key role and note, and the table's own note | Always |
 | `object_get_ddl` | The object's CREATE statement | Always |
 | `object_relationships` | What the object depends on and what depends on it | Always |
 | `data_read` | One page of a table or view, without SQL | Always |
 | `schema_diff` | Differences between two snapshots saved with `dexo schema snapshot` | Always |
 | `query_validate` | Whether `query_execute_read` would accept a statement, and why not | Raw-read profiles |
-| `query_explain` | Estimated plan of one read, without ANALYZE | Raw-read profiles |
+| `query_explain` | Estimated plan of one read, without ANALYZE; `hypothetical_indexes` plans as if those indexes were built (Postgres with hypopg), each on a table the profile may read | Raw-read profiles |
 | `query_execute_read` | One read-only statement, returned as a table | Raw-read profiles |
 | `admin_list_sessions` | Server sessions, without their query text | With `--allow-tool admin_list_sessions` |
 | `data_insert`, `data_update`, `data_delete` | One row, identified by the table's real key | While a `data_write` grant is active |
@@ -58,6 +65,10 @@ A statement is parsed before anything reaches the server. It must be exactly one
 
 The read then runs inside `BEGIN READ ONLY … ROLLBACK`, which is what stops a function that writes. It returns at most the profile's `max_rows` rows and `max_bytes` bytes, as a Markdown table plus the same rows in `structuredContent`; a cut result says so. `data_read` pages through a table the same way and returns `next_offset` when there is more. A client that cancels a call stops only that call: the query is cancelled and the transaction rolled back.
 
+## Notes
+
+A note says what a table or a column means: one row per paid checkout, amounts in cents, a column nothing reads any more. It is written in the TUI's object inspector (`n`) and kept per connection; without one, the database's own comment (`COMMENT ON`, MySQL's `COMMENT`) is shown and marked as such. `object_describe` returns the notes, and `catalog_search` finds an object by its note -- among the objects the profile lets the agent see, so a note never reveals a hidden one.
+
 ## Writes
 
 A write needs a grant, created outside the MCP process:
@@ -67,16 +78,19 @@ dexo mcp grant create --profile assistant --connection local --capability data_w
   --tool data_insert --selector 'app.public.orders' --expires 15m --confirm-target local
 ```
 
+The TUI makes the same grants: on the Agents screen's Profiles view, `g` (or **New MCP Grant…** in the palette) opens a form with the same fields for the selected profile, "ask before each write" included, and the connection or the selector typed again to confirm.
+
 - Capabilities are `data_write`, `ddl` and `admin`; each allows only its own tools.
 - A grant is used once and expires after `--expires` (15 minutes by default, 24 hours at most). `dexo mcp grant list`, `revoke --id` and `revoke-all` manage them; revoking hides the tools at once.
 - A grant is bound to one connection and narrows the profile; it can never reach an object the profile denies. A SQL write or DDL statement has every table it touches held to both.
 - Production connections, and connections whose own policy is read-only, never accept an MCP write, grant or not. An unknown environment label counts as production.
 - Destructive DDL needs `confirm_target` equal to `target`, typed by the client. MySQL commits DDL implicitly, and the result says so.
 - Each write carries an `operation_id`: retrying with the same id and payload returns the first result instead of writing twice.
+- `--ask` makes a grant that asks: it lasts until it expires, and every write it covers waits for a person. The server records the request -- the SQL or DDL, or the call's arguments, and the tables -- and waits, without holding the connection, until it is approved or denied on the TUI's Agents screen (`Ctrl+G a` or `Ctrl+Alt+A`), or until `--approval-timeout` seconds (120 by default, 1 to 3600) pass, which refuses it. A write is approved with `a` and a second, deliberate confirmation; `d` denies. Once decided, the request keeps no SQL, and it is deleted after a day. A request is withdrawn when its agent stops waiting -- the call is cancelled, or the server stops or is killed -- and the Agents screen says so instead of approving it; revoking the grant denies its waiting requests. A grant that does not ask is used first when both cover a write. The TUI says when a request arrives while you are on another screen, and counts the waiting ones beside Agents on its top line.
 
 ## Audit
 
-Every tool call writes one event: the tool, decision, status code, duration, rows, bytes, connection and object. SQL is stored only as a hash. Grant decisions inside write tools have their own events, tagged `grant <tool>` and correlated by operation id. `mcp serve` deletes events older than the profile's `audit_retention_days` when it starts; `dexo mcp audit` prints them and deletes nothing.
+Every tool call writes one event: the tool, decision, status code, duration, rows, bytes, connection and object; the Agents screen's Activity view shows the latest as they arrive. SQL is stored only as a hash. Grant decisions inside write tools have their own events, tagged `grant <tool>` and correlated by operation id. `mcp serve` deletes events older than the profile's `audit_retention_days` when it starts; `dexo mcp audit` prints them and deletes nothing.
 
 ## Limits of the allowlist
 

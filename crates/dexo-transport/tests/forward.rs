@@ -105,3 +105,30 @@ async fn lease_forwards_through_http_connect_proxy() {
     .unwrap();
     assert_eq!(roundtrip(lease.endpoint(), b"proxied").await, b"proxied");
 }
+
+/// A client of the lease's local port sees only a socket that closes when the far end
+/// cannot be reached; the lease remembers why, so the driver can say which proxy refused.
+#[tokio::test]
+async fn a_lease_remembers_why_its_far_end_could_not_be_reached() {
+    // A port nothing listens on: bound, then let go.
+    let closed = TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let lease = TransportLease::proxy(
+        ProxyConfig::socks5("127.0.0.1", closed.port()),
+        "db.internal",
+        5432,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(lease.failure().is_none());
+    let mut client = TcpStream::connect(lease.endpoint()).await.unwrap();
+    let mut buffer = [0u8; 1];
+    // The forward gives up and closes the socket.
+    assert_eq!(client.read(&mut buffer).await.unwrap_or(0), 0);
+    let failure = lease.failure().expect("the reason was kept");
+    assert!(failure.to_lowercase().contains("unreachable"), "{failure}");
+}

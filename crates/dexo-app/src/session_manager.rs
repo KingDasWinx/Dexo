@@ -129,6 +129,7 @@ mod tests {
                     ssh: false,
                     proxy: false,
                 },
+                file: false,
             }
         }
 

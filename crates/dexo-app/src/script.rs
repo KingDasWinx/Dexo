@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use dexo_driver_api::{QueryEvent, QueryRequest, Session};
-use dexo_sql::{split_statements, statement_at};
+use dexo_sql::{Dialect, StatementEffect, split_statements_in, statement_at_in};
 
 use crate::error::AppError;
 use crate::query_service::QueryService;
@@ -26,20 +26,61 @@ pub fn statements_for(
     cursor: usize,
     selection: Option<Range<usize>>,
 ) -> Vec<String> {
-    let fragment = match target {
-        ExecutionTarget::Document => sql.to_string(),
-        ExecutionTarget::CurrentStatement => statement_at(sql, cursor)
-            .map(|span| sql[span.byte_range].to_string())
-            .unwrap_or_default(),
-        ExecutionTarget::Selection => selection
-            .and_then(|range| sql.get(range))
-            .unwrap_or("")
-            .to_string(),
-    };
-    split_statements(&fragment)
+    statements_for_dialect(sql, target, cursor, selection, Dialect::Postgres)
+}
+
+/// The SQL dialect a driver speaks: MariaDB's is MySQL's.
+pub fn dialect_for_driver(driver: &str) -> Dialect {
+    match dexo_driver_api::DriverDescriptor::family(driver) {
+        "mysql" => Dialect::Mysql,
+        "sqlite" => Dialect::Sqlite,
+        "duckdb" => Dialect::Duckdb,
+        _ => Dialect::Postgres,
+    }
+}
+
+/// [`statements_for`] split the way `dialect` reads comments and strings, so a MySQL
+/// `#` comment is a comment and not a statement of its own.
+pub fn statements_for_dialect(
+    sql: &str,
+    target: ExecutionTarget,
+    cursor: usize,
+    selection: Option<Range<usize>>,
+    dialect: Dialect,
+) -> Vec<String> {
+    statement_spans_for_dialect(sql, target, cursor, selection, dialect)
         .into_iter()
-        .map(|span| fragment[span.byte_range].trim().to_string())
-        .filter(|item| !item.is_empty())
+        .map(|(_, statement)| statement)
+        .collect()
+}
+
+/// [`statements_for_dialect`], each with the byte offset in `sql` it starts at.
+pub fn statement_spans_for_dialect(
+    sql: &str,
+    target: ExecutionTarget,
+    cursor: usize,
+    selection: Option<Range<usize>>,
+    dialect: Dialect,
+) -> Vec<(usize, String)> {
+    let fragment = match target {
+        ExecutionTarget::Document => Some(0..sql.len()),
+        ExecutionTarget::CurrentStatement => {
+            statement_at_in(sql, cursor, dialect).map(|span| span.byte_range)
+        }
+        ExecutionTarget::Selection => selection.filter(|range| sql.get(range.clone()).is_some()),
+    }
+    .unwrap_or(0..0);
+    let base = fragment.start;
+    let fragment = &sql[fragment];
+    split_statements_in(fragment, dialect)
+        .into_iter()
+        .filter_map(|span| {
+            let text = &fragment[span.byte_range.clone()];
+            let trimmed = text.trim();
+            let leading = text.len() - text.trim_start().len();
+            (!trimmed.is_empty())
+                .then(|| (base + span.byte_range.start + leading, trimmed.to_string()))
+        })
         .collect()
 }
 
@@ -66,25 +107,35 @@ impl QueryService {
         &self,
         session: Arc<dyn Session>,
         sql: &str,
+        dialect: Dialect,
         target: ExecutionTarget,
         cursor: usize,
         selection: Option<Range<usize>>,
         policy: ScriptPolicy,
         row_limit: u64,
-        mutating: bool,
-        parameters: Vec<dexo_driver_api::DbValue>,
+        read_only: bool,
+        parameters: Vec<(String, dexo_driver_api::DbValue)>,
         timeout: std::time::Duration,
     ) -> Vec<Result<Vec<QueryEvent>, AppError>> {
-        let statements = statements_for(sql, target, cursor, selection);
+        let statements = statements_for_dialect(sql, target, cursor, selection, dialect);
         let mut out = Vec::new();
         for statement in statements {
-            let mut request = if mutating {
-                QueryRequest::write(statement)
-            } else {
+            let effect = split_statements_in(&statement, dialect)
+                .first()
+                .map_or(StatementEffect::Unknown, |span| span.effect);
+            // `:name` is bound by name, each statement taking only its own values.
+            let (statement, values) = dexo_sql::bind_named(&statement, dialect, &parameters);
+            let mut request = if effect == StatementEffect::ReadOnly {
                 QueryRequest::read(statement, row_limit)
+            } else {
+                QueryRequest::write(statement)
             };
+            // Whatever it is taken for, what it returns stops at the limit, and on a
+            // read-only connection it runs where it cannot write.
+            request.row_limit = row_limit;
+            request.read_only = read_only;
             request.timeout = timeout;
-            request.parameters = parameters.clone();
+            request.parameters = values;
             let result = self.collect(Arc::clone(&session), request).await;
             let failed = result.is_err();
             out.push(result);

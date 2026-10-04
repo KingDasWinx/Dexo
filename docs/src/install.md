@@ -34,10 +34,22 @@ sudo dnf install ./dexo-*.x86_64.rpm     # Fedora
 
 The packages need glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36, or newer). They do not update themselves; install the next release the same way.
 
+On Arch Linux, the AUR has [`dexo-bin`](https://aur.archlinux.org/packages/dexo-bin), a package of the release binary kept by the community rather than by the Dexo project, so a new release reaches it once its maintainer updates it:
+
+```sh
+yay -S dexo-bin    # or paru -S dexo-bin, or makepkg from the AUR repository
+```
+
 ## From source
 
 Rust 1.93 or later:
 
 ```sh
 cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo
+```
+
+DuckDB is built in only with the `duckdb` feature, which the release binaries leave out: it compiles DuckDB's C++ engine, which needs a C++ compiler. Measured on a 12-core Linux machine, not in CI, it added about 11 minutes to a release build and took the binary from 56 MB to 120 MB; no release target ships it until CI shows a target's build time and size are acceptable.
+
+```sh
+cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo --features duckdb
 ```

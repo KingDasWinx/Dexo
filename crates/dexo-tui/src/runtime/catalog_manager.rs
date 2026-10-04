@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use dexo_app::CatalogService;
-use dexo_driver_api::{CatalogListOptions, ObjectId, Session};
+use dexo_driver_api::{
+    CatalogListOptions, CatalogObject, ObjectId, ObjectKind, SecurityAdmin, Session,
+};
 
 use crate::action::Action;
 use crate::runtime::{OperationId, SessionId};
@@ -60,6 +62,25 @@ pub async fn load_children(
     }
 }
 
+/// What the session may do with `object`, as the role it acts as now: the login it
+/// connected with missed a SET ROLE. Only a table or a view has table privileges; asked
+/// of a function, the inspector reported "relation does not exist".
+async fn privileges_of(
+    security: &dyn SecurityAdmin,
+    object: &CatalogObject,
+) -> Result<Vec<String>, String> {
+    if !matches!(
+        object.kind,
+        ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView
+    ) {
+        return Ok(Vec::new());
+    }
+    security
+        .effective_privileges(None, &object.qualified_name)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 pub async fn load_inspector(
     session: Arc<dyn Session>,
     id: ObjectId,
@@ -89,6 +110,16 @@ pub async fn load_inspector(
         Ok(ids) => (ids, None),
         Err(error) => (Vec::new(), Some(error.to_string())),
     };
+    // Ids are the catalog's own (`pg:table:16750`): said as what they are.
+    let mut names = std::collections::HashMap::new();
+    for related in dependencies.iter().chain(&dependents) {
+        if let Ok(Some(found)) = CatalogService::object(reader, related).await {
+            names.insert(
+                related.clone(),
+                format!("{} {}", found.kind.as_str(), found.display_name()),
+            );
+        }
+    }
     let mut privileges = Vec::new();
     let mut restrictions = Vec::new();
     if let Some(message) = dep_err {
@@ -98,12 +129,9 @@ pub async fn load_inspector(
         restrictions.push(message);
     }
     if let (Some(object), Some(security)) = (object.as_ref(), session.security()) {
-        match security
-            .effective_privileges(&object.qualified_name, &object.qualified_name)
-            .await
-        {
+        match privileges_of(security, object).await {
             Ok(values) => privileges = values,
-            Err(error) => restrictions.push(error.to_string()),
+            Err(error) => restrictions.push(error),
         }
     }
     let _ = action_tx
@@ -112,12 +140,13 @@ pub async fn load_inspector(
             session: session_id.0.to_string(),
             qualified_name: object
                 .as_ref()
-                .map(|object| object.qualified_name.display_unquoted())
+                .map(|object| object.display_name())
                 .unwrap_or_default(),
             object,
             ddl,
             dependencies,
             dependents,
+            names,
             effective_privileges: privileges,
             restrictions,
         })
@@ -129,7 +158,7 @@ pub async fn capture_snapshot(
     connection_id: String,
     database_name: String,
     include_system: bool,
-    db_path: std::path::PathBuf,
+    db_path: Option<std::path::PathBuf>,
     generation: u64,
     action_tx: tokio::sync::mpsc::Sender<Action>,
 ) {
@@ -152,7 +181,9 @@ pub async fn capture_snapshot(
             objects.push(object);
         }
     }
-    if let Ok(db) = dexo_storage::Database::open(&db_path) {
+    if let Some(db_path) = db_path
+        && let Ok(db) = dexo_storage::Database::open(&db_path)
+    {
         let _ = dexo_storage::CatalogCache::new(db.connection()).replace_snapshot(
             &connection_id,
             &database_name,

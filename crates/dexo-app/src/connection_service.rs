@@ -16,6 +16,9 @@ pub struct NewConnection {
     pub extra_config: serde_json::Value,
     pub policy: crate::connection_policy::ConnectionPolicyOverrides,
     pub group_path: Option<String>,
+    /// The database lets the user in without a password (a Docker container made so):
+    /// an empty one is kept rather than refused.
+    pub allow_empty_password: bool,
 }
 
 impl Default for NewConnection {
@@ -31,6 +34,7 @@ impl Default for NewConnection {
             extra_config: serde_json::json!({}),
             policy: crate::connection_policy::ConnectionPolicyOverrides::default(),
             group_path: None,
+            allow_empty_password: false,
         }
     }
 }
@@ -52,8 +56,20 @@ pub fn create(
     secrets: &dyn SecretStore,
     repo: &impl ConnectionProfiles,
 ) -> Result<(ConnectionProfile, SecretPersist), AppError> {
+    let allow_empty_password = input.allow_empty_password;
     let profile = build_profile(input)?;
-    if password.is_empty() {
+    if profile.password_command().is_some() {
+        // The password manager answers every connect; nothing goes to the keychain.
+        if repo.get_by_name(&profile.name)?.is_some() {
+            return Err(AppError::new(
+                ErrorCategory::Configuration,
+                format!("connection '{}' already exists", profile.name),
+            ));
+        }
+        repo.save(&profile)?;
+        return Ok((profile, SecretPersist::Stored));
+    }
+    if password.is_empty() && !profile.is_file() && !allow_empty_password {
         return Err(AppError::new(
             ErrorCategory::Authentication,
             "password is required",
@@ -66,6 +82,9 @@ pub fn create(
         ));
     }
     repo.save(&profile)?;
+    if profile.is_file() {
+        return Ok((profile, SecretPersist::Stored));
+    }
     let persist = put_secret(secrets, profile.secret_ref.as_str(), password)?;
     Ok((profile, persist))
 }
@@ -92,39 +111,36 @@ pub fn set_secret(
             format!("unknown connection '{name}'"),
         )
     })?;
+    if profile.is_file() {
+        return Err(AppError::new(
+            ErrorCategory::Configuration,
+            format!("'{name}' opens a file and has no password"),
+        ));
+    }
+    // Its password command answers every connect; a keychain entry would never be read.
+    if let Some(command) = profile.password_command() {
+        return Err(AppError::new(
+            ErrorCategory::Configuration,
+            format!("'{name}' takes its password from `{command}`; nothing to set"),
+        ));
+    }
     let persist = put_secret(secrets, profile.secret_ref.as_str(), password)?;
     Ok((profile, persist))
 }
 
 fn build_profile(input: NewConnection) -> Result<ConnectionProfile, AppError> {
-    let name = require_field("name", input.name)?;
+    let name = require_field("name", input.name.clone())?;
     let driver = normalize_driver(&input.driver)?;
-    let host = require_field("host", input.host)?;
-    let database = require_field("database", input.database)?;
-    let username = require_field("username", input.username)?;
-    let port = input.port.unwrap_or(default_port(&driver));
-    if port == 0 {
-        return Err(AppError::new(
-            ErrorCategory::Configuration,
-            "connection port is invalid",
-        ));
-    }
     let environment = if input.environment.trim().is_empty() {
         "local".into()
     } else {
         input.environment.trim().to_ascii_lowercase()
     };
-    let mut config = serde_json::json!({
-        "host": host,
-        "port": port,
-        "database": database,
-        "username": username,
-    });
-    if let (Some(target), Some(extra)) = (config.as_object_mut(), input.extra_config.as_object()) {
-        for (key, value) in extra {
-            target.insert(key.clone(), value.clone());
-        }
-    }
+    let config = if dexo_driver_api::DriverDescriptor::for_id(&driver).is_some_and(|d| d.file) {
+        file_config(&input.extra_config)?
+    } else {
+        host_config(&input, &driver)?
+    };
     let mut profile = ConnectionProfile::new(
         ConnectionId(Uuid::new_v4()),
         None,
@@ -137,6 +153,55 @@ fn build_profile(input: NewConnection) -> Result<ConnectionProfile, AppError> {
     profile.policy = input.policy;
     profile.group_path = input.group_path;
     Ok(profile)
+}
+
+/// A file connection keeps only its path, made absolute: the profile is opened later
+/// from wherever Dexo runs, and a relative path would name a different file there.
+fn file_config(extra: &serde_json::Value) -> Result<serde_json::Value, AppError> {
+    let path = extra
+        .get("path")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let path = require_field("path", path.to_string())?;
+    // DuckDB's in-memory database is no file to resolve.
+    if path == ":memory:" {
+        return Ok(serde_json::json!({ "path": path }));
+    }
+    let path = std::path::absolute(&path)
+        .ok()
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Configuration,
+                format!("the path {path} cannot be made absolute"),
+            )
+        })?;
+    Ok(serde_json::json!({ "path": path }))
+}
+
+fn host_config(input: &NewConnection, driver: &str) -> Result<serde_json::Value, AppError> {
+    let host = require_field("host", input.host.clone())?;
+    let database = require_field("database", input.database.clone())?;
+    let username = require_field("username", input.username.clone())?;
+    let port = input.port.unwrap_or(default_port(driver));
+    if port == 0 {
+        return Err(AppError::new(
+            ErrorCategory::Configuration,
+            "connection port is invalid",
+        ));
+    }
+    let mut config = serde_json::json!({
+        "host": host,
+        "port": port,
+        "database": database,
+        "username": username,
+    });
+    if let (Some(target), Some(extra)) = (config.as_object_mut(), input.extra_config.as_object()) {
+        for (key, value) in extra {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+    Ok(config)
 }
 
 fn put_secret(
@@ -169,6 +234,9 @@ fn normalize_driver(driver: &str) -> Result<String, AppError> {
     match driver.trim().to_ascii_lowercase().as_str() {
         "postgres" | "postgresql" => Ok("postgres".into()),
         "mysql" => Ok("mysql".into()),
+        "mariadb" => Ok("mariadb".into()),
+        "sqlite" | "sqlite3" => Ok("sqlite".into()),
+        "duckdb" => Ok("duckdb".into()),
         "" => Err(AppError::new(
             ErrorCategory::Configuration,
             "driver is required",
@@ -260,6 +328,28 @@ mod tests {
         );
     }
 
+    /// An empty password is refused unless the database lets its user in without one.
+    #[test]
+    fn create_keeps_an_empty_password_only_when_allowed() {
+        let repo = MemoryRepo::default();
+        let store = MemorySecretStore::default();
+        let error = create(input(), "", &store, &repo).unwrap_err();
+        assert!(error.to_string().contains("password is required"));
+        let open = NewConnection {
+            allow_empty_password: true,
+            ..input()
+        };
+        let (profile, _) = create(open, "", &store, &repo).unwrap();
+        assert_eq!(
+            store
+                .get(profile.secret_ref.as_str())
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            ""
+        );
+    }
+
     #[test]
     fn create_rejects_duplicate_name() {
         let repo = MemoryRepo::default();
@@ -268,6 +358,19 @@ mod tests {
         let error = create(input(), "pw", &store, &repo).unwrap_err();
         assert_eq!(error.category(), ErrorCategory::Configuration);
         assert!(error.to_string().contains("already exists"));
+    }
+
+    /// A connection whose password comes from a command has no keychain secret to set.
+    #[test]
+    fn set_secret_refuses_a_password_command_connection() {
+        let repo = MemoryRepo::default();
+        let store = MemorySecretStore::default();
+        let mut with_command = input();
+        with_command.extra_config = serde_json::json!({ "password_command": "pass show db" });
+        let (profile, _) = create(with_command, "", &store, &repo).unwrap();
+        let error = set_secret("local-pg", "pw", &store, &repo).unwrap_err();
+        assert!(error.to_string().contains("pass show db"), "{error}");
+        assert!(store.get(profile.secret_ref.as_str()).unwrap().is_none());
     }
 
     #[test]
@@ -297,5 +400,12 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn an_in_memory_duckdb_keeps_its_path() {
+        let config = super::file_config(&serde_json::json!({ "path": ":memory:" })).unwrap();
+        assert_eq!(config["path"], ":memory:");
+        assert_eq!(super::normalize_driver("DuckDB").unwrap(), "duckdb");
     }
 }

@@ -14,5 +14,5 @@ pub use explain::{
     MysqlExplainCaps, NativeExplainFormat, parse_json as parse_explain_json,
     parse_tree as parse_explain_tree, select_format, wrap_explain,
 };
-pub use factory::MysqlFactory;
+pub use factory::{MariadbFactory, MysqlFactory};
 pub use session::MysqlSession;

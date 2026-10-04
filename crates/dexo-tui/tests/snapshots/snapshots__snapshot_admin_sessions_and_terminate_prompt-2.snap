@@ -1,0 +1,34 @@
+---
+source: crates/dexo-tui/tests/snapshots.rs
+expression: "render_to_string(&model, 100, 30)"
+---
+ Workbench  Connections  Agents [Server] History   demo  local  public                              
+[1 Sessions]  2 Locks   3 Sizes   4 Stats   5 Settings  [c Server: local]                           
+/ search                        [a Idle: hidden]                                                    
+┌  Sessions (2) · 1 blocked · every 2s─────────────────────────────────────────────────────────────┐
+│ [p Pause]  [r Refresh]                                                                           │
+│    PID      STATE                 TIME ▼  QUERY                                                  │
+│  ● 11       idle in transaction     4.0s  [blocks 10] lock table items                           │
+│> ⊘ 10       active                  1.2s  [blocked by 11] select 1                               │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌▸ Session 10──────────────────────────────────────────────────────────────────────────────────────┐
+│ select 1                                                                                         │
+│                                                                                                  │
+│ ── Session                                                                                       │
+│ User      dexo                                                                                   │
+│ Database  dexo                                                                                   │
+│ State     active                                                                                 │
+│ Running   1.2s                                                                                   │
+│ Client    127.0.0.1                                                                              │
+│ Program   psql                                                                                   │
+│ ── Blocking                                                                                      │
+│ Session 11 blocks 10: it waits for a lock on public.items. Ending 11 frees it.                   │
+│                                                                                                  │
+│                                                                                                  │
+│Type 10 to end this session and roll back its work.                                               │
+│id: █                                                                                             │
+│ [Terminate]   [Cancel]                                                                           │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+Server  type the id  Enter terminate  Esc cancel                                          Ctrl+P  F1

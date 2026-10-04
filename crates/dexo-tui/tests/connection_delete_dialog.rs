@@ -24,7 +24,7 @@ fn with_connections(names: &[&str]) -> Model {
     model
         .connections
         .load_profiles(names.iter().map(|name| profile(name)).collect());
-    model.connections.open = true;
+    model.screen = dexo_tui::model::Screen::Connections;
     model
 }
 
@@ -110,7 +110,11 @@ fn esc_cancels_and_letters_do_nothing() {
     }
     press(&mut model, KeyCode::Esc);
     assert!(model.connections.delete_target.is_none());
-    assert!(model.connections.open, "Esc closed the list as well");
+    assert_eq!(
+        model.screen,
+        dexo_tui::model::Screen::Connections,
+        "Esc closed the list as well"
+    );
 }
 
 #[test]
@@ -127,52 +131,31 @@ fn the_buttons_take_a_click() {
     assert!(model.connections.delete_target.is_none());
 }
 
-/// The hint read `d dup` while the click target looked for `d duplicate`.
+/// Every action takes a click: its button over the details.
 #[test]
-fn every_hint_under_the_list_takes_a_click() {
+fn every_button_over_the_details_takes_a_click() {
     let mut model = with_connections(&["local"]);
     paint(&mut model, 100, 30);
-    let effects = click(&mut model, HitTarget::Button(HitButton::Duplicate));
+    let effects = click(&mut model, HitTarget::Press(KeyCode::Char('d'), false));
     assert!(
         effects
             .iter()
             .any(|effect| matches!(effect, Effect::DuplicateProfile { .. })),
         "{effects:?}"
     );
-    click(&mut model, HitTarget::Button(HitButton::Delete));
+    click(&mut model, HitTarget::Press(KeyCode::Char('x'), false));
     assert!(model.connections.delete_target.is_some());
 }
 
-/// The list was drawn in a box of 18 rows whatever it held, and past 14 connections
-/// the selection and the hints fell off the bottom.
+/// Past the rows the screen has, the list scrolls to the selection and the actions
+/// stay in sight.
 #[test]
-fn the_list_fits_its_connections_and_scrolls_to_the_selection() {
-    let mut model = with_connections(&["only"]);
-    let frame = paint(&mut model, 100, 30);
-    let rows = frame
-        .lines()
-        .filter(|line| line.contains('│') && line.contains("  "))
-        .count();
-    let top = frame
-        .lines()
-        .position(|line| line.contains("Connections"))
-        .unwrap();
-    let bottom = frame
-        .lines()
-        .skip(top + 1)
-        .position(|line| line.contains('└'))
-        .unwrap();
-    assert!(
-        bottom <= 5,
-        "a box of {bottom} rows for one connection:\n{frame}"
-    );
-    assert!(rows > 0);
-
+fn the_list_scrolls_to_the_selection() {
     let names: Vec<String> = (0..40).map(|index| format!("db{index:02}")).collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut model = with_connections(&refs);
     model.connections.selected_profile = 37;
     let frame = paint(&mut model, 100, 30);
-    assert!(frame.contains("> db37"), "{frame}");
-    assert!(frame.contains("x delete"), "{frame}");
+    assert!(frame.contains("> ○ db37"), "{frame}");
+    assert!(frame.contains("[x Delete]"), "{frame}");
 }

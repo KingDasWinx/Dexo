@@ -10,6 +10,12 @@ pub struct SessionInfo {
     pub state: String,
     pub duration_ms: Option<u64>,
     pub current_query: Option<String>,
+    /// The program that opened the session, as it named itself: `dexo`, `psql`.
+    #[serde(default)]
+    pub application: Option<String>,
+    /// Where the session comes from: an address, or a host and port.
+    #[serde(default)]
+    pub client: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -469,3 +469,104 @@ async fn postgres_least_privilege_grant_revoke() {
             .is_err()
     );
 }
+
+/// The inspector's privileges: a mixed-case table was looked up folded to lower case
+/// ("relation public.mixed does not exist"), a function as if it were a relation, and
+/// the user asked about was the login, which a SET ROLE leaves behind.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn privileges_follow_the_relation_and_the_current_role() {
+    use dexo_driver_api::QueryRequest;
+    use futures_util::StreamExt;
+
+    async fn drain(session: &dyn Session, sql: &str) {
+        let mut stream = session.execute(QueryRequest::write(sql)).await.unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+    }
+
+    let fixture = connect().await;
+    let session = fixture.session.as_ref();
+    for sql in [
+        "CREATE TABLE \"Mixed\" (id int)",
+        "CREATE FUNCTION addone(int) RETURNS int LANGUAGE sql AS 'SELECT $1 + 1'",
+        "CREATE ROLE dexo_reader",
+        "GRANT SELECT ON \"Mixed\" TO dexo_reader",
+    ] {
+        drain(session, sql).await;
+    }
+    let security = session.security().unwrap();
+    let all = [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "TRUNCATE",
+        "REFERENCES",
+        "TRIGGER",
+    ];
+    for target in [
+        QualifiedName::new(Some("dexo"), Some("public"), "Mixed"),
+        QualifiedName::new(None::<String>, None::<String>, "Mixed"),
+    ] {
+        assert_eq!(
+            security.effective_privileges(None, &target).await.unwrap(),
+            all
+        );
+    }
+    let mixed = q("public", "Mixed");
+    assert_eq!(
+        security
+            .effective_privileges(Some(&ident("dexo_reader")), &mixed)
+            .await
+            .unwrap(),
+        ["SELECT"]
+    );
+    assert!(
+        security
+            .effective_privileges(None, &q("public", "addone"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    drain(session, "SET ROLE dexo_reader").await;
+    assert_eq!(
+        security.effective_privileges(None, &mixed).await.unwrap(),
+        ["SELECT"]
+    );
+    drain(session, "RESET ROLE").await;
+}
+
+/// A change the server refuses comes back as its error, with the server's words:
+/// `Ok(RolledBack)` told the user nothing was done and not why.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_refused_ddl_carries_the_servers_reason() {
+    let fixture = connect().await;
+    let change = SchemaChange::CreateTable {
+        target: q("public", "dexo_twice"),
+        def: TableDef {
+            shape: TableShape::Table,
+            columns: vec![col("id", "integer")],
+            constraints: vec![],
+            partition: None,
+            engine: None,
+            charset: None,
+            collation: None,
+        },
+    };
+    assert_eq!(
+        apply(fixture.session.as_ref(), change.clone()).await,
+        DdlOutcome::Committed
+    );
+    let plan = render_ddl(&change).unwrap();
+    let error = fixture
+        .session
+        .ddl()
+        .unwrap()
+        .apply_ddl(&plan)
+        .await
+        .expect_err("the table exists");
+    assert!(error.to_string().contains("already exists"), "{error}");
+}

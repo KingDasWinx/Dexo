@@ -169,6 +169,45 @@ fn the_queued_execution_runs_once_its_connection_lands() {
     assert!(model.pending_execute.is_none(), "the queue was not drained");
 }
 
+/// Begin Transaction in a tab of an offline connection connects by itself, as a run
+/// does, and begins once the session lands. It used to say "connect a session first".
+#[test]
+fn begin_transaction_on_an_offline_binding_dials_and_then_begins() {
+    let mut model = two_connections();
+    model.active_document = 2;
+    let effects = update(&mut model, Action::BeginTransaction);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::ConnectProfile { .. })),
+        "did not dial beta: {effects:?}"
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::BeginTransaction { .. })),
+        "began on alpha"
+    );
+    let token = model.pending_execute.as_ref().expect("queued").token;
+    let effects = update(&mut model, connection_changed("beta", 2, token));
+    assert!(
+        effects.iter().any(
+            |effect| matches!(effect, Effect::BeginTransaction { session, .. } if session.0 == uuid::Uuid::from_u128(102))
+        ),
+        "the transaction never began on beta: {effects:?}"
+    );
+}
+
+/// The transaction flag in the status bar belongs to the connection the bar names:
+/// connecting to another one did not clear alpha's.
+#[test]
+fn the_transaction_flag_follows_the_connection_it_names() {
+    let mut model = two_connections();
+    model.transaction = TransactionState::Active;
+    update(&mut model, connection_changed("beta", 2, 1));
+    assert_eq!(model.transaction, TransactionState::Idle);
+}
+
 /// Connecting moves the active document to that connection's console; activating a
 /// document moves the active connection to the document's. Both sides have to settle,
 /// or switching tabs walks in a circle and the TUI stops drawing.
@@ -334,4 +373,92 @@ fn refreshing_an_offline_table_connects_then_reloads() {
         )),
         "the table never reloaded: {effects:?}"
     );
+}
+
+/// The Schema form opens on the document's connection: it used to open on the session
+/// the explorer touched last, and the preview then ran on the document's.
+#[test]
+fn the_schema_form_opens_on_the_documents_connection() {
+    let mut model = two_connections();
+    model.connections.upsert_session(session_row("beta", 2));
+    model.active_document = 2;
+    update(&mut model, Action::OpenSchemaForm);
+    assert_eq!(model.connection.name, "beta");
+    assert!(model.schema_editor.open);
+
+    let mut model = two_connections();
+    model.active_document = 2;
+    let effects = update(&mut model, Action::OpenSchemaForm);
+    assert!(!model.schema_editor.open, "opened before beta was reached");
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::ConnectProfile { .. })),
+        "{effects:?}"
+    );
+}
+
+/// A read-only connection refuses a schema change where it is asked for, not after a
+/// preview that is then left standing.
+#[test]
+fn a_read_only_connection_refuses_the_schema_tools_up_front() {
+    let mut model = two_connections();
+    model.connection.read_only = true;
+    model.active_document = 1;
+    model.documents[1].sql = dexo_sql::SqlDocument::new("create table t (id int)");
+    update(&mut model, Action::OpenSchemaForm);
+    assert!(!model.schema_editor.open);
+    update(&mut model, Action::ApplyRawDdl);
+    assert!(!model.schema_editor.open);
+}
+
+/// A session keeps the settings it dialled with, so editing where a connection goes
+/// closes it instead of leaving it on the old database.
+#[test]
+fn editing_where_a_live_connection_goes_closes_its_session() {
+    let mut model = two_connections();
+    let mut edited = profile("alpha", 1);
+    edited.config = serde_json::json!({"host":"h","port":5432,"username":"u","database":"other"});
+    let effects = update(&mut model, Action::ProfileSaved(edited));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CloseSession { .. })),
+        "{effects:?}"
+    );
+    assert!(model.connections.session_for("alpha").is_none());
+    assert!(model.active_session.is_none());
+
+    let mut model = two_connections();
+    let renamed = profile("alpha", 1);
+    let effects = update(&mut model, Action::ProfileSaved(renamed));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CloseSession { .. })),
+        "an unchanged profile closed its session"
+    );
+}
+
+/// A recovery checkpoint holds the text and title only; replacing the stored document
+/// with it dropped the binding, so a restored tab lost its connection prefix.
+#[test]
+fn a_recovered_document_keeps_its_connection() {
+    let mut model = two_connections();
+    let mut stored = EditorDocument::new_unique("sl.sql", None, Some(uuid_of(1)));
+    stored.title = "sl.sql".into();
+    let id = stored.id.clone();
+    model.documents.push(stored);
+    dexo_tui::update::restore_recovery_documents_for_test(
+        &mut model,
+        vec![dexo_storage::RecoveryDocument {
+            id: id.clone(),
+            project_id: String::new(),
+            title: "sl.sql".into(),
+            content: "select 1".into(),
+            updated_at: String::new(),
+        }],
+    );
+    let restored = model.documents.iter().find(|d| d.id == id).unwrap();
+    assert_eq!(restored.connection_id.as_deref(), Some(uuid_of(1).as_str()));
 }

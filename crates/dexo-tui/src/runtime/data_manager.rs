@@ -3,12 +3,13 @@ use std::sync::Arc;
 use dexo_driver_api::{DataRequest, Filter, Page, QualifiedName, Session, Sort};
 
 use crate::action::Action;
-use crate::runtime::SessionId;
+use crate::runtime::{OperationId, SessionId};
 
 pub async fn fetch_page(
     session: Arc<dyn Session>,
     request: DataRequest,
     generation: u64,
+    ticket: OperationId,
     session_id: SessionId,
     action_tx: tokio::sync::mpsc::Sender<Action>,
 ) {
@@ -16,17 +17,28 @@ pub async fn fetch_page(
         let _ = action_tx
             .send(Action::DataPageFailed {
                 generation,
+                ticket,
                 message: "data capability unavailable".into(),
             })
             .await;
         return;
     };
+    // Asked only of a first page that leaves rows out and has nothing filtering it: what
+    // the statistics say is the table's size, not the filter's. The pages after it keep
+    // the one the first got.
+    let unfiltered =
+        request.filter.is_none() && request.clauses.where_sql.is_none() && request.page.offset == 0;
+    let object = request.object.clone();
     match data.fetch(request).await {
-        Ok(page) => {
+        Ok(mut page) => {
+            if page.has_more && unfiltered {
+                page.estimated_total = data.estimate_rows(&object).await.ok().flatten();
+            }
             let _ = action_tx
                 .send(Action::DataPageLoaded {
                     generation,
                     session: session_id.0.to_string(),
+                    ticket,
                     page,
                 })
                 .await;
@@ -35,6 +47,7 @@ pub async fn fetch_page(
             let _ = action_tx
                 .send(Action::DataPageFailed {
                     generation,
+                    ticket,
                     message: error.to_string(),
                 })
                 .await;
@@ -46,12 +59,14 @@ pub async fn fetch_table_columns(
     session: Arc<dyn Session>,
     target: QualifiedName,
     generation: u64,
+    ticket: OperationId,
     action_tx: tokio::sync::mpsc::Sender<Action>,
 ) {
     let Some(data) = session.data() else {
         let _ = action_tx
             .send(Action::TableColumnsFailed {
                 generation,
+                ticket,
                 message: "data capability unavailable".into(),
             })
             .await;
@@ -62,6 +77,7 @@ pub async fn fetch_table_columns(
             let _ = action_tx
                 .send(Action::TableColumnsLoaded {
                     generation,
+                    ticket,
                     columns,
                 })
                 .await;
@@ -70,6 +86,7 @@ pub async fn fetch_table_columns(
             let _ = action_tx
                 .send(Action::TableColumnsFailed {
                     generation,
+                    ticket,
                     message: error.to_string(),
                 })
                 .await;
@@ -123,7 +140,7 @@ pub async fn fetch_value(
 ) {
     let Some(data) = session.data() else {
         let _ = action_tx
-            .send(Action::DataPageFailed {
+            .send(Action::ValueFetchFailed {
                 generation,
                 message: "data capability unavailable".into(),
             })
@@ -138,7 +155,7 @@ pub async fn fetch_value(
         }
         Err(error) => {
             let _ = action_tx
-                .send(Action::DataPageFailed {
+                .send(Action::ValueFetchFailed {
                     generation,
                     message: error.to_string(),
                 })
@@ -154,8 +171,10 @@ pub fn table_request(
     sort: Vec<Sort>,
     offset: u64,
     limit: u32,
+    clauses: dexo_driver_api::RawClauses,
 ) -> Result<DataRequest, String> {
     Ok(DataRequest {
+        clauses,
         object,
         columns,
         filter,

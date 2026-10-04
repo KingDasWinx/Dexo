@@ -2,53 +2,53 @@
 source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
-default  no connection  —                                                                                                                                       
-┌  Sidebar─────────────────┐ scratch.sql ×  +                                                                                                                   
-│[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│No connections — press n  ││   1                                                                                                                              │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││               ┌MCP audit─────────────────────────────────────────────────────────────┐                                           │
-│                          ││               │mcp audit confirm_revoke=false                                        │                                           │
-│                          ││               │audit allow catalog_search db.public.items                            │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               └──────────────────────────────────────────────────────────────────────┘                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               └──────────────────────────────────────────────────────────────────────┘                                           │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-│                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                          ││[Grid] Explain  Messages                                                                                                          │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-└──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-disconnected  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                                                                            Ctrl+P  F1
+ Workbench  Connections [Agents] Server  History   default  no connection  —                                                                                    
+[1 Approvals]  2 Activity   3 Profiles   4 Setup                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                            No agent's write is waiting for approval.                                                           
+                                           An agent writing under a grant that asks first waits here for your answer.                                           
+                                                                                                                                                                
+                                                                      [R Revoke all grants]                                                                     
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+Agents  Up/Down pick  PgUp/PgDn read  1-4 views  Esc back                                                                                             Ctrl+P  F1

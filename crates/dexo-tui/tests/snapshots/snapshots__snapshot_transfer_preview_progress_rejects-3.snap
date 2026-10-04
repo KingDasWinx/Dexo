@@ -2,26 +2,26 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 100, 30)"
 ---
-demo  local  public                                                                                 
+[Workbench] Connections  Agents  Server  History   demo  local  public                              
 ┌  Sidebar─────────────────┐ scratch.sql ×  +                                                       
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
-│  ● local▾  [offline]     ││   1▸select 1                                                         │
-│>   ▸ public ┌Transfer──────────────────────────────────────────────────────────────┐             │
-│      mysql.u│import orders.csv                                                     │             │
-│             │format=csv (Ctrl+F to cycle) strategy=RejectFile                      │             │
-│             │progress rows=2 bytes=0 running=false                                 │             │
+│  ● local▾                ││   1▸select 1                                                         │
+│>   ▸ public              ││                                                                      │
+│      mysql.u┌Import data───────────────────────────────────────────────────────────┐             │
+│             │Import a CSV, TSV, JSON or JSON Lines file into a table on local.     │             │
+│             │                                                                      │             │
+│             │> File:     orders.csv                                        [Browse]│             │
+│             │  Format:   csv                                                       │             │
+│             │  Table:    orders                                                    │             │
+│             │  On error: Skip the bad rows, write them to a file                   │             │
 │             │preview:                                                              │             │
 │             │preview ready                                                         │             │
-│             │reject line=3 invalid value                                           │             │
-│             │ [Submit]   [Cancel]                                                  │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │─────────────┘
-│             │                                                                      │─────────────┐
-│             │                                                                      │             │
-│             └──────────────────────────────────────────────────────────────────────┘             │
+│             │Line 3: invalid value                                                 │             │
+│             │ [Import]   [Cancel]                                                  │             │
+│             └──────────────────────────────────────────────────────────────────────┘─────────────┘
+│                          │┌  Results─────────────────────────────────────────────────────────────┐
+│                          ││[Grid] Explain  Messages                                              │
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
@@ -31,4 +31,4 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-local  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                       Ctrl+P  F1
+local                                                                                     Ctrl+P  F1

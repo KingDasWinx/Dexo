@@ -11,14 +11,16 @@ pub mod mouse;
 pub mod palette;
 pub mod render;
 pub mod runtime;
+pub mod screen;
 pub mod screens;
+pub mod sql_template;
 pub mod terminal;
 pub mod theme;
 pub mod update;
 pub mod widgets;
 
 pub use action::{Action, Effect};
-pub use event::run;
+pub use event::{Startup, run};
 pub use model::{
     Focus, GridCell, GridModel, Model, OperationStatus, ResultKey, ResultTab, ResultsState,
 };

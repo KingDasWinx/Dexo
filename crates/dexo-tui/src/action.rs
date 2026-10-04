@@ -16,6 +16,16 @@ pub enum Action {
         width: u16,
         height: u16,
     },
+    /// A connection opened without saving it -- from a URL or as the demo -- listed and
+    /// dialled at start.
+    OpenTemporaryConnection(Box<ConnectionProfile>),
+    /// "Save Connection…" on a temporary connection: asks the runtime for the password
+    /// it holds in memory, then opens the connection form with it.
+    SaveTemporaryConnection,
+    TemporarySaveForm {
+        profile: Box<ConnectionProfile>,
+        password: Option<crate::screens::secret_prompt::SecretBuffer>,
+    },
     ConnectionChanged {
         name: String,
         ready: bool,
@@ -34,10 +44,29 @@ pub enum Action {
     SessionOpened {
         token: u64,
     },
+    /// What the server calls a session Dexo opened: how Server tells Dexo's own.
+    SessionServerId {
+        session: SessionId,
+        server_id: String,
+    },
+    /// What a newly opened session's driver cannot do, and why.
+    SessionCapabilities {
+        session: SessionId,
+        unavailable: Vec<(dexo_driver_api::Capability, String)>,
+    },
     SecretRequired {
         purpose: crate::screens::secret_prompt::SecretPurpose,
         profile: ConnectionProfile,
         buffer: crate::screens::secret_prompt::SecretBuffer,
+    },
+    /// The server turned down a password typed at the prompt: the prompt comes back with
+    /// what was typed and what the server said.
+    SecretRejected {
+        purpose: crate::screens::secret_prompt::SecretPurpose,
+        profile: ConnectionProfile,
+        buffer: crate::screens::secret_prompt::SecretBuffer,
+        keychain: bool,
+        message: String,
     },
     SubmitSecret {
         kind: crate::screens::secret_prompt::SecretChoiceKind,
@@ -59,6 +88,8 @@ pub enum Action {
     MoveDocumentTabCursor(i32),
     /// A bracketed paste, arriving whole rather than as the keys it resembles.
     Paste(String),
+    /// A line for the messages from the runtime, outside any query.
+    Notice(String),
     /// Ctrl+V. The terminal did not paste, so the clipboard is read here instead.
     PasteFromClipboard,
     /// The selection, or the line under the cursor when nothing is selected.
@@ -66,6 +97,9 @@ pub enum Action {
     EditorCut,
     /// The answer to the unsaved-changes prompt.
     ResolveClose(crate::model::CloseChoice),
+    /// Vim's `:wq` and `:q!`: the unsaved-close answer, for the active document, given
+    /// without asking.
+    ResolveCloseActive(crate::model::CloseChoice),
     DuplicateConnection,
     TestConnection,
     DeleteConnection,
@@ -85,6 +119,16 @@ pub enum Action {
     },
     SessionClosed {
         session: crate::runtime::SessionId,
+    },
+    /// A transaction command the server refused: said in Messages, and the query that may
+    /// be running beside it left alone.
+    TransactionFailed {
+        message: String,
+    },
+    /// A statement failed on the network and the session no longer answers -- the server
+    /// ended it, or it dropped. `session` is the operation key's: an id, or a name.
+    SessionLost {
+        session: String,
     },
     SaveConnection,
     QueryResultSetStarted {
@@ -110,6 +154,8 @@ pub enum Action {
         key: crate::runtime::OperationKey,
         index: usize,
         rows_affected: Option<u64>,
+        /// The rows stopped at the row limit with more left.
+        truncated: bool,
     },
     ScriptFinished {
         key: crate::runtime::OperationKey,
@@ -121,8 +167,14 @@ pub enum Action {
         index: usize,
         message: String,
         details: Vec<String>,
+        /// Where in the statement the server says it failed: 1-based, in characters.
+        position: Option<u32>,
+        /// The person stopped it: said as a line, not as an error.
+        cancelled: bool,
     },
     CheckpointTick,
+    /// Typing may have paused: syntax errors held back for the cursor are looked at again.
+    DiagnosticsTick,
     OnboardingTick,
     TransactionChanged {
         session: crate::runtime::SessionId,
@@ -196,8 +248,20 @@ pub enum Action {
     OpenObjectDdl,
     OpenObjectData,
     OpenDependencies,
+    /// The Schema form, on the connection the document belongs to.
+    OpenSchemaForm,
+    /// A new document on the selected object's connection, holding a template.
+    OpenSqlTemplate(crate::sql_template::SqlTemplate),
     ExplorerUp,
     ExplorerDown,
+    ExplorerFirst,
+    ExplorerLast,
+    ExplorerPageUp,
+    ExplorerPageDown,
+    /// Left: close the node, or step to the one it belongs to.
+    ExplorerCollapse,
+    /// Right: open the node, or step into it.
+    ExplorerOpen,
     SelectDocument {
         index: usize,
     },
@@ -212,6 +276,20 @@ pub enum Action {
     RenameDocument,
     SelectGridRow,
     SelectGridColumn,
+    /// `s` / a header click: the column's sort goes ascending, descending, off; with
+    /// `add` (`S`, Shift-click) the other sorted columns stay. `None` is the cursor's
+    /// column.
+    SortByColumn {
+        column: Option<usize>,
+        add: bool,
+    },
+    /// `t`: count the grid's rows exactly, on a connection of its own; `t` again while
+    /// it runs cancels it.
+    CountRows,
+    RowsCounted {
+        operation: OperationId,
+        result: Result<u64, String>,
+    },
     NextResultTab,
     PrevResultTab,
     SelectResultTab {
@@ -221,6 +299,7 @@ pub enum Action {
     PrevDataPage,
     SaveActiveDocument,
     OpenDocument,
+    CycleTheme,
     CycleMode,
     CycleAccent,
     CycleKeymap,
@@ -237,22 +316,32 @@ pub enum Action {
     ChangeDataPage {
         offset: u64,
     },
-    ApplyRemoteSort,
-    ApplyRemoteFilter,
+    /// `w` and `o`: the WHERE or the ORDER BY bar takes the keys.
+    FocusClauseBar {
+        bar: crate::screens::data::ClauseBar,
+    },
     DataPageLoaded {
         generation: u64,
         session: String,
+        ticket: OperationId,
         page: dexo_driver_api::DataPage,
     },
     DataPageFailed {
         generation: u64,
+        ticket: OperationId,
         message: String,
     },
     TableColumnsLoaded {
         generation: u64,
+        ticket: OperationId,
         columns: Vec<dexo_driver_api::ColumnKeyInfo>,
     },
     TableColumnsFailed {
+        generation: u64,
+        ticket: OperationId,
+        message: String,
+    },
+    ValueFetchFailed {
         generation: u64,
         message: String,
     },
@@ -277,6 +366,8 @@ pub enum Action {
         ddl: Option<String>,
         dependencies: Vec<dexo_driver_api::ObjectId>,
         dependents: Vec<dexo_driver_api::ObjectId>,
+        /// What each of them is called and what it is, for the lists above.
+        names: std::collections::HashMap<dexo_driver_api::ObjectId, String>,
         effective_privileges: Vec<String>,
         restrictions: Vec<String>,
     },
@@ -290,6 +381,8 @@ pub enum Action {
     ClipboardFailed {
         message: String,
     },
+    /// The system clipboard could not be read: what Dexo copied last is pasted instead.
+    ClipboardUnreadable,
     OfflineCatalogLoaded {
         generation: u64,
         list: dexo_driver_api::CatalogList,
@@ -306,7 +399,8 @@ pub enum Action {
     ToggleSystemObjects,
     CopyGrid(dexo_app::data::CopyFormat),
     OpenReview,
-    ConfirmProduction,
+    /// Starts the transfer the dialog describes, as its Submit does.
+    SubmitTransfer,
     ApplyChanges,
     FailApply,
     RevertChanges,
@@ -316,8 +410,38 @@ pub enum Action {
     OpenInsertRow,
     SubmitInsertRow,
     CancelInsertRow,
+    /// F2 on a cell of a table's rows: change its value, through the review like any
+    /// other change.
+    EditCell,
     InspectValue,
-    OpenRelated,
+    /// The databases running in Docker, for the connections screen.
+    DockerDiscovered(Vec<dexo_app::docker::DockerDatabase>),
+    /// Save Query As: name what the selection or the document holds.
+    OpenSaveQuery,
+    OpenSavedQueries,
+    SavedQueriesLoaded(Result<Vec<dexo_storage::SavedQuery>, String>),
+    /// A save, rename or delete finished: what to say about it.
+    SavedQueryDone(Result<String, String>),
+    /// The note on an object, read from the database.
+    NoteLoaded {
+        object: String,
+        note: Option<String>,
+    },
+    /// A note's save answered: the note now kept (none when it was blanked), or why it
+    /// was not.
+    NoteSaved {
+        object: String,
+        saved: Result<Option<String>, String>,
+    },
+    /// The palette's Edit Object Note: `n` on the explorer's object.
+    EditObjectNote,
+    /// `f` on a row: list the foreign keys from and to its table.
+    OpenRelatedPicker,
+    ForeignKeysLoaded {
+        generation: u64,
+        table: dexo_driver_api::QualifiedName,
+        result: Result<Vec<dexo_driver_api::ForeignKeyRef>, String>,
+    },
     DataNavBack,
     OpenDdlPreview,
     ConfirmDdl,
@@ -329,8 +453,10 @@ pub enum Action {
     SchemaDiffToggleAdded,
     SchemaDiffToggleRemoved,
     SchemaDiffToggleChanged,
-    ConfirmSchemaDiff,
-    ApplySchemaDiff,
+    /// The script of the comparison on screen, in a document of its own.
+    SchemaDiffOpenScript,
+    /// The saved snapshots a comparison can start from.
+    SchemaSourcesLoaded(Vec<(String, String)>),
     SchemaDiffLoaded {
         from_label: String,
         to_label: String,
@@ -364,21 +490,38 @@ pub enum Action {
     },
     OpenExplain,
     CycleResultsView,
+    /// `\x`: rows one field per line, or back to the grid.
+    ToggleRecordView,
+    /// `\x on` / `\x off`: the record view set rather than switched.
+    SetRecordView(bool),
     DismissToast,
     ToastTick,
     ConfirmExplainAnalyze,
+    RunExplainAnalyze,
     OpenAdmin,
-    AdminPause,
-    AdminResume,
-    ConfirmAdmin,
     OpenMcpProfiles,
+    /// Agents' Setup view: an agent pointed at Dexo's MCP server.
+    OpenMcpSetup,
     ToggleMcpProfile,
     RevokeAllMcpGrants,
     RevokeProfileGrants,
     McpGrantsRevoked {
         count: usize,
     },
+    /// What saving a profile's access came to.
+    McpProfileSaved {
+        message: String,
+    },
     McpRevokeFailed {
+        message: String,
+    },
+    /// `g` in MCP Profiles: a new grant for the selected profile.
+    OpenMcpGrantForm,
+    /// The grant was made: what to say about it.
+    McpGrantCreated {
+        message: String,
+    },
+    McpGrantFailed {
         message: String,
     },
     OpenSettings,
@@ -401,11 +544,22 @@ pub enum Action {
     ResultsPageUp,
     ResultsPageDown,
     ResultsTop,
+    /// Esc on the grid: the rows picked or selected shrink back to the cursor's cell.
+    ResultsCollapse,
+    ResultsBottom,
+    ResultsFirstColumn,
+    ResultsLastColumn,
     OpenResultsMenu,
     ToggleResultsPick,
     ResultsExtendUp,
     ResultsExtendDown,
     ToggleHelp,
+    /// Goes to a screen, keeping the one left as the way back.
+    GoToScreen(crate::model::Screen),
+    /// Back to the screen before this one, the workbench when there is none.
+    ScreenBack,
+    /// Gives the keys to a screen's first (its list) or second section (its detail).
+    FocusScreenSection(usize),
     CycleLayout,
     ResetLayout,
     HideExplorer,
@@ -417,6 +571,22 @@ pub enum Action {
     RefreshSqlIntelligence,
     FormatSql,
     EditorUndo,
+    EditorToggleComment,
+    /// Opens the document in `$VISUAL`, `$EDITOR` or the platform's editor.
+    EditExternally,
+    /// The external editor exited. `text` is what it saved, when it exited cleanly.
+    ExternalEditFinished {
+        document: String,
+        text: Result<String, String>,
+    },
+    EditorDuplicateLine,
+    EditorMoveLine {
+        up: bool,
+    },
+    /// Ctrl+F, or Ctrl+H with `replace`.
+    OpenFind {
+        replace: bool,
+    },
     EditorRedo,
     EditorSelectAll,
     AcceptCompletion,
@@ -424,39 +594,110 @@ pub enum Action {
     SubmitParameters,
     SearchHistory,
     ClearHistory,
-    HistoryLoaded(Vec<String>),
+    HistoryLoaded(Vec<dexo_storage::HistoryRow>),
     HistoryPick,
     SnippetsLoaded(Vec<dexo_sql::Snippet>),
     SnippetPick,
     DdlPreviewed {
-        sql: String,
+        statements: Vec<String>,
         confirmation: dexo_app::schema::Confirmation,
         warnings: Vec<String>,
+        risk: dexo_driver_api::ChangeRisk,
     },
+    /// A schema change went through, or ended in a state the person must hear of
+    /// (`ok` false). `refresh` is what it touched, whose place in the explorer is read
+    /// again.
     SchemaApplied {
+        message: String,
+        refresh: Option<dexo_driver_api::QualifiedName>,
+        ok: bool,
+    },
+    /// A schema change the server or the connection refused, and why.
+    SchemaFailed {
         message: String,
     },
     ExplainLoaded {
         plan: Box<dexo_driver_api::ExplainPlan>,
+        /// The statement explained, so a second plan of it can be compared with the first.
+        sql: String,
+        /// The hypothetical indexes it was planned with.
+        indexes: Vec<String>,
+        document: String,
+        operation: OperationId,
+    },
+    /// Explain view's Try index: ask for an index definition.
+    OpenTryIndex,
+    /// Plan the statement again as if `definition` were built.
+    TryIndex {
+        definition: String,
+    },
+    ExplainFailed {
+        document: String,
+        operation: OperationId,
+        message: String,
     },
     AdminSessionsLoaded {
         sessions: Vec<dexo_driver_api::SessionInfo>,
         captured_at: String,
         blocking: Vec<dexo_driver_api::BlockingEdge>,
     },
+    /// The list of sessions could not be read: the dialog says why instead of staying
+    /// on "Loading".
+    AdminFailed {
+        message: String,
+    },
+    /// What the server said to ending a session, or why it would not.
+    AdminCancelled {
+        result: Result<String, String>,
+    },
+    /// A view's rows, and what the server would not show of it; or why it could not be
+    /// read.
+    AdminViewLoaded {
+        /// The session the view was read through: the server's it is.
+        session: SessionId,
+        view: crate::screens::admin::ServerView,
+        result: Result<(crate::screens::admin::ViewRows, Option<String>), String>,
+    },
+    AdminTerminated {
+        result: Result<String, String>,
+    },
     DiagnosticsReady {
         preview: String,
+    },
+    McpProfileDeleted {
+        name: String,
     },
     McpProfilesLoaded {
         profiles: Vec<crate::screens::mcp_profiles::McpProfileSummary>,
     },
-    McpAuditLoaded {
-        events: Vec<String>,
+    /// What each agent's config says of Dexo, and what an entry would run.
+    McpClientsLoaded {
+        clients: Vec<crate::screens::mcp_setup::ClientRow>,
+        command: String,
+        project: String,
     },
+    /// What Set up wrote, or why it could not.
+    McpClientSetUp {
+        result: Result<Vec<String>, String>,
+    },
+    McpAuditLoaded {
+        events: Vec<crate::screens::mcp_audit::AuditLine>,
+        pending: Vec<dexo_app::mcp::Approval>,
+        now: i64,
+    },
+    /// A second on a screen that reads again on its own: Agents, Server.
+    ScreenTick,
+    /// The writes waiting for approval, looked at from the other screens.
+    ApprovalsWaiting(Vec<dexo_app::mcp::Approval>),
     DocumentLoaded {
         document: String,
         path: std::path::PathBuf,
         content: String,
+    },
+    /// The file could not be read: the tab opened for it goes away again.
+    DocumentLoadFailed {
+        document: String,
+        message: String,
     },
     DocumentAutosaved {
         id: String,
@@ -466,6 +707,11 @@ pub enum Action {
     DocumentSaved {
         document: String,
         revision: u64,
+    },
+    /// The write did not land: a close waiting on it is called off.
+    DocumentSaveFailed {
+        document: String,
+        message: String,
     },
     DocumentConflict {
         path: String,
@@ -484,11 +730,13 @@ pub enum Action {
     DeleteProject,
     ConfirmProjectDelete,
     ConfirmSwitchDirty,
+    /// The answer to "this project has unsaved documents": save, don't save, or stay.
+    ResolveProjectSwitch(crate::model::CloseChoice),
     CancelProjectSwitch,
     ProjectsLoaded(Vec<dexo_app::Project>),
     ProjectLoaded {
         project: dexo_app::Project,
-        documents: Vec<(String, String)>,
+        documents: Vec<dexo_storage::StoredDocument>,
         layout: Option<dexo_storage::WorkbenchLayout>,
         recent_sql_files: Vec<std::path::PathBuf>,
     },
@@ -502,12 +750,13 @@ pub enum Action {
     ImportConfig {
         path: std::path::PathBuf,
     },
-    ConfigPreviewed {
-        conflicts: Vec<String>,
-        needing_secret: Vec<String>,
-    },
+    ConfigPreviewed(dexo_storage::ImportPreview),
+    /// The export was written.
+    ConfigExported,
     ConfigImported {
         needing_secret: Vec<String>,
+        /// What the imported connections run on this machine when they connect.
+        commands: Vec<String>,
     },
     DocumentsFlushed,
     LayoutPersisted,
@@ -535,9 +784,18 @@ pub enum FocusTarget {
 pub struct ScriptRequest {
     pub key: OperationKey,
     pub statements: Vec<String>,
+    /// How each statement is read, to tell a read from a write.
+    pub dialect: dexo_sql::Dialect,
     pub policy: ScriptPolicy,
+    /// Values bound in order to every statement: Dexo's own `$n` in a re-run.
     pub parameters: Vec<DbValue>,
+    /// The editor's `:name` values: each statement is rewritten to the dialect's
+    /// placeholders and given only the values it names.
+    pub named: Vec<(String, DbValue)>,
     pub timeout: std::time::Duration,
+    /// Dexo's own re-run around text from the bars: it runs where it cannot write (see
+    /// `QueryRequest::read_only`).
+    pub read_only: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -557,12 +815,8 @@ pub struct RecoveryCheckpointRequest {
     pub content: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct PersistHistoryRequest {
-    pub project_id: Option<String>,
-    pub connection_id: Option<String>,
-    pub sql: String,
-}
+/// A statement's run for History; the storage worker gives it its id.
+pub type PersistHistoryRequest = dexo_storage::NewHistoryEntry;
 
 #[derive(Clone, Debug)]
 pub enum TransferRequest {
@@ -572,6 +826,10 @@ pub enum TransferRequest {
         format: dexo_app::transfer::TransferFormat,
         columns: Vec<String>,
         rows: Arc<Vec<Vec<DbValue>>>,
+        /// How an SQL export quotes names and writes values: the connection's.
+        dialect: dexo_app::data::SqlDialect,
+        /// The table an SQL export inserts into, `schema.table` or `table`.
+        table: Option<String>,
     },
     Import {
         operation: OperationId,
@@ -633,10 +891,81 @@ pub struct FlushedDocument {
     pub path: Option<std::path::PathBuf>,
 }
 
+/// One side of a schema comparison.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiffSide {
+    /// An open connection, read now.
+    Live {
+        session: SessionId,
+        driver: String,
+        name: String,
+    },
+    /// A snapshot saved by name.
+    Snapshot { name: String },
+    /// A snapshot file.
+    File { path: std::path::PathBuf },
+}
+
 #[derive(Clone, Debug)]
 pub enum Effect {
     StartScript(ScriptRequest),
     CancelOperation(OperationId),
+    /// `sql` counts rows. A table's on a connection opened for it, so the count never
+    /// waits on, nor cancels, the session's own queries; a result's on the session it
+    /// came from (`on_session`), whose search path, temporary tables and open
+    /// transaction it read.
+    CountRows {
+        session: SessionId,
+        operation: OperationId,
+        sql: String,
+        parameters: Vec<DbValue>,
+        on_session: bool,
+    },
+    CancelCount {
+        operation: OperationId,
+    },
+    /// Look for databases running in Docker.
+    DiscoverDocker,
+    LoadNote {
+        connection_id: String,
+        object: String,
+    },
+    /// Writes the note; a blank one removes it.
+    SaveNote {
+        connection_id: String,
+        object: String,
+        note: String,
+    },
+    /// A person's answer to a write waiting under an asking grant.
+    SettleApproval {
+        id: uuid::Uuid,
+        approve: bool,
+    },
+    /// Whether any agent's write waits for approval, for a toast.
+    CheckApprovals,
+    SaveQuery {
+        project_id: String,
+        connection_id: String,
+        name: String,
+        sql: String,
+    },
+    LoadSavedQueries {
+        project_id: String,
+    },
+    RenameSavedQuery {
+        project_id: String,
+        id: String,
+        name: String,
+    },
+    DeleteSavedQuery {
+        project_id: String,
+        id: String,
+    },
+    LoadForeignKeys {
+        session: SessionId,
+        generation: u64,
+        table: dexo_driver_api::QualifiedName,
+    },
     PersistLayout {
         project_id: String,
         layout: dexo_storage::WorkbenchLayout,
@@ -644,10 +973,21 @@ pub enum Effect {
     CreateConnection {
         input: NewConnection,
         password: String,
+        /// False when a temporary connection is saved: its session is already open.
+        connect: bool,
     },
     ConnectProfile {
         profile: ConnectionProfile,
         token: u64,
+    },
+    /// A connection was renamed: its open sessions go by the new name.
+    RenameSessions {
+        from: String,
+        to: String,
+    },
+    /// Reads a temporary connection's password from the session's memory, for the form.
+    RevealTemporarySecret {
+        profile: Box<ConnectionProfile>,
     },
     /// Move the session a spawned connect parked into the registry. The registry needs
     /// `&mut WorkbenchRuntime`, which the task doing the dialling cannot hold.
@@ -656,11 +996,17 @@ pub enum Effect {
     },
     SubmitSecret {
         kind: crate::screens::secret_prompt::SecretChoiceKind,
+        purpose: crate::screens::secret_prompt::SecretPurpose,
         profile: ConnectionProfile,
         secret: crate::screens::secret_prompt::SecretBuffer,
+        /// The connect that asked for the secret: the dial answers it, and an answer to
+        /// any other is dropped as stale.
+        token: u64,
     },
     DuplicateProfile {
         id: dexo_app::ConnectionId,
+        /// The open temporary connections' names, which the copy must not take.
+        taken: Vec<String>,
     },
     TestConnection {
         input: NewConnection,
@@ -671,6 +1017,8 @@ pub enum Effect {
     },
     SaveProfile {
         profile: ConnectionProfile,
+        /// A password typed in the edit form; empty keeps the one already saved.
+        password: String,
     },
     DeleteProfile {
         profile: ConnectionProfile,
@@ -722,10 +1070,13 @@ pub enum Effect {
         session: SessionId,
         generation: u64,
     },
+    /// Read the names of the saved schema snapshots.
+    LoadSchemaSources,
     LoadSchemaDiff {
-        session: SessionId,
-        left: dexo_app::schema_diff::DiffSource,
-        right: dexo_app::schema_diff::DiffSource,
+        left: DiffSide,
+        right: DiffSide,
+        /// The session whose driver writes the migration script.
+        render_session: Option<SessionId>,
         generation: u64,
     },
     LoadSecurity {
@@ -741,29 +1092,68 @@ pub enum Effect {
     RunExplain {
         sql: String,
         cursor: usize,
+        /// How the document is split into statements.
+        dialect: dexo_sql::Dialect,
         analyze: bool,
+        /// Indexes to plan with as if they were built.
+        indexes: Vec<String>,
         session: SessionId,
+        /// The document that asked; the plan is its own even if another tab is active
+        /// by the time it arrives.
+        document: String,
+        operation: OperationId,
         generation: u64,
     },
     LoadAdminSessions {
         session: SessionId,
         generation: u64,
     },
+    /// Reads one of the Server screen's views other than Sessions.
+    LoadAdminView {
+        session: SessionId,
+        view: crate::screens::admin::ServerView,
+    },
+    /// Stops the query session `target` runs on the server, leaving the session.
+    AdminCancel {
+        session: SessionId,
+        target: String,
+    },
     AdminTerminate {
         session: SessionId,
         target: String,
     },
     LoadMcpProfiles,
+    /// Reads each agent's config for Dexo's entry.
+    LoadMcpClients,
+    /// Makes or enables the profile, then writes the agent's config.
+    SetUpMcpClient {
+        client: dexo_app::mcp::clients::McpClient,
+        profile: crate::screens::mcp_setup::SetupProfile,
+        skill: bool,
+    },
     LoadConnectionProfiles,
     LoadMcpAudit,
     SetMcpProfileEnabled {
         name: String,
         enabled: bool,
     },
+    /// A profile's connections, or whether it reads SQL, changed; what is `None` stays.
+    SaveMcpProfileAccess {
+        name: String,
+        connections: Option<Vec<String>>,
+        reads: Option<bool>,
+    },
+    DeleteMcpProfile {
+        name: String,
+    },
     RevokeMcpGrants {
         profile: String,
     },
     RevokeAllMcpGrants,
+    CreateMcpGrant {
+        profile: String,
+        request: dexo_app::mcp::GrantRequest,
+    },
     WriteDiagnostics {
         path: std::path::PathBuf,
         bundle: dexo_app::diagnostic_service::DiagnosticBundle,
@@ -777,6 +1167,10 @@ pub enum Effect {
     },
     ClearHistory {
         connection_id: String,
+    },
+    /// These runs out of History.
+    DeleteHistory {
+        ids: Vec<String>,
     },
     SwitchProject {
         name: String,
@@ -831,11 +1225,13 @@ pub enum Effect {
         request: dexo_driver_api::DataRequest,
         session: SessionId,
         generation: u64,
+        ticket: OperationId,
     },
     LoadTableColumns {
         target: dexo_driver_api::QualifiedName,
         session: SessionId,
         generation: u64,
+        ticket: OperationId,
     },
     FetchValue {
         value: dexo_driver_api::RemoteValueRef,
@@ -865,6 +1261,9 @@ pub enum Effect {
         session: SessionId,
         generation: u64,
         include_system: bool,
+        /// Kept in storage for the next session. A temporary connection's is not: it
+        /// is gone when Dexo closes, and nothing could find or delete it afterwards.
+        persist: bool,
     },
     /// The last captured snapshot, for completion: the sidebar only loads what is
     /// expanded, so without this a table's columns were on offer only once its node had

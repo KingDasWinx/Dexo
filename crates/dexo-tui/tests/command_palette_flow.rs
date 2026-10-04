@@ -20,7 +20,7 @@ fn choose_effects_id(model: &mut Model, id: &str) -> Vec<Effect> {
     let mut effects = update(model, Action::OpenPalette);
     effects.extend(update(model, Action::PaletteQuery(id.into())));
     let entries = palette_entries(model);
-    let visible = filter_entries(&entries, &model.palette.query);
+    let visible = filter_entries(&entries, model.palette.query.as_str());
     if let Some(index) = visible.iter().position(|entry| entry.id == id) {
         model.palette.selected = index;
     }
@@ -56,7 +56,10 @@ fn project_create_opens_the_existing_name_form() {
 
 #[test]
 fn palette_renders_registered_shortcut() {
-    let mut model = Model::default();
+    let mut model = Model {
+        keys_disambiguated: true,
+        ..Model::default()
+    };
     update(&mut model, Action::OpenPalette);
     update(&mut model, Action::PaletteQuery("execute statement".into()));
     let view = dexo_tui::render::render_to_string(&model, 100, 30);
@@ -93,12 +96,12 @@ fn connection_delete_never_hides_confirmation() {
 
     let mut model = Model::default();
     update(&mut model, Action::OpenConnections);
-    assert!(model.connections.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Connections);
     update(
         &mut model,
         Action::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
     );
-    assert!(model.connections.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Connections);
     assert!(model.connections.delete_target.is_none());
 }
 
@@ -226,7 +229,6 @@ fn model_satisfying(requirements: &[dexo_tui::palette::Requirement]) -> Model {
                 model.set_sql("select :id");
                 dexo_tui::screens::editor::refresh_intelligence(&mut model, false);
             }
-            Requirement::History => model.editor.history.push("select 1".into()),
         }
     }
     if model.active_document().text().is_empty() {
@@ -308,4 +310,16 @@ fn every_palette_id_has_an_observable_outcome() {
             ),
         }
     }
+}
+
+/// A command named for what was typed comes before one that only has it as a keyword.
+#[test]
+fn the_commands_named_for_the_query_come_first() {
+    let model = Model::default();
+    let entries = dexo_tui::palette::palette_entries(&model);
+    let found: Vec<&str> = dexo_tui::palette::filter_entries(&entries, "favor")
+        .into_iter()
+        .map(|entry| entry.title)
+        .collect();
+    assert_eq!(found[0], "Show Favorites Only", "{found:?}");
 }

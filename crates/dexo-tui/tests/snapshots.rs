@@ -143,13 +143,29 @@ fn snapshot_review_and_related_tab() {
         .data
         .changes
         .insert(vec![("id".into(), DbValue::I64(1))]);
-    model.data.related_fk = Some(ForeignKey {
-        local: vec!["id".into()],
-        referenced_table: QualifiedName::new(Some("demo"), Some("public"), "users"),
-        referenced: vec!["id".into()],
-    });
     model.data.related_row = vec![("id".into(), Some(DbValue::I64(1)))];
-    update(&mut model, Action::OpenRelated);
+    follow(
+        &mut model,
+        ForeignKey {
+            local: vec!["id".into()],
+            referenced_table: QualifiedName::new(Some("demo"), Some("public"), "users"),
+            referenced: vec!["id".into()],
+        },
+    );
+    // The related rows are a document of their own: the change reviewed is theirs.
+    model.data.table = TableMeta {
+        columns: vec![ColumnDef {
+            name: "id".into(),
+            primary_key: true,
+            unique: true,
+            nullable: false,
+        }],
+    };
+    model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
+    model
+        .data
+        .changes
+        .insert(vec![("id".into(), DbValue::I64(2))]);
     update(&mut model, Action::OpenReview);
     insta::assert_snapshot!(render_to_string(&model, 100, 30));
 }
@@ -230,7 +246,7 @@ fn snapshot_explain_tree_table_summary() {
 
     let mut model = snapshot_model();
     update(&mut model, Action::OpenExplain);
-    model.explain = dexo_tui::screens::explain::ExplainScreen::fixture();
+    model.results.explain = dexo_tui::screens::explain::ExplainScreen::fixture();
     // the plan now lives in the output pane, beside the grid it belongs with
     assert_eq!(model.results.view, dexo_tui::model::ResultsView::Explain);
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
@@ -241,7 +257,8 @@ fn snapshot_explain_tree_table_summary() {
 }
 
 #[test]
-fn snapshot_admin_sessions_pause_and_preview() {
+fn snapshot_admin_sessions_and_terminate_prompt() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use dexo_tui::action::Action;
     use dexo_tui::update;
 
@@ -249,8 +266,13 @@ fn snapshot_admin_sessions_pause_and_preview() {
     update(&mut model, Action::OpenAdmin);
     model.admin = dexo_tui::screens::admin::AdminScreen::fixture();
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
-    update(&mut model, Action::AdminPause);
-    insta::assert_snapshot!(render_to_string(&model, 60, 20));
+    for code in [KeyCode::Down, KeyCode::Char('t')] {
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+        );
+    }
+    insta::assert_snapshot!(render_to_string(&model, 100, 30));
 }
 
 #[test]
@@ -267,4 +289,23 @@ fn snapshot_mcp_profiles_preview_and_confirm() {
     update(&mut model, Action::ToggleMcpProfile);
     update(&mut model, Action::RevokeAllMcpGrants);
     insta::assert_snapshot!(render_to_string(&model, 60, 20));
+}
+
+/// Follows `key` from the row in `related_row`, as Enter in the related-rows picker does.
+fn follow(model: &mut Model, key: dexo_app::data::ForeignKey) -> Vec<dexo_tui::Effect> {
+    model.data.related_picker = Some(dexo_tui::screens::data::RelatedPicker {
+        table: model.data.target.clone(),
+        links: Some(vec![dexo_tui::screens::data::RelatedLink {
+            label: "related".into(),
+            key,
+        }]),
+        selected: 0,
+    });
+    dexo_tui::update(
+        model,
+        dexo_tui::action::Action::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+    )
 }

@@ -67,6 +67,15 @@ impl SessionRegistry {
         self.sessions.get(&id)
     }
 
+    /// A connection renamed: its sessions go by the new name.
+    pub fn rename(&mut self, from: &str, to: &str) {
+        for active in self.sessions.values_mut() {
+            if active.connection == from {
+                active.connection = to.to_string();
+            }
+        }
+    }
+
     pub fn find_by_connection(&self, connection: &str) -> Option<&ActiveSession> {
         self.sessions
             .values()

@@ -65,12 +65,18 @@ impl<'a> ConnectionRepository<'a> {
         self.save(profile)
     }
 
-    pub fn duplicate(&self, id: ConnectionId) -> anyhow::Result<ConnectionProfile> {
+    /// A copy of the connection under a name no saved connection has, nor any of
+    /// `taken` -- the caller's temporary connections, whose sessions are found by name.
+    pub fn duplicate(
+        &self,
+        id: ConnectionId,
+        taken: &[String],
+    ) -> anyhow::Result<ConnectionProfile> {
         let mut profile = self
             .get(id)?
             .ok_or_else(|| anyhow::anyhow!("unknown connection {}", id.0))?;
         profile.id = ConnectionId(Uuid::new_v4());
-        profile.name = unique_copy_name(&profile.name, self)?;
+        profile.name = unique_copy_name(&profile.name, self, taken)?;
         profile.secret_refs = profile
             .secret_refs
             .keys()
@@ -263,14 +269,21 @@ fn persist_secret_refs(profile: &ConnectionProfile) -> anyhow::Result<BTreeMap<S
     Ok(refs)
 }
 
-fn unique_copy_name(name: &str, repo: &ConnectionRepository<'_>) -> anyhow::Result<String> {
+fn unique_copy_name(
+    name: &str,
+    repo: &ConnectionRepository<'_>,
+    taken: &[String],
+) -> anyhow::Result<String> {
+    let free = |candidate: &str| -> anyhow::Result<bool> {
+        Ok(repo.get_by_name(candidate)?.is_none() && !taken.iter().any(|name| name == candidate))
+    };
     let candidate = format!("{name} (copy)");
-    if repo.get_by_name(&candidate)?.is_none() {
+    if free(&candidate)? {
         return Ok(candidate);
     }
     for n in 2..1000 {
         let candidate = format!("{name} (copy {n})");
-        if repo.get_by_name(&candidate)?.is_none() {
+        if free(&candidate)? {
             return Ok(candidate);
         }
     }
@@ -353,6 +366,9 @@ struct PortableConnection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportReport {
     pub connections_needing_secret: Vec<String>,
+    /// What each imported connection runs on this machine when it connects, said so
+    /// the person importing a shared file sees it: see [`commands_of`].
+    pub commands: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -366,7 +382,29 @@ pub enum ImportResolution {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImportPreview {
     pub conflicts: Vec<String>,
+    /// The name of every connection the file holds, the ones that clash with a saved
+    /// one among them.
+    pub incoming: Vec<String>,
+    /// Every connection saved already: a name a clashing one is renamed to must not be one.
+    pub existing: Vec<String>,
     pub connections_needing_secret: Vec<String>,
+    /// What each connection would run on this machine when it connects.
+    pub commands: Vec<String>,
+}
+
+/// The commands a connection runs on this machine -- its pre-connect command and its
+/// password command -- one line each, for a person to read before trusting them.
+pub fn commands_of(name: &str, config: &Value) -> Vec<String> {
+    [
+        ("pre_connect", "before it connects"),
+        ("password_command", "for its password"),
+    ]
+    .into_iter()
+    .filter_map(|(key, when)| {
+        let command = config.get(key)?.as_str()?.trim();
+        (!command.is_empty()).then(|| format!("{name} runs `{command}` {when}"))
+    })
+    .collect()
 }
 
 pub fn export_portable(conn: &Connection) -> anyhow::Result<String> {
@@ -416,6 +454,7 @@ pub fn import_portable(conn: &Connection, toml_text: &str) -> anyhow::Result<Imp
     }
     let connections = ConnectionRepository::new(conn);
     let mut connections_needing_secret = Vec::new();
+    let mut commands = Vec::new();
     for item in portable.connections {
         let config: Value = serde_json::from_str(&item.config_json)?;
         let policy = if item.policy_json.trim().is_empty() {
@@ -438,10 +477,14 @@ pub fn import_portable(conn: &Connection, toml_text: &str) -> anyhow::Result<Imp
         profile.group_path = item.group_path;
         profile.policy = policy;
         connections.save(&profile)?;
-        connections_needing_secret.push(item.name);
+        commands.extend(commands_of(&item.name, &profile.config));
+        if needs_secret(&profile) {
+            connections_needing_secret.push(item.name);
+        }
     }
     Ok(ImportReport {
         connections_needing_secret,
+        commands,
     })
 }
 
@@ -457,15 +500,40 @@ pub fn preview_import(conn: &Connection, toml_text: &str) -> anyhow::Result<Impo
         .collect();
     let mut conflicts = Vec::new();
     let mut connections_needing_secret = Vec::new();
+    let mut commands = Vec::new();
     for item in &portable.connections {
         if existing.contains_key(&item.name) {
             conflicts.push(item.name.clone());
         }
-        connections_needing_secret.push(item.name.clone());
+        let config: Value = serde_json::from_str(&item.config_json)?;
+        commands.extend(commands_of(&item.name, &config));
+        // A file has no password, and a password command supplies its own: neither is
+        // something the person must type after the import.
+        let probe = ConnectionProfile::new(
+            ConnectionId(Uuid::nil()),
+            None,
+            item.name.clone(),
+            item.driver.clone(),
+            item.environment.clone(),
+            config,
+            SecretRef::new(String::new()),
+        );
+        if needs_secret(&probe) {
+            connections_needing_secret.push(item.name.clone());
+        }
     }
+    let mut existing: Vec<String> = existing.into_keys().collect();
+    existing.sort();
     Ok(ImportPreview {
         conflicts,
+        incoming: portable
+            .connections
+            .iter()
+            .map(|item| item.name.clone())
+            .collect(),
+        existing,
         connections_needing_secret,
+        commands,
     })
 }
 
@@ -493,6 +561,7 @@ pub fn import_portable_resolved(
         .map(|profile| (profile.name.clone(), profile))
         .collect();
     let mut connections_needing_secret = Vec::new();
+    let mut commands = Vec::new();
     for item in portable.connections {
         let resolution = if existing.contains_key(&item.name) {
             resolutions
@@ -539,11 +608,20 @@ pub fn import_portable_resolved(
         profile.group_path = item.group_path;
         profile.policy = policy;
         connections.save(&profile)?;
-        connections_needing_secret.push(name);
+        commands.extend(commands_of(&name, &profile.config));
+        if needs_secret(&profile) {
+            connections_needing_secret.push(name);
+        }
     }
     Ok(ImportReport {
         connections_needing_secret,
+        commands,
     })
+}
+
+/// Whether a connection will want a password typed for it once it is imported.
+fn needs_secret(profile: &ConnectionProfile) -> bool {
+    !profile.is_file() && profile.password_command().is_none()
 }
 
 fn parse_uuid_anyhow(value: &str) -> anyhow::Result<uuid::Uuid> {

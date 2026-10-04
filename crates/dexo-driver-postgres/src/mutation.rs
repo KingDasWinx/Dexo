@@ -4,7 +4,7 @@ use dexo_driver_api::{
 };
 use tokio_postgres::types::ToSql;
 
-use crate::decode::{column_meta, decode_row};
+use crate::decode::{column_meta, decode_row_named};
 use crate::error::map_error;
 use crate::session::PostgresSession;
 
@@ -52,6 +52,12 @@ impl Binder {
         };
         self.values.push(value);
         format!("${}{cast}", self.values.len())
+    }
+
+    /// A placeholder whose type the statement around it decides.
+    fn push_untyped(&mut self, value: DbValue) -> String {
+        self.values.push(value);
+        format!("${}", self.values.len())
     }
 
     fn boxed(&self) -> Vec<Box<dyn ToSql + Sync + Send>> {
@@ -111,11 +117,18 @@ fn render_fetch(request: &DataRequest) -> Result<(String, Binder), DriverError> 
             .join(", ")
     };
     let mut sql = format!("SELECT {cols} FROM {}", qualify(&request.object));
-    if let Some(filter) = &request.filter {
+    let typed = request
+        .filter
+        .as_ref()
+        .map(|filter| render_filter(filter, &mut binder));
+    if let Some(condition) = request.clauses.condition(typed) {
         sql.push_str(" WHERE ");
-        sql.push_str(&render_filter(filter, &mut binder));
+        sql.push_str(&condition);
     }
-    if !request.sort.is_empty() {
+    if let Some(order) = request.clauses.order() {
+        sql.push_str(" ORDER BY ");
+        sql.push_str(order);
+    } else if !request.sort.is_empty() {
         sql.push_str(" ORDER BY ");
         sql.push_str(
             &request
@@ -132,8 +145,9 @@ fn render_fetch(request: &DataRequest) -> Result<(String, Binder), DriverError> 
                 .join(", "),
         );
     }
+    // On a line of its own: a comment ending the ORDER BY text would take it otherwise.
     sql.push_str(&format!(
-        " LIMIT {} OFFSET {}",
+        "\nLIMIT {} OFFSET {}",
         binder.push(DbValue::I64(i64::from(request.page.limit) + 1)),
         binder.push(DbValue::I64(request.page.offset as i64))
     ));
@@ -233,24 +247,63 @@ fn cap_value(value: DbValue) -> DbValue {
     }
 }
 
+/// The row's key, compared with `=` -- a key column has it, and its index serves -- and
+/// the values the row was read with, compared as the server writes them. Many types
+/// have no `=`: json, xml, point, polygon, jsonpath, lquery, refcursor, pg_snapshot. A
+/// delete compares every column, and failed on every table with one: "operator does not
+/// exist". `COALESCE` gives the value the column's own type, so both sides are that
+/// type's text.
 fn predicate(
     identity: &[(ColumnId, DbValue)],
     original: &[(ColumnId, DbValue)],
     binder: &mut Binder,
 ) -> String {
-    identity
+    let mut parts: Vec<String> = identity
         .iter()
-        .chain(original.iter())
         .map(|(column, value)| match value {
             DbValue::Null => format!("{} IS NULL", quote(&column.0)),
             _ => format!("{} = {}", quote(&column.0), binder.push(value.clone())),
         })
-        .collect::<Vec<_>>()
-        .join(" AND ")
+        .collect();
+    parts.extend(original.iter().map(|(column, value)| {
+        let column = quote(&column.0);
+        match value {
+            DbValue::Null => format!("{column} IS NULL"),
+            _ => format!(
+                "{column}::text = COALESCE({}, {column})::text",
+                binder.push_untyped(value.clone())
+            ),
+        }
+    }));
+    parts.join(" AND ")
 }
 
 #[async_trait::async_trait]
 impl DataMutator for PostgresSession {
+    async fn estimate_rows(&self, target: &QualifiedName) -> Result<Option<u64>, DriverError> {
+        // The table the server reads for this name: a name without a schema through the
+        // search_path, not as `public`. `reltuples` is -1 until a table is first
+        // vacuumed or analyzed. A partitioned table keeps no count of its own, so its
+        // leaf partitions' are added up -- none while one of them has none.
+        let row = self
+            .client
+            .query_opt(
+                "SELECT (CASE WHEN c.relkind = 'p' THEN
+                           (SELECT CASE WHEN bool_and(l.reltuples >= 0) THEN sum(l.reltuples) END
+                            FROM pg_partition_tree(c.oid) t
+                            JOIN pg_class l ON l.oid = t.relid
+                            WHERE t.isleaf)
+                         ELSE c.reltuples END)::bigint
+                 FROM pg_class c WHERE c.oid = to_regclass($1)",
+                &[&qualify(target)],
+            )
+            .await
+            .map_err(map_error)?;
+        Ok(row
+            .and_then(|row| row.get::<_, Option<i64>>(0))
+            .and_then(|rows| u64::try_from(rows).ok()))
+    }
+
     async fn table_columns(
         &self,
         target: &QualifiedName,
@@ -272,18 +325,17 @@ impl DataMutator for PostgresSession {
                       AND a.attnum = ANY (c.conkey)
                 ) AS is_unique
             FROM pg_attribute a
-            JOIN pg_class t ON t.oid = a.attrelid
-            JOIN pg_namespace n ON n.oid = t.relnamespace
-            WHERE t.relname = $1
-              AND n.nspname = $2
+            WHERE a.attrelid = to_regclass($1)
               AND a.attnum > 0
               AND NOT a.attisdropped
             ORDER BY a.attnum
         ";
-        let schema = target.schema().unwrap_or("public").to_string();
-        let object = target.object().to_string();
-        let refs: Vec<&(dyn ToSql + Sync)> = vec![&object, &schema];
-        let rows = self.client.query(sql, &refs).await.map_err(map_error)?;
+        // Resolved as the fetch's own statement resolves it, not as `public`.
+        let rows = self
+            .client
+            .query(sql, &[&qualify(target)])
+            .await
+            .map_err(map_error)?;
         Ok(rows
             .iter()
             .map(|row| dexo_driver_api::ColumnKeyInfo {
@@ -301,7 +353,24 @@ impl DataMutator for PostgresSession {
         let boxed = binder.boxed();
         let refs: Vec<&(dyn ToSql + Sync)> =
             boxed.iter().map(|value| value.as_ref() as _).collect();
-        let rows = self.client.query(&sql, &refs).await.map_err(map_error)?;
+        // Text typed in the bars runs where it cannot write.
+        let typed = request.clauses.where_sql.is_some() || request.clauses.order_by.is_some();
+        let guard = if typed {
+            Some(crate::session::ReadOnly::start(&self.client).await?)
+        } else {
+            None
+        };
+        let rows = self.client.query(&sql, &refs).await.map_err(map_error);
+        if let Some(guard) = guard {
+            guard.end(&self.client).await;
+        }
+        let rows = rows?;
+        let names = match rows.first() {
+            Some(row) if crate::decode::needs_names(row.columns()) => {
+                crate::decode::reg_names(&self.client, &rows).await
+            }
+            _ => crate::decode::RegNames::default(),
+        };
         let columns = rows
             .first()
             .map(|row| row.columns().iter().map(column_meta).collect())
@@ -318,7 +387,9 @@ impl DataMutator for PostgresSession {
             });
         Ok(DataPage::from_fetched(
             columns,
-            rows.iter().map(|row| cap_row(decode_row(row))).collect(),
+            rows.iter()
+                .map(|row| cap_row(decode_row_named(row, &names)))
+                .collect(),
             request.page.offset,
             request.page.limit,
         ))
@@ -380,6 +451,12 @@ impl DataMutator for PostgresSession {
     }
 }
 
+/// A batch goes in as INSERTs of many rows each -- a round trip for up to `MAX_PARAMS`
+/// values, not one for each row -- in a transaction of its own: all of it or none.
+/// ponytail: COPY is faster still, but tokio-postgres 0.7 loses the connection when the
+/// server refuses a COPY before reading its data -- no such column, a view, row-level
+/// security -- as it sends Sync twice and the second answer has no request to go to.
+/// Take COPY once its `copy_in` sends one.
 #[async_trait::async_trait]
 impl dexo_driver_api::BulkWriter for PostgresSession {
     async fn insert_batch(
@@ -388,30 +465,100 @@ impl dexo_driver_api::BulkWriter for PostgresSession {
         columns: &[String],
         rows: &[Vec<DbValue>],
     ) -> Result<u64, DriverError> {
-        let mutations: Vec<Mutation> = rows
-            .iter()
-            .map(|values| Mutation::Insert {
-                table: table.clone(),
-                columns: columns.iter().cloned().map(ColumnId).collect(),
-                values: values.clone(),
-            })
-            .collect();
-        self.apply(&mutations).await?;
-        Ok(rows.len() as u64)
+        self.client
+            .batch_execute("BEGIN")
+            .await
+            .map_err(map_error)?;
+        match insert_rows(self, table, columns, rows).await {
+            Ok(written) => {
+                self.client
+                    .batch_execute("COMMIT")
+                    .await
+                    .map_err(map_error)?;
+                Ok(written)
+            }
+            Err(error) => {
+                let _ = self.client.batch_execute("ROLLBACK").await;
+                Err(error)
+            }
+        }
     }
 }
 
+/// The most values one statement binds: the protocol counts them in 16 bits.
+const MAX_PARAMS: usize = i16::MAX as usize;
+
+async fn insert_rows(
+    session: &PostgresSession,
+    table: &dexo_driver_api::QualifiedName,
+    columns: &[String],
+    rows: &[Vec<DbValue>],
+) -> Result<u64, DriverError> {
+    let width = columns.len().max(1);
+    let per_statement = (MAX_PARAMS / width).max(1);
+    let names = columns
+        .iter()
+        .map(|column| quote(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut written = 0;
+    for (index, chunk) in rows.chunks(per_statement).enumerate() {
+        let mut binder = Binder::new();
+        let values = chunk
+            .iter()
+            .map(|row| {
+                let slots = row
+                    .iter()
+                    .map(|value| binder.push(value.clone()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({slots})")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("INSERT INTO {} ({names}) VALUES {values}", qualify(table));
+        let boxed = binder.boxed();
+        let refs: Vec<&(dyn ToSql + Sync)> =
+            boxed.iter().map(|value| value.as_ref() as _).collect();
+        let before = index * per_statement;
+        written += session.client.execute(&sql, &refs).await.map_err(|error| {
+            // A value the server could not read is a parameter of a row: the row an
+            // import names by its line.
+            let row = parameter(&error).map(|number| before + (number - 1) / width + 1);
+            let mapped = map_error(error);
+            match row.and_then(|row| u32::try_from(row).ok()) {
+                Some(row) => mapped.with_row(row),
+                None => mapped,
+            }
+        })?;
+    }
+    Ok(written)
+}
+
+/// The parameter whose value the server could not read, from where it says it was:
+/// `unnamed portal parameter $3 = '...'`.
+fn parameter(error: &tokio_postgres::Error) -> Option<usize> {
+    let place = error.as_db_error()?.where_()?;
+    let (_, rest) = place.split_once("parameter $")?;
+    rest.split(|ch: char| !ch.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+        .filter(|number| *number > 0)
+}
+
 async fn apply_inner(session: &PostgresSession, mutations: &[Mutation]) -> Result<(), DriverError> {
-    for mutation in mutations {
+    for (index, mutation) in mutations.iter().enumerate() {
         let (sql, binder) = render_mutation(mutation)?;
         let boxed = binder.boxed();
         let refs: Vec<&(dyn ToSql + Sync)> =
             boxed.iter().map(|value| value.as_ref() as _).collect();
+        // The row's place in the batch goes with the error: an import says which line.
         let affected = session
             .client
             .execute(&sql, &refs)
             .await
-            .map_err(map_error)?;
+            .map_err(|error| map_error(error).with_row(index as u32 + 1))?;
         if !matches!(mutation, Mutation::Insert { .. }) && affected != 1 {
             return Err(DriverError::new(
                 DriverErrorCategory::Conflict,
@@ -425,6 +572,24 @@ async fn apply_inner(session: &PostgresSession, mutations: &[Mutation]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::quote;
+
+    #[test]
+    fn the_key_is_compared_with_equals_and_the_read_values_as_text() {
+        use dexo_driver_api::{ColumnId, DbValue};
+        let mut binder = super::Binder::new();
+        let sql = super::predicate(
+            &[(ColumnId("id".into()), DbValue::I64(1))],
+            &[
+                (ColumnId("p".into()), DbValue::Text("(1,2)".into())),
+                (ColumnId("n".into()), DbValue::Null),
+            ],
+            &mut binder,
+        );
+        assert_eq!(
+            sql,
+            "\"id\" = $1::bigint AND \"p\"::text = COALESCE($2, \"p\")::text AND \"n\" IS NULL"
+        );
+    }
 
     #[test]
     fn postgres_quote_wraps_and_escapes() {

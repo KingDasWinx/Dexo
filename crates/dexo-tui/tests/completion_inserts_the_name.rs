@@ -58,3 +58,66 @@ fn accepting_a_table_inserts_the_table_and_nothing_else() {
 fn an_insert_target_is_never_aliased() {
     assert_eq!(complete("insert into ev"), "INSERT INTO events_1m");
 }
+
+fn typed(model: &mut Model, text: &str) {
+    for ch in text.chars() {
+        update(
+            model,
+            Action::Key(KeyEvent::new(KeyCode::Char(ch), M::NONE)),
+        );
+    }
+}
+
+fn two_schemas() -> Model {
+    let mut model = Model::default();
+    model.apply_size(120, 30);
+    model.focus = Focus::Editor;
+    let table = |schema: &str, name: &str| {
+        CatalogObject::new(
+            ObjectId::new(format!("table:{schema}.{name}")),
+            ObjectKind::Table,
+            QualifiedName::new(None::<String>, Some(schema), name),
+            None,
+        )
+    };
+    model.absorb_catalog(&[table("reporting", "daily"), table("public", "customers")]);
+    model
+}
+
+/// `daily` is in `reporting`: accepted bare, the query failed with "relation does not
+/// exist".
+#[test]
+fn a_table_outside_the_default_schema_is_written_with_its_schema() {
+    let mut model = two_schemas();
+    typed(&mut model, "select * from dail");
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Enter, M::NONE)),
+    );
+    assert_eq!(
+        model.active_document().text(),
+        "SELECT * FROM reporting.daily"
+    );
+    let mut model = two_schemas();
+    typed(&mut model, "select * from cust");
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Enter, M::NONE)),
+    );
+    assert_eq!(model.active_document().text(), "SELECT * FROM customers");
+}
+
+/// Enter after a table name already typed in full is the new line the user pressed it
+/// for, not an acceptance of what is there that swallows it.
+#[test]
+fn enter_after_a_complete_name_starts_a_new_line() {
+    let mut model = two_schemas();
+    typed(&mut model, "select id from customers");
+    assert!(model.editor.completion_open);
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Enter, M::NONE)),
+    );
+    assert!(!model.editor.completion_open);
+    assert_eq!(model.active_document().text(), "SELECT id FROM customers\n");
+}

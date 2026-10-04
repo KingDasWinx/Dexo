@@ -45,6 +45,7 @@ impl ConnectionFactory for FakeFactory {
                 ssh: false,
                 proxy: false,
             },
+            file: false,
         }
     }
 

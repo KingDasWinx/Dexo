@@ -1,0 +1,516 @@
+//! `dexo postgres://user:secret@host/db`: a connection described by a URL, opened
+//! without being saved.
+
+use secrecy::SecretString;
+use uuid::Uuid;
+
+use crate::connection_profile::{ConnectionId, ConnectionProfile, SecretRef};
+use crate::error::{AppError, ErrorCategory};
+
+/// A profile that lives only as long as the session that opened it, and the URL's
+/// password, which is never written anywhere.
+pub struct UrlConnection {
+    pub profile: ConnectionProfile,
+    pub password: Option<SecretString>,
+    /// Something whoever opens the connection should be told, such as that the
+    /// password was given where other users can read it.
+    pub warning: Option<String>,
+}
+
+impl std::fmt::Debug for UrlConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UrlConnection")
+            .field("profile", &self.profile.name)
+            .field("password", &self.password.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
+}
+
+pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
+    let invalid = |reason: &str| {
+        AppError::new(
+            ErrorCategory::Configuration,
+            format!("not a connection URL: {reason}"),
+        )
+    };
+    let (scheme, rest) = url.split_once("://").ok_or_else(|| {
+        invalid(
+            "expected scheme://, such as postgres://user@host/db; \
+                 for a SQLite or DuckDB file, sqlite:///path/to/file or duckdb:///path/to/file",
+        )
+    })?;
+    let driver = match scheme.to_ascii_lowercase().as_str() {
+        "postgres" | "postgresql" => "postgres",
+        "mysql" => "mysql",
+        "mariadb" => "mariadb",
+        "sqlite" => return file_connection("sqlite", rest),
+        "duckdb" => return file_connection("duckdb", rest),
+        other => return Err(invalid(&format!("unknown scheme {other}"))),
+    };
+    let (userinfo, rest) = split_userinfo(rest);
+    // A fragment is for the client that wrote the URL; it names nothing here.
+    let rest = rest.split_once('#').map_or(rest, |(rest, _)| rest);
+    let (main, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let parameters = Parameters::read(query, driver).map_err(|reason| invalid(&reason))?;
+    let (hostport, database) = main.split_once('/').unwrap_or((main, ""));
+    let (user, password) = match userinfo {
+        Some(userinfo) => match userinfo.split_once(':') {
+            Some((user, password)) => (user, Some(password)),
+            None => (userinfo, None),
+        },
+        None => ("", None),
+    };
+    let user = decode(user).map_err(|_| invalid("the user is not valid percent-encoding"))?;
+    if user.is_empty() {
+        return Err(invalid(
+            "the URL needs a user, such as postgres://user@host/db",
+        ));
+    }
+    let password = password
+        .map(decode)
+        .transpose()
+        .map_err(|_| invalid("the password is not valid percent-encoding"))?
+        .filter(|password| !password.is_empty())
+        .map(SecretString::from);
+    let database =
+        decode(database).map_err(|_| invalid("the database is not valid percent-encoding"))?;
+    let (host, port) = split_host_port(hostport)
+        .ok_or_else(|| invalid("the port is not a number from 0 to 65535"))?;
+    // `%2Fvar%2Frun%2Fpostgresql` is a socket directory; `?host=` says the same.
+    let host = decode(&host).map_err(|_| invalid("the host is not valid percent-encoding"))?;
+    let host = match parameters.host {
+        Some(host) => host,
+        None if host.is_empty() => "localhost".to_string(),
+        None => host,
+    };
+    let mut config = serde_json::json!({
+        "host": host,
+        "username": user,
+        "database": database,
+    });
+    if let Some(port) = port {
+        config["port"] = serde_json::json!(port);
+    }
+    if parameters.tls.is_some() || !parameters.tls_files.is_empty() {
+        let mut tls = serde_json::json!({ "mode": parameters.tls.unwrap_or("verify_full") });
+        for (key, path) in parameters.tls_files {
+            tls[key] = serde_json::json!(path);
+        }
+        config["tls"] = tls;
+    }
+    let name = if database.is_empty() {
+        format!("{user}@{host}")
+    } else {
+        format!("{user}@{host}/{database}")
+    };
+    Ok(UrlConnection {
+        profile: temporary(name, driver, config),
+        password,
+        warning: None,
+    })
+}
+
+/// The user and password, and what follows them. A password is pasted as it is, `/`,
+/// `?`, `#` and `@` in it unencoded, and no host has an `@`: so they end at the last
+/// `@` that is not in a parameter's value. Ending at the first `/` or `?` after an `@`
+/// split `u:p@ss/x@h/db` into the password `p` and the host `ss`, and put pieces of
+/// the password in the errors about parameters.
+fn split_userinfo(rest: &str) -> (Option<&str>, &str) {
+    let mut end = rest.len();
+    while let Some(at) = rest[..end].rfind('@') {
+        if in_parameter(&rest[..at]) {
+            end = at;
+            continue;
+        }
+        let userinfo = &rest[..at];
+        // No user has a `/`: the `@` is past the host, where nothing is the user's.
+        let user = userinfo.split(':').next().unwrap_or("");
+        if user.contains(['/', '?', '#']) {
+            return (None, rest);
+        }
+        return (Some(userinfo), &rest[at + 1..]);
+    }
+    (None, rest)
+}
+
+/// Whether `before`, the URL up to an `@`, ends inside a parameter Dexo reads: past a
+/// `?`, nothing but `key=value` pairs with keys of its own -- `?sslrootcert=/me@work`.
+fn in_parameter(before: &str) -> bool {
+    const KEYS: &[&str] = &[
+        "mode",
+        "sslmode",
+        "ssl_mode",
+        "ssl-mode",
+        "ssl",
+        "host",
+        "sslrootcert",
+        "sslcert",
+        "sslkey",
+        "application_name",
+        "fallback_application_name",
+        "connect_timeout",
+        "client_encoding",
+        "charset",
+    ];
+    before.rsplit_once('?').is_some_and(|(_, query)| {
+        query.split('&').all(|pair| {
+            pair.split_once('=')
+                .is_some_and(|(key, _)| KEYS.contains(&key.to_ascii_lowercase().as_str()))
+        })
+    })
+}
+
+/// `sqlite:///abs/path` and `sqlite://relative/path`, `duckdb://` the same: the rest is
+/// the file, and `?mode=ro` opens it read-only. `duckdb://:memory:` is a database that
+/// lives as long as the connection.
+fn file_connection(driver: &str, rest: &str) -> Result<UrlConnection, AppError> {
+    let invalid = |reason: &str| {
+        AppError::new(
+            ErrorCategory::Configuration,
+            format!("not a connection URL: {reason}"),
+        )
+    };
+    // A fragment is for the client that wrote the URL, as on the servers' URLs. But a
+    // `#` may be the file's own -- `sales#2.db` -- and ending the path there opened
+    // `sales`, created empty: it is taken for a fragment only when the path before it
+    // is a file already.
+    let rest = match rest.split_once('#') {
+        None => rest,
+        Some((before, _)) if names_a_file(before) => before,
+        Some(_) => return Err(invalid("a # in a file's path is written %23")),
+    };
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let parameters = Parameters::read(query, driver).map_err(|reason| invalid(&reason))?;
+    let path = decode(path).map_err(|_| invalid("the path is not valid percent-encoding"))?;
+    if path.is_empty() {
+        return Err(AppError::new(
+            ErrorCategory::Configuration,
+            format!(
+                "not a connection URL: {driver}:// needs a file, such as {driver}:///path/to/file"
+            ),
+        ));
+    }
+    let mut connection = file(driver, std::path::Path::new(&path))?;
+    if parameters.read_only {
+        connection.profile.policy.read_only = Some(true);
+    }
+    Ok(connection)
+}
+
+/// Whether a file URL's text without its fragment -- path, then any `?parameters` --
+/// names a file that exists.
+fn names_a_file(text: &str) -> bool {
+    let path = text.split_once('?').map_or(text, |(path, _)| path);
+    decode(path).is_ok_and(|path| !path.is_empty() && std::path::Path::new(&path).is_file())
+}
+
+/// A temporary connection to the file at `path`, named after it.
+pub fn file(driver: &str, path: &std::path::Path) -> Result<UrlConnection, AppError> {
+    if path.as_os_str() == ":memory:" {
+        let config = serde_json::json!({ "path": ":memory:" });
+        return Ok(UrlConnection {
+            profile: temporary("memory".into(), driver, config),
+            password: None,
+            warning: None,
+        });
+    }
+    let path = std::path::absolute(path).map_err(|error| {
+        AppError::new(
+            ErrorCategory::Configuration,
+            format!("{}: {error}", path.display()),
+        )
+    })?;
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let config = serde_json::json!({ "path": path.display().to_string() });
+    Ok(UrlConnection {
+        profile: temporary(name, driver, config),
+        password: None,
+        warning: None,
+    })
+}
+
+/// The id comes from what the URL points at, its password left out: the same URL opened
+/// again is the same connection, so documents bound to it last time find it.
+fn temporary(name: String, driver: &str, config: serde_json::Value) -> ConnectionProfile {
+    let target = format!("dexo-temporary:{driver}:{config}");
+    ConnectionProfile::new(
+        ConnectionId(Uuid::new_v5(&Uuid::NAMESPACE_URL, target.as_bytes())),
+        None,
+        name,
+        driver,
+        "local",
+        config,
+        SecretRef::new(Uuid::new_v4().to_string()),
+    )
+}
+
+/// `host`, `host:port`, `[v6]` or `[v6]:port`.
+fn split_host_port(hostport: &str) -> Option<(String, Option<u16>)> {
+    if let Some(rest) = hostport.strip_prefix('[') {
+        let (host, after) = rest.split_once(']')?;
+        return match after.strip_prefix(':') {
+            Some(port) => Some((host.to_string(), Some(port.parse().ok()?))),
+            None if after.is_empty() => Some((host.to_string(), None)),
+            None => None,
+        };
+    }
+    match hostport.rsplit_once(':') {
+        Some((host, port)) => Some((host.to_string(), Some(port.parse().ok()?))),
+        None => Some((hostport.to_string(), None)),
+    }
+}
+
+/// The query parameters a Dexo URL understands. Any other is refused, not dropped: a
+/// URL that says `?mode=ro` and opens the file for writing does worse than one that
+/// does not parse.
+#[derive(Default)]
+struct Parameters {
+    tls: Option<&'static str>,
+    /// `sslrootcert`, `sslcert` and `sslkey`, as the TLS settings' `ca_file`,
+    /// `client_cert` and `client_key`.
+    tls_files: Vec<(&'static str, String)>,
+    host: Option<String>,
+    read_only: bool,
+}
+
+impl Parameters {
+    fn read(query: &str, driver: &str) -> Result<Self, String> {
+        let mut read = Self::default();
+        for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let value =
+                decode(value).map_err(|_| format!("{key} is not valid percent-encoding"))?;
+            let lower = value.to_ascii_lowercase().replace('-', "_");
+            match (driver, key.to_ascii_lowercase().as_str()) {
+                ("sqlite" | "duckdb", "mode") => match lower.as_str() {
+                    "ro" => read.read_only = true,
+                    "rw" | "rwc" => {}
+                    _ => return Err(format!("mode={value}: expected ro, rw or rwc")),
+                },
+                ("postgres" | "mysql" | "mariadb", "sslmode" | "ssl_mode" | "ssl-mode") => {
+                    read.tls = Some(match lower.as_str() {
+                        "disable" | "disabled" => "disable",
+                        "allow" | "prefer" | "preferred" => "preferred",
+                        "require" | "required" => "required",
+                        "verify_ca" => "verify_ca",
+                        "verify_full" | "verify_identity" => "verify_full",
+                        _ => return Err(format!("{key}={value} is not a TLS mode")),
+                    });
+                }
+                ("mysql" | "mariadb", "ssl") => {
+                    read.tls = Some(match lower.as_str() {
+                        "true" | "1" => "required",
+                        "false" | "0" => "disable",
+                        _ => return Err(format!("ssl={value}: expected true or false")),
+                    });
+                }
+                ("postgres", "host") if !value.is_empty() => read.host = Some(value),
+                ("postgres", "sslrootcert") => read.tls_files.push(("ca_file", value)),
+                ("postgres", "sslcert") => read.tls_files.push(("client_cert", value)),
+                ("postgres", "sslkey") => read.tls_files.push(("client_key", value)),
+                // Said for the server's logs or the client's own clock; Dexo names
+                // itself, keeps its own connect timeout, and always speaks UTF-8.
+                (
+                    "postgres",
+                    "application_name" | "fallback_application_name" | "connect_timeout",
+                )
+                | ("postgres", "client_encoding")
+                | ("mysql" | "mariadb", "charset" | "connect_timeout") => {}
+                _ => {
+                    return Err(format!(
+                        "{key} is not a parameter Dexo reads in a {driver} URL; \
+                         save a connection to set it"
+                    ));
+                }
+            }
+        }
+        Ok(read)
+    }
+}
+
+/// Percent-decoding, so `p%40ss` is `p@ss`. `+` is left alone: it is a space only in
+/// form bodies, not in the parts of a URL a connection uses.
+fn decode(text: &str) -> Result<String, ()> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            // Two hex digits; `from_str_radix` alone would take `%+1` as 0x01.
+            let hex = text
+                .get(i + 1..i + 3)
+                .filter(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                .ok_or(())?;
+            out.push(u8::from_str_radix(hex, 16).map_err(|_| ())?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use secrecy::ExposeSecret;
+
+    use super::parse;
+
+    #[test]
+    fn a_postgres_url_becomes_a_temporary_profile_and_a_password() {
+        let parsed = parse("postgresql://ana:p%40ss%3Aword@db.example.com:6543/shop?sslmode=require&application_name=x").unwrap();
+        assert_eq!(parsed.profile.driver, "postgres");
+        assert_eq!(parsed.profile.name, "ana@db.example.com/shop");
+        assert_eq!(parsed.profile.config["host"], "db.example.com");
+        assert_eq!(parsed.profile.config["port"], 6543);
+        assert_eq!(parsed.profile.config["database"], "shop");
+        assert_eq!(parsed.profile.config["tls"]["mode"], "required");
+        assert_eq!(parsed.password.unwrap().expose_secret(), "p@ss:word");
+        // The same place under another password is the same connection.
+        let again =
+            parse("postgresql://ana:other@db.example.com:6543/shop?sslmode=require").unwrap();
+        assert_eq!(again.profile.id, parsed.profile.id);
+        // The password is the caller's to keep in memory; it is not in the profile.
+        assert!(!parsed.profile.config.to_string().contains("p@ss"));
+    }
+
+    #[test]
+    fn mysql_mariadb_and_ipv6_hosts() {
+        let parsed = parse("mysql://root@[::1]/app?ssl-mode=VERIFY_IDENTITY").unwrap();
+        assert_eq!(parsed.profile.driver, "mysql");
+        assert_eq!(parsed.profile.config["host"], "::1");
+        assert!(parsed.profile.config.get("port").is_none());
+        assert_eq!(parsed.profile.config["tls"]["mode"], "verify_full");
+        assert!(parsed.password.is_none());
+        assert_eq!(
+            parse("mariadb://u@h:3307").unwrap().profile.driver,
+            "mariadb"
+        );
+    }
+
+    /// The path as this platform makes it absolute: on Windows `/data` is on the
+    /// current drive.
+    fn absolute(path: &str) -> String {
+        std::path::absolute(path).unwrap().display().to_string()
+    }
+
+    #[test]
+    fn file_urls_name_the_file() {
+        let duckdb = parse("duckdb:///data/sales.parquet?mode=ro").unwrap();
+        assert_eq!(duckdb.profile.driver, "duckdb");
+        assert_eq!(
+            duckdb.profile.config["path"],
+            absolute("/data/sales.parquet")
+        );
+        assert_eq!(duckdb.profile.policy.read_only, Some(true));
+        let memory = parse("duckdb://:memory:").unwrap();
+        assert_eq!(memory.profile.config["path"], ":memory:");
+        assert_eq!(memory.profile.name, "memory");
+        // SQLite's in-memory database too, not a file called `:memory:` in the directory.
+        let memory = parse("sqlite://:memory:").unwrap();
+        assert_eq!(memory.profile.config["path"], ":memory:");
+
+        let parsed = parse("sqlite:///tmp/shop%20copy.db").unwrap();
+        assert_eq!(parsed.profile.driver, "sqlite");
+        assert_eq!(parsed.profile.config["path"], absolute("/tmp/shop copy.db"));
+        assert_eq!(parsed.profile.name, "shop copy.db");
+        let relative = parse("sqlite://shop.db").unwrap();
+        assert!(
+            std::path::Path::new(relative.profile.config["path"].as_str().unwrap()).is_absolute()
+        );
+    }
+
+    #[test]
+    fn fragments_hosts_and_parameters() {
+        let parsed = parse("postgres://u@%2Fvar%2Frun%2Fpostgresql/db#notes").unwrap();
+        assert_eq!(parsed.profile.config["host"], "/var/run/postgresql");
+        assert_eq!(parsed.profile.config["database"], "db");
+        let parsed = parse("postgres://u@/db?host=/tmp/sock").unwrap();
+        assert_eq!(parsed.profile.config["host"], "/tmp/sock");
+        let parsed = parse("mariadb://u@h/db?ssl=true").unwrap();
+        assert_eq!(parsed.profile.config["tls"]["mode"], "required");
+        let parsed = parse("sqlite:///tmp/x.db?mode=ro").unwrap();
+        assert_eq!(parsed.profile.policy.read_only, Some(true));
+        assert_eq!(parsed.profile.config["path"], absolute("/tmp/x.db"));
+    }
+
+    /// A password with `?`, `/`, `#` or `@` in it, unencoded, is the password: split at
+    /// the `?` first, half of it went to the parameters and the error quoted it.
+    #[test]
+    fn a_pasted_password_stays_whole_and_out_of_errors() {
+        for (url, password) in [
+            ("postgres://u:pa?ss@h/db", "pa?ss"),
+            ("postgres://u:pa/ss@h/db", "pa/ss"),
+            ("postgres://u:pa#ss@h/db", "pa#ss"),
+            ("postgres://u:p@ss@h/db?sslmode=require", "p@ss"),
+            // An `@` and then a `/` or `?`: the host is past the last `@`.
+            ("postgres://u:p@ss/x@h/db", "p@ss/x"),
+            ("postgres://u:p@ss?x@h/db", "p@ss?x"),
+            ("postgres://u:p@s?s=x@h/db", "p@s?s=x"),
+            ("postgres://u:a/b@c?d#e@h/db?sslmode=require", "a/b@c?d#e"),
+        ] {
+            let parsed = parse(url).unwrap_or_else(|error| panic!("{url}: {error}"));
+            assert_eq!(parsed.password.unwrap().expose_secret(), password, "{url}");
+            assert_eq!(parsed.profile.config["host"], "h", "{url}");
+            assert_eq!(parsed.profile.config["database"], "db", "{url}");
+        }
+        let error = parse("postgres://u:se?cret=x@h/db?bogus=1")
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("cret"), "{error}");
+        // A parameter's `@` is not a user's.
+        assert!(parse("postgres://h/db?application_name=a@b").is_err());
+        let parsed = parse("postgres://u:pw@h/db?sslrootcert=/certs/me@work.pem").unwrap();
+        assert_eq!(parsed.password.unwrap().expose_secret(), "pw");
+        assert_eq!(parsed.profile.config["host"], "h");
+        assert_eq!(
+            parsed.profile.config["tls"]["ca_file"],
+            "/certs/me@work.pem"
+        );
+        let error = parse("postgres://u:p@ss?x@h/db?bogus=1")
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("ss?x") && !error.contains("p@"), "{error}");
+        // `#` in a SQLite path would open another file; it must be written %23.
+        assert!(parse("sqlite:///data/sales#2.db").is_err());
+        assert_eq!(
+            parse("sqlite:///data/sales%232.db").unwrap().profile.config["path"],
+            absolute("/data/sales#2.db")
+        );
+        // A fragment after a file that exists is only a fragment, parameters and all.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("shop.db");
+        std::fs::write(&file, b"").unwrap();
+        let url = format!("sqlite://{}?mode=ro#notes", file.display());
+        let parsed = parse(&url).unwrap();
+        assert_eq!(parsed.profile.config["path"], file.display().to_string());
+        assert_eq!(parsed.profile.policy.read_only, Some(true));
+        // One after a path that names no file may be the name's own: refused.
+        let missing = dir.path().join("sales");
+        assert!(parse(&format!("sqlite://{}#2.db", missing.display())).is_err());
+    }
+
+    #[test]
+    fn what_is_not_a_connection_url_says_why() {
+        for url in [
+            "postgres://u%+1@h/db",
+            "postgres://u@h/db?options=-c%20statement_timeout%3D0",
+            "postgres://u@h/db?sslmode=sometimes",
+            "sqlite:///x.db?mode=memory",
+            "postgres.example.com",
+            "ftp://u@h/x",
+            "postgres://host/db",
+            "postgres://u@h:port/db",
+            "postgres://u:%zz@h/db",
+            "sqlite://",
+            "duckdb://",
+            "duckdb:///x.duckdb?mode=memory",
+        ] {
+            assert!(parse(url).is_err(), "{url}");
+        }
+    }
+}

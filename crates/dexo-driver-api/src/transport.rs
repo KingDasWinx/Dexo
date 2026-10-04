@@ -49,6 +49,27 @@ pub enum RouteRequest {
 
 pub type ProxyMode = RouteRequest;
 
+impl RouteRequest {
+    /// A proxy or tunnel leg that failed, said in terms of the proxy or tunnel it was:
+    /// the transport's own text says what went wrong, not which hop it went wrong on.
+    pub fn failure_message(&self, cause: &str) -> Option<String> {
+        let cause = crate::error::plain_cause(cause);
+        match self {
+            Self::Direct => None,
+            Self::Socks5 { host, port } => Some(format!(
+                "the SOCKS5 proxy at {host}:{port} did not carry the connection: {cause}"
+            )),
+            Self::HttpConnect { host, port } => Some(format!(
+                "the HTTP proxy at {host}:{port} did not carry the connection: {cause}"
+            )),
+            Self::Ssh(ssh) => Some(format!(
+                "the SSH tunnel through {}:{} failed: {cause}",
+                ssh.host, ssh.port
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TransportRequest {
     pub target_host: String,
@@ -232,4 +253,35 @@ fn validate_path(path: &Path, label: &str) -> Result<(), DriverError> {
 
 fn config_error(message: impl Into<String>) -> DriverError {
     DriverError::new(DriverErrorCategory::Configuration, message)
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::{RouteRequest, SshRequest};
+
+    #[test]
+    fn a_failed_leg_is_named_by_the_proxy_or_tunnel_it_was() {
+        let socks = RouteRequest::Socks5 {
+            host: "127.0.0.1".into(),
+            port: 1,
+        };
+        assert_eq!(
+            socks
+                .failure_message("Connection refused (os error 111)")
+                .unwrap(),
+            "the SOCKS5 proxy at 127.0.0.1:1 did not carry the connection: connection refused"
+        );
+        let ssh = RouteRequest::Ssh(SshRequest {
+            host: "bastion".into(),
+            port: 22,
+            username: "me".into(),
+            key_file: None,
+        });
+        assert!(
+            ssh.failure_message("SSH authentication failed")
+                .unwrap()
+                .starts_with("the SSH tunnel through bastion:22 failed")
+        );
+        assert!(RouteRequest::Direct.failure_message("anything").is_none());
+    }
 }

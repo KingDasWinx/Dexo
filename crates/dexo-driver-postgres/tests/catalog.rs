@@ -230,6 +230,16 @@ async fn postgres_catalog_contract() {
 
     let ddl = catalog.ddl(&table.id).await.unwrap();
     assert!(ddl.sql.to_ascii_uppercase().contains("CREATE TABLE"));
+    // What makes the table this table: the key, the default drawn on a sequence, the
+    // enum and the domain, the partitioning.
+    for wanted in [
+        "CONSTRAINT orders_pkey PRIMARY KEY (id)",
+        "DEFAULT nextval('dexo_catalog.order_seq'::regclass) NOT NULL",
+        "status dexo_catalog.mood",
+        "PARTITION BY RANGE (id)",
+    ] {
+        assert!(ddl.sql.contains(wanted), "{wanted}\n{}", ddl.sql);
+    }
     let deps = catalog.dependents(&table.id).await.unwrap();
     assert!(!deps.is_empty());
 
@@ -289,4 +299,326 @@ async fn postgres_catalog_contract() {
         restricted_children.objects.is_empty(),
         "denied schema must not look like an empty catalog"
     );
+}
+
+/// Foreign keys from and to a table, a composite one's columns in order.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn foreign_keys_are_listed_from_and_to_a_table() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE TABLE customers (id int PRIMARY KEY)",
+        "CREATE TABLE orders (id int, region text, customer_id int REFERENCES customers,
+                              PRIMARY KEY (id, region))",
+        "CREATE TABLE lines (n int, order_id int, order_region text,
+                             FOREIGN KEY (order_id, order_region) REFERENCES orders (id, region))",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let orders = dexo_driver_api::QualifiedName::new(Some("dexo"), Some("public"), "orders");
+    let keys = session
+        .catalog()
+        .unwrap()
+        .foreign_keys(&orders)
+        .await
+        .unwrap();
+    let ends: Vec<_> = keys
+        .iter()
+        .map(|key| {
+            (
+                key.from.object().to_string(),
+                key.from_columns.join(","),
+                key.to.object().to_string(),
+                key.to_columns.join(","),
+            )
+        })
+        .collect();
+    assert_eq!(ends.len(), 2, "{ends:?}");
+    assert!(ends.contains(&(
+        "orders".into(),
+        "customer_id".into(),
+        "customers".into(),
+        "id".into()
+    )));
+    assert!(ends.contains(&(
+        "lines".into(),
+        "order_id,order_region".into(),
+        "orders".into(),
+        "id,region".into()
+    )));
+    // A key on a partitioned table, or to one, is listed once: not again for each
+    // partition's clone of it.
+    for sql in [
+        "CREATE TABLE events (at date, customer_id int REFERENCES customers)
+             PARTITION BY RANGE (at)",
+        "CREATE TABLE events_2025 PARTITION OF events
+             FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')",
+        "CREATE TABLE events_2026 PARTITION OF events
+             FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')",
+        "CREATE TABLE ledger (id int, region text, PRIMARY KEY (id, region))
+             PARTITION BY LIST (region)",
+        "CREATE TABLE ledger_eu PARTITION OF ledger FOR VALUES IN ('eu')",
+        "CREATE TABLE ledger_us PARTITION OF ledger FOR VALUES IN ('us')",
+        "CREATE TABLE ledger_notes (ledger_id int, ledger_region text,
+             FOREIGN KEY (ledger_id, ledger_region) REFERENCES ledger)",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let named =
+        |table: &str| dexo_driver_api::QualifiedName::new(Some("dexo"), Some("public"), table);
+    let catalog = session.catalog().unwrap();
+    let keys = catalog.foreign_keys(&named("customers")).await.unwrap();
+    let from: Vec<_> = keys.iter().map(|key| key.from.object()).collect();
+    assert_eq!(from, ["events", "orders"], "{keys:?}");
+    let keys = catalog.foreign_keys(&named("ledger")).await.unwrap();
+    assert_eq!(keys.len(), 1, "{keys:?}");
+    assert_eq!(keys[0].to.object(), "ledger");
+}
+
+/// Table and column comments come with the catalog, as each object's `comment`.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn comments_come_with_tables_and_columns() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE TABLE noted (id int, total numeric)",
+        "COMMENT ON TABLE noted IS 'One row per paid checkout'",
+        "COMMENT ON COLUMN noted.total IS 'Gross, in cents'",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let catalog = session.catalog().unwrap();
+    let options = CatalogListOptions::default();
+    let mut level = vec![None];
+    let mut found = Vec::new();
+    for _ in 0..4 {
+        let mut next = Vec::new();
+        for parent in &level {
+            let listed = catalog
+                .list_children(parent.as_ref(), &options)
+                .await
+                .unwrap();
+            for object in listed.objects {
+                if object.qualified_name.object().starts_with("noted") {
+                    found.push(object.clone());
+                }
+                if matches!(object.kind, ObjectKind::Catalog | ObjectKind::Schema)
+                    || object.qualified_name.object() == "noted"
+                {
+                    next.push(Some(object.id));
+                }
+            }
+        }
+        level = next;
+    }
+    let comment = |name: &str| {
+        found
+            .iter()
+            .find(|object| object.qualified_name.object() == name)
+            .and_then(|object| object.attributes.get("comment").cloned())
+    };
+    assert_eq!(
+        comment("noted"),
+        Some(serde_json::json!("One row per paid checkout"))
+    );
+    assert_eq!(
+        comment("noted.total"),
+        Some(serde_json::json!("Gross, in cents"))
+    );
+    assert_eq!(comment("noted.id"), None);
+    // Found by its id, as the inspector finds it, the table is what the list gave, with
+    // its owner and size besides.
+    let listed = found
+        .iter()
+        .find(|object| object.qualified_name.object() == "noted")
+        .unwrap();
+    let by_id = catalog.object(&listed.id).await.unwrap().unwrap();
+    for (key, value) in &listed.attributes {
+        assert_eq!(by_id.attributes.get(key), Some(value), "{key}");
+    }
+    assert_eq!(
+        by_id.attributes.get("owner"),
+        Some(&serde_json::json!("dexo"))
+    );
+    assert!(
+        by_id
+            .attributes
+            .get("size_bytes")
+            .is_some_and(|size| size.is_u64())
+    );
+    assert_eq!(by_id.parent, listed.parent);
+    assert_eq!(by_id.kind, listed.kind);
+}
+
+/// A foreign table is said to be one: its DDL names its server and options, `\dt`
+/// calls it a foreign table, and the drop a schema diff writes for it is one Postgres
+/// takes.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn foreign_tables_are_told_apart() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE FOREIGN DATA WRAPPER inert",
+        "CREATE SERVER elsewhere FOREIGN DATA WRAPPER inert",
+        "CREATE FOREIGN TABLE remote_orders (id int, total numeric)
+             SERVER elsewhere OPTIONS (table_name 'orders')",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let catalog = session.catalog().unwrap();
+    let object = catalog
+        .relations_named(None, "remote_orders")
+        .await
+        .unwrap()
+        .unwrap()
+        .remove(0);
+    let ddl = catalog.ddl(&object.id).await.unwrap().sql;
+    assert!(
+        ddl.starts_with("CREATE FOREIGN TABLE public.remote_orders")
+            && ddl.contains("SERVER elsewhere")
+            && ddl.contains("OPTIONS (table_name 'orders')"),
+        "{ddl}"
+    );
+    let command = dexo_app::meta_command::parse("\\dt remote*").unwrap();
+    let listed = dexo_app::meta_command::answer(catalog, &command)
+        .await
+        .unwrap();
+    assert_eq!(listed.rows[0][2], "foreign table", "{:?}", listed.rows);
+    let drop = dexo_app::schema_diff::script::to_change(
+        &dexo_app::schema_diff::SchemaDifference::Removed(object),
+    );
+    let plan = dexo_driver_postgres::render_ddl(&drop).unwrap();
+    for sql in plan.sqls() {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    assert!(
+        catalog
+            .relations_named(None, "remote_orders")
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// `\d name` describes the table the search_path finds -- a system one too -- not the
+/// alphabetically first of that name.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn describe_resolves_a_name_through_the_search_path() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE SCHEMA audit",
+        "CREATE TABLE audit.orders (changed_at timestamptz)",
+        "CREATE TABLE public.orders (id int PRIMARY KEY, total numeric)",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let catalog = session.catalog().unwrap();
+    let describe = |line: &'static str| async move {
+        let command = dexo_app::meta_command::parse(line).unwrap();
+        dexo_app::meta_command::answer(catalog, &command)
+            .await
+            .map(|answer| {
+                answer
+                    .rows
+                    .into_iter()
+                    .map(|row| row[0].clone())
+                    .collect::<Vec<_>>()
+            })
+    };
+    let columns = describe("\\d orders").await.unwrap();
+    assert!(columns.contains(&"total".to_string()), "{columns:?}");
+    let columns = describe("\\d pg_class").await.unwrap();
+    assert!(columns.contains(&"relname".to_string()), "{columns:?}");
+    let columns = describe("\\d information_schema.tables").await.unwrap();
+    assert!(columns.contains(&"table_name".to_string()), "{columns:?}");
+    assert!(describe("\\d missing").await.is_err());
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write(
+                "SET search_path = audit, public",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let columns = describe("\\d orders").await.unwrap();
+    assert!(columns.contains(&"changed_at".to_string()), "{columns:?}");
 }

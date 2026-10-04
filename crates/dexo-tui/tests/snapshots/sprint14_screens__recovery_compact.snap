@@ -1,24 +1,25 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
+assertion_line: 26
 expression: "render_to_string(&model, 60, 20)"
 ---
-default  no connection  —                                   
+default  no connection  —    1 Sidebar  [2 SQL]  3 Results  
  scratch.sql ×  +                                           
+┌▸ SQL · scratch.sql───────────────────────────────────────┐
 ┌Session recovery──────────────────────────────────────────┐
-│recovery open=true                                        │
-│transaction=unknown                                       │
-│confirm_discard=false                                     │
-│document scratch.sql                                      │
+│Dexo closed unexpectedly and kept these unsaved documents:│
+│  scratch.sql                                             │
+│A transaction was open: its state is unknown.             │
 │                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
+│Keep leaves them open; Discard closes them.               │
+│ [Keep]   [Discard]                                       │
 │                                                          │
 │                                                          │
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-disconnected  Ctrl+Enter run  Ctrl+N new sql      Ctrl+P  F1
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+disconnected                                      Ctrl+P  F1

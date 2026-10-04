@@ -17,8 +17,8 @@ use crate::error::{app_error, hidden};
 use crate::render::{RowsPage, rows_result, text_result};
 use crate::router::{ConnectionSlot, SessionLease};
 use crate::schema::{
-    AdminListInput, CatalogListInput, CatalogSearchInput, DataReadInput, DiffInput, ObjectInput,
-    SqlInput,
+    AdminListInput, CatalogListInput, CatalogSearchInput, DataReadInput, DiffInput, ExplainInput,
+    ObjectInput, SqlInput,
 };
 use crate::server::DexoMcpServer;
 
@@ -63,14 +63,13 @@ fn objects_result(objects: &[CatalogObject]) -> CallToolResult {
         .iter()
         .map(|object| {
             vec![
-                object.id.as_str().to_string(),
-                format!("{:?}", object.kind),
+                object.kind.as_str().to_string(),
                 object.qualified_name.display_unquoted(),
             ]
         })
         .collect();
     rows_result(&RowsPage::new(
-        ["id", "kind", "name"].map(String::from).to_vec(),
+        ["kind", "name"].map(String::from).to_vec(),
         rows,
     ))
 }
@@ -93,12 +92,27 @@ async fn list(
     let listed =
         CatalogService::list_children(reader, parent.as_ref(), &CatalogListOptions::default())
             .await?;
+    let parent = match &parent {
+        Some(id) => CatalogService::object(reader, id).await.ok().flatten(),
+        None => None,
+    };
     let visible: Vec<CatalogObject> = listed
         .objects
         .into_iter()
-        .filter(|object| service.visible(object))
+        .filter(|object| service.visible_under(object, parent.as_ref()))
         .collect();
     Ok(objects_result(&visible))
+}
+
+/// Whether `object` may be shown, its relation looked up first: an index or a constraint
+/// of a hidden table is hidden with it. A lookup that fails finds no relation, which
+/// hides what needs one.
+async fn shown(service: &McpService, reader: &dyn CatalogReader, object: &CatalogObject) -> bool {
+    let parent = match &object.parent {
+        Some(id) => CatalogService::object(reader, id).await.ok().flatten(),
+        None => None,
+    };
+    service.visible_under(object, parent.as_ref())
 }
 
 /// Finds an object by the name the client typed, completed with the connection's
@@ -111,20 +125,42 @@ async fn find_visible(
     if service.policy().decide(target) != Decision::Allow {
         return Err(hidden());
     }
-    CatalogService::find_by_qualified_name(
+    let object = CatalogService::find_by_qualified_name(
         reader,
         &target.to_string(),
         &CatalogListOptions::default(),
     )
     .await?
-    .filter(|object| service.visible(object))
-    .ok_or_else(hidden)
+    .ok_or_else(hidden)?;
+    if shown(service, reader, &object).await {
+        Ok(object)
+    } else {
+        Err(hidden())
+    }
+}
+
+/// What people say an object is: their note, or else the database's own comment.
+pub(crate) fn note_of(
+    object: &CatalogObject,
+    notes: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    notes
+        .get(&object.qualified_name.display_unquoted())
+        .cloned()
+        .or_else(|| {
+            object
+                .attributes
+                .get("comment")
+                .and_then(Value::as_str)
+                .map(|comment| format!("{comment} (database comment)"))
+        })
 }
 
 async fn describe(
     service: &McpService,
     session: &dyn Session,
     target: &ObjectRef,
+    notes: &std::collections::HashMap<String, String>,
 ) -> Result<CallToolResult, AppError> {
     let reader = catalog_of(session)?;
     let object = find_visible(service, reader, target).await?;
@@ -159,15 +195,23 @@ async fn describe(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            vec![name, kind, role.to_string()]
+            let note = note_of(column, notes).unwrap_or_default();
+            vec![name, kind, role.to_string(), note]
         })
         .collect();
-    let mut page = RowsPage::new(["column", "type", "key"].map(String::from).to_vec(), rows);
-    page.title = Some(format!(
+    let mut page = RowsPage::new(
+        ["column", "type", "key", "note"].map(String::from).to_vec(),
+        rows,
+    );
+    let heading = format!(
         "### {} ({:?})",
         object.qualified_name.display_unquoted(),
         object.kind
-    ));
+    );
+    page.title = Some(match note_of(&object, notes) {
+        Some(note) => format!("{heading}\n\n{note}"),
+        None => heading,
+    });
     Ok(rows_result(&page))
 }
 
@@ -201,7 +245,7 @@ async fn relationships(
     for (direction, ids) in [("depends on", dependencies), ("used by", dependents)] {
         for id in ids {
             if let Some(related) = CatalogService::object(reader, &id).await?
-                && service.visible(&related)
+                && shown(service, reader, &related).await
             {
                 rows.push(vec![
                     direction.to_string(),
@@ -334,9 +378,9 @@ impl DexoMcpServer {
         finish(&mut lease, outcome)
     }
 
-    /// Estimated plan for one read-only statement. Runs EXPLAIN without ANALYZE, so nothing is executed.
+    /// Estimated plan for one read-only statement. Runs EXPLAIN without ANALYZE, so nothing is executed. `hypothetical_indexes` plans as if those indexes were built (Postgres with hypopg), to see whether one would help before anyone builds it.
     #[tool(annotations(read_only_hint = true))]
-    async fn query_explain(&self, Parameters(input): Parameters<SqlInput>) -> CallToolResult {
+    async fn query_explain(&self, Parameters(input): Parameters<ExplainInput>) -> CallToolResult {
         let slot = match self.slot(input.connection.as_deref()) {
             Ok(slot) => slot,
             Err(result) => return result,
@@ -351,7 +395,12 @@ impl DexoMcpServer {
         let outcome = self
             .inner
             .service
-            .explain(lease.session(), lease.meta, &input.sql)
+            .explain(
+                lease.session(),
+                lease.meta,
+                &input.sql,
+                &input.hypothetical_indexes,
+            )
             .await
             .map(|plan| {
                 text_result(
@@ -397,18 +446,58 @@ impl DexoMcpServer {
             Ok(objects) => objects,
             Err(error) => return app_error(&error),
         };
+        let by_id: std::collections::HashMap<&ObjectId, &CatalogObject> =
+            objects.iter().map(|object| (&object.id, object)).collect();
         let visible: Vec<CatalogObject> = objects
-            .into_iter()
-            .filter(|object| self.inner.service.visible(object))
+            .iter()
+            .filter(|object| {
+                let parent = object.parent.as_ref().and_then(|id| by_id.get(id)).copied();
+                self.inner.service.visible_under(object, parent)
+            })
+            .cloned()
             .collect();
+        let notes = self
+            .inner
+            .router
+            .backend()
+            .notes(&slot.meta.name)
+            .unwrap_or_default();
         let limit = input.limit.unwrap_or(50).clamp(1, 200) as usize;
-        let hits: Vec<CatalogObject> = SearchService::from_objects(visible)
+        let mut hits: Vec<CatalogObject> = SearchService::from_objects(visible.clone())
             .search(&input.query)
             .into_iter()
             .map(|hit| hit.object)
             .take(limit)
             .collect();
-        objects_result(&hits)
+        // An object whose note says what was asked for is found by its meaning too --
+        // among the visible ones only, so a note never shows what the profile hides.
+        let wanted = input.query.trim().to_lowercase();
+        if !wanted.is_empty() {
+            for object in visible {
+                if hits.len() >= limit {
+                    break;
+                }
+                let says = note_of(&object, &notes)
+                    .is_some_and(|note| note.to_lowercase().contains(&wanted));
+                if says && hits.iter().all(|hit| hit.id != object.id) {
+                    hits.push(object);
+                }
+            }
+        }
+        let rows = hits
+            .iter()
+            .map(|object| {
+                vec![
+                    object.kind.as_str().to_string(),
+                    object.qualified_name.display_unquoted(),
+                    note_of(object, &notes).unwrap_or_default(),
+                ]
+            })
+            .collect();
+        rows_result(&RowsPage::new(
+            ["kind", "name", "note"].map(String::from).to_vec(),
+            rows,
+        ))
     }
 
     /// Columns (with type and key role) of one table or view.
@@ -419,7 +508,13 @@ impl DexoMcpServer {
             Err(result) => return result,
         };
         let target = lease.meta.qualify(&ObjectRef::parse(&input.name).path);
-        let outcome = describe(&self.inner.service, lease.session(), &target).await;
+        let notes = self
+            .inner
+            .router
+            .backend()
+            .notes(&lease.meta.name)
+            .unwrap_or_default();
+        let outcome = describe(&self.inner.service, lease.session(), &target, &notes).await;
         finish(&mut lease, outcome)
     }
 
@@ -504,14 +599,22 @@ impl DexoMcpServer {
         };
         let (changes, _, _) = plan_migration(&from, &to, &[], render_unquoted);
         let service = &self.inner.service;
+        // Each side is judged with its own snapshot, where its relation is.
+        let visible_in =
+            |object: &CatalogObject, snapshot: &dexo_app::schema_diff::SchemaSnapshot| {
+                let parent = object
+                    .parent
+                    .as_ref()
+                    .and_then(|id| snapshot.objects.iter().find(|parent| &parent.id == id));
+                service.visible_under(object, parent)
+            };
         let rows = changes
             .iter()
             .filter(|change| match change {
-                SchemaDifference::Added(object) | SchemaDifference::Removed(object) => {
-                    service.visible(object)
-                }
+                SchemaDifference::Added(object) => visible_in(object, &to),
+                SchemaDifference::Removed(object) => visible_in(object, &from),
                 SchemaDifference::Changed { before, after } => {
-                    service.visible(before) && service.visible(after)
+                    visible_in(before, &from) && visible_in(after, &to)
                 }
             })
             .map(|change| {

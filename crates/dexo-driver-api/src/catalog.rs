@@ -77,6 +77,22 @@ pub struct CatalogObject {
 }
 
 impl CatalogObject {
+    /// The name a person would write for the object. A schema or a database carries its
+    /// own name as the object part and, for a schema, again as the schema part, so the
+    /// plain join read `qa4.reporting.reporting`.
+    pub fn display_name(&self) -> String {
+        let name = &self.qualified_name;
+        match self.kind {
+            ObjectKind::Schema => [name.catalog(), Some(name.object())]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("."),
+            ObjectKind::Catalog => name.object().to_string(),
+            _ => name.display_unquoted(),
+        }
+    }
+
     pub fn new(
         id: ObjectId,
         kind: ObjectKind,
@@ -116,6 +132,17 @@ pub struct CatalogList {
     pub restrictions: Vec<CatalogRestriction>,
 }
 
+/// A foreign key, both ends named: `from` holds `from_columns`, which point at
+/// `to_columns` of `to`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForeignKeyRef {
+    pub name: String,
+    pub from: QualifiedName,
+    pub from_columns: Vec<String>,
+    pub to: QualifiedName,
+    pub to_columns: Vec<String>,
+}
+
 #[async_trait::async_trait]
 pub trait CatalogReader: Send + Sync {
     async fn list_children(
@@ -131,12 +158,63 @@ pub trait CatalogReader: Send + Sync {
     async fn dependencies(&self, id: &ObjectId) -> Result<Vec<ObjectId>, DriverError>;
 
     async fn dependents(&self, id: &ObjectId) -> Result<Vec<ObjectId>, DriverError>;
+
+    /// Every foreign key from `table` or to it, columns in key order.
+    async fn foreign_keys(&self, table: &QualifiedName) -> Result<Vec<ForeignKeyRef>, DriverError>;
+
+    /// The tables and views a statement would find under `name`, in any case: in
+    /// `schema` when one is given, system ones included, and otherwise where the server
+    /// looks for a name written without one -- Postgres's search_path, MySQL's current
+    /// database -- in the order it looks there. In one round trip. `None` when the
+    /// reader cannot say, and the caller looks through what it lists instead.
+    async fn relations_named(
+        &self,
+        schema: Option<&str>,
+        name: &str,
+    ) -> Result<Option<Vec<CatalogObject>>, DriverError> {
+        let _ = (schema, name);
+        Ok(None)
+    }
+
+    /// Every database the server holds, not only the one connected to. By default the
+    /// names of the catalogs at the top of the tree.
+    async fn databases(&self) -> Result<Vec<String>, DriverError> {
+        let top = self
+            .list_children(None, &CatalogListOptions::default())
+            .await?;
+        Ok(top
+            .objects
+            .into_iter()
+            .filter(|object| object.kind == ObjectKind::Catalog)
+            .map(|object| object.qualified_name.object().to_string())
+            .collect())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{CatalogObject, ObjectId, ObjectKind};
     use crate::QualifiedName;
+
+    #[test]
+    fn a_schema_and_a_database_are_named_once() {
+        let name = |kind, qualified| CatalogObject::new(ObjectId::new("x"), kind, qualified, None);
+        let schema = name(
+            ObjectKind::Schema,
+            QualifiedName::new(Some("qa4"), Some("reporting"), "reporting"),
+        );
+        assert_eq!(schema.display_name(), "qa4.reporting");
+        let database = name(
+            ObjectKind::Catalog,
+            QualifiedName::new(Some("qa4"), None::<String>, "qa4"),
+        );
+        assert_eq!(database.display_name(), "qa4");
+        let table = name(
+            ObjectKind::Table,
+            QualifiedName::new(Some("qa4"), Some("reporting"), "reporting"),
+        );
+        assert_eq!(table.display_name(), "qa4.reporting.reporting");
+    }
 
     #[test]
     fn catalog_object_round_trip() {

@@ -11,6 +11,8 @@ use crate::theme::{Role, Theme};
 pub enum RowDetailValue {
     Text(String),
     Json(String),
+    /// SQL NULL, drawn apart from the text `NULL`.
+    Null,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,6 +28,14 @@ struct JsonStyles {
     literal: Style,
     punct: Style,
     base: Style,
+}
+
+/// How NULL is drawn wherever a value is: dim and slanted, so the text `NULL` -- which
+/// is drawn plain -- cannot be taken for it, with colour or without.
+pub fn null_style(theme: &Theme, caps: TerminalCapabilities) -> Style {
+    theme
+        .style(Role::Muted, caps)
+        .add_modifier(Modifier::ITALIC)
 }
 
 pub fn row_detail_fields(grid: &GridModel, row: usize) -> Vec<RowDetailField> {
@@ -85,6 +95,16 @@ pub fn row_detail_lines(
                     &json_styles,
                 );
             }
+            RowDetailValue::Null => {
+                append_text_field(
+                    &mut lines,
+                    &field.name,
+                    "NULL",
+                    wrap_width,
+                    label_style,
+                    null_style(theme, caps),
+                );
+            }
         }
         if index + 1 < fields.len() {
             lines.push(Line::from(""));
@@ -113,12 +133,13 @@ fn classify_detail_value(
         Some(GridCell::Inline(value)) => classify_db_value(value, type_name),
         None => value
             .map(|value| classify_db_value(value, type_name))
-            .unwrap_or_else(|| RowDetailValue::Text("NULL".into())),
+            .unwrap_or(RowDetailValue::Null),
     }
 }
 
 fn classify_db_value(value: &DbValue, type_name: &str) -> RowDetailValue {
     match value {
+        DbValue::Null => RowDetailValue::Null,
         DbValue::Json(text) => RowDetailValue::Json(text.clone()),
         DbValue::Text(text) => classify_text_value(text, type_name),
         DbValue::Native { text, .. } => classify_text_value(text, type_name),

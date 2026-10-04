@@ -58,8 +58,9 @@ pub async fn apply_ddl(
         for statement in &plan.statements {
             if let Err(error) = session.client.batch_execute(&statement.sql).await {
                 let _ = session.client.batch_execute("ROLLBACK").await;
-                let _ = error;
-                return Ok(DdlOutcome::RolledBack);
+                // The server's reason, as MySQL's first failure gives it: "the change
+                // was rolled back" with no why left the user guessing.
+                return Err(map_error(error));
             }
         }
         return match session.client.batch_execute("COMMIT").await {
@@ -71,7 +72,7 @@ pub async fn apply_ddl(
     for statement in &plan.statements {
         match session.client.batch_execute(&statement.sql).await {
             Ok(()) => committed += 1,
-            Err(_) if committed == 0 => return Ok(DdlOutcome::RolledBack),
+            Err(error) if committed == 0 => return Err(map_error(error)),
             Err(_) => return Ok(DdlOutcome::PartiallyCommitted { committed }),
         }
     }
@@ -109,29 +110,36 @@ impl SecurityAdmin for PostgresSession {
 
     async fn effective_privileges(
         &self,
-        principal: &QualifiedName,
+        principal: Option<&QualifiedName>,
         object: &QualifiedName,
     ) -> Result<Vec<String>, DriverError> {
-        let rel = match object.schema() {
-            Some(schema) => format!("{schema}.{}", object.object()),
-            None => object.object().to_string(),
-        };
-        let checks = ["SELECT", "INSERT", "UPDATE", "DELETE"];
-        let mut out = Vec::new();
-        for privilege in checks {
-            let row = self
-                .client
-                .query_one(
-                    "SELECT has_table_privilege($1, $2, $3)",
-                    &[&principal.object(), &rel, &privilege],
-                )
-                .await
-                .map_err(map_error)?;
-            if row.get::<_, bool>(0) {
-                out.push(privilege.to_string());
-            }
-        }
-        Ok(out)
+        // The relation as the server names it: its parts quoted, so `"Mixed"` is not
+        // looked up as `mixed`, and without a schema through the search_path. A
+        // function or a type is no relation, and has no table privileges to show.
+        let sql = "SELECT p.privilege
+                   FROM (SELECT to_regclass(CASE WHEN $2::text IS NULL THEN quote_ident($3)
+                                                 ELSE quote_ident($2) || '.' || quote_ident($3)
+                                            END) AS oid) r,
+                        unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE',
+                                     'REFERENCES', 'TRIGGER'])
+                            WITH ORDINALITY AS p(privilege, n)
+                   WHERE r.oid IS NOT NULL
+                     AND has_table_privilege(COALESCE($1::text, current_user::text)::name,
+                                             r.oid, p.privilege)
+                   ORDER BY p.n";
+        let rows = self
+            .client
+            .query(
+                sql,
+                &[
+                    &principal.map(QualifiedName::object),
+                    &object.schema(),
+                    &object.object(),
+                ],
+            )
+            .await
+            .map_err(map_error)?;
+        Ok(rows.iter().map(|row| row.get(0)).collect())
     }
 
     async fn set_password(

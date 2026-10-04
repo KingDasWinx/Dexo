@@ -1,12 +1,13 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use dexo_app::transfer::{
-    ExportError, ExportProgress, FormatOptions, NativeHandle, NativeStatus, NativeToolKind,
-    NativeToolRequest, NativeToolRunner, RecordingSink, TokioProcessRunner, decode_document,
-    export_row_batches, export_rows, import_rows,
+    ErrorStrategy, ExportError, ExportProgress, FormatOptions, ImportRequest, ImportSource,
+    NativeHandle, NativeStatus, NativeToolKind, NativeToolRequest, NativeToolRunner, RecordingSink,
+    TokioProcessRunner, export_row_batches, export_rows,
 };
 use dexo_driver_api::{DbValue, QualifiedName, Session};
 use secrecy::SecretString;
@@ -14,15 +15,23 @@ use tokio::sync::mpsc::Sender;
 
 use crate::action::{Action, TransferRequest};
 use crate::runtime::OperationId;
-use crate::screens::transfer::TransferMode;
+use crate::screens::transfer::{TransferMode, rows_of, size_of};
 
+#[derive(Clone)]
 pub enum RunningTransfer {
     Cooperative(Arc<AtomicBool>),
-    Native(Box<NativeHandle>),
+    Native(Arc<NativeHandle>),
+}
+
+/// The transfers under way, by operation. Cloned into the tasks that run them: a transfer
+/// takes as long as the data does, so none of it runs on the loop that draws the screen.
+#[derive(Clone, Default)]
+pub struct TransferManager {
+    shared: Arc<Mutex<Shared>>,
 }
 
 #[derive(Default)]
-pub struct TransferManager {
+struct Shared {
     running: HashMap<OperationId, RunningTransfer>,
     recorded: Vec<TransferMode>,
 }
@@ -39,20 +48,32 @@ pub struct RuntimeAccess {
 }
 
 impl TransferManager {
-    pub fn recorded_modes(&self) -> Vec<TransferMode> {
-        self.recorded.clone()
+    fn shared(&self) -> std::sync::MutexGuard<'_, Shared> {
+        self.shared.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub async fn run(&mut self, request: TransferRequest) -> Result<(), String> {
+    fn start(&self, operation: OperationId, running: RunningTransfer) {
+        self.shared().running.insert(operation, running);
+    }
+
+    fn finish(&self, operation: OperationId) {
+        self.shared().running.remove(&operation);
+    }
+
+    pub fn recorded_modes(&self) -> Vec<TransferMode> {
+        self.shared().recorded.clone()
+    }
+
+    pub async fn run(&self, request: TransferRequest) -> Result<(), String> {
         self.run_with(request, None).await
     }
 
     pub async fn run_with(
-        &mut self,
+        &self,
         request: TransferRequest,
         runtime: Option<&RuntimeAccess>,
     ) -> Result<(), String> {
-        self.recorded.push(request.mode());
+        self.shared().recorded.push(request.mode());
         match request {
             TransferRequest::Export {
                 operation,
@@ -60,7 +81,19 @@ impl TransferManager {
                 format,
                 columns,
                 rows,
-            } => run_export(self, operation, path, format, columns, rows, runtime).await,
+                dialect,
+                table,
+            } => {
+                let options = FormatOptions {
+                    dialect,
+                    table,
+                    ..FormatOptions::default()
+                };
+                run_export(
+                    self, operation, path, format, &options, columns, rows, runtime,
+                )
+                .await
+            }
             TransferRequest::Import {
                 operation,
                 path,
@@ -82,8 +115,11 @@ impl TransferManager {
         }
     }
 
-    pub async fn cancel(&mut self, operation: OperationId) -> bool {
-        match self.running.remove(&operation) {
+    /// Stops a transfer under way. A native tool is killed; an export or an import stops
+    /// at its next row or batch.
+    pub async fn cancel(&self, operation: OperationId) -> bool {
+        let running = self.shared().running.get(&operation).cloned();
+        match running {
             Some(RunningTransfer::Cooperative(token)) => {
                 token.store(true, Ordering::Release);
                 true
@@ -101,26 +137,28 @@ impl TransferManager {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_export(
-    manager: &mut TransferManager,
+    manager: &TransferManager,
     operation: OperationId,
     path: PathBuf,
     format: dexo_app::transfer::TransferFormat,
+    options: &FormatOptions,
     columns: Vec<String>,
     rows: Arc<Vec<Vec<DbValue>>>,
     runtime: Option<&RuntimeAccess>,
 ) -> Result<(), String> {
     let cancel = Arc::new(AtomicBool::new(false));
-    manager
-        .running
-        .insert(operation, RunningTransfer::Cooperative(Arc::clone(&cancel)));
+    let options = options.clone();
+    manager.start(operation, RunningTransfer::Cooperative(Arc::clone(&cancel)));
     let tx = runtime.map(|access| access.action_tx.clone());
     let cancel_for_worker = Arc::clone(&cancel);
+    let written = path.clone();
     let result = tokio::task::spawn_blocking(move || {
         export_rows(
             &path,
             format,
-            &FormatOptions::default(),
+            &options,
             &columns,
             rows.iter().cloned(),
             cancel_for_worker.as_ref(),
@@ -137,13 +175,14 @@ async fn run_export(
     })
     .await
     .map_err(|error| error.to_string())?;
-    manager.running.remove(&operation);
-    finish_export(operation, result, runtime).await
+    manager.finish(operation);
+    finish_export(operation, result, &written, runtime).await
 }
 
 async fn finish_export(
     operation: OperationId,
     result: Result<ExportProgress, ExportError>,
+    written: &Path,
     runtime: Option<&RuntimeAccess>,
 ) -> Result<(), String> {
     match result {
@@ -152,7 +191,12 @@ async fn finish_export(
                 runtime,
                 Action::TransferFinished {
                     operation,
-                    message: format!("exported {} rows", progress.rows),
+                    message: format!(
+                        "Exported {} to {} ({}).",
+                        rows_of(progress.rows),
+                        written.display(),
+                        size_of(progress.bytes)
+                    ),
                 },
             )
             .await;
@@ -180,13 +224,25 @@ async fn finish_export(
     }
 }
 
+async fn fail(operation: OperationId, runtime: Option<&RuntimeAccess>, message: String) -> String {
+    emit(
+        runtime,
+        Action::TransferFailed {
+            operation,
+            message: message.clone(),
+        },
+    )
+    .await;
+    message
+}
+
 async fn run_import(
-    manager: &mut TransferManager,
+    manager: &TransferManager,
     operation: OperationId,
     path: PathBuf,
     format: dexo_app::transfer::TransferFormat,
     target: QualifiedName,
-    strategy: dexo_app::transfer::ErrorStrategy,
+    strategy: ErrorStrategy,
     runtime: Option<&RuntimeAccess>,
 ) -> Result<(), String> {
     let Some(session) = runtime.and_then(|access| access.session.clone()) else {
@@ -194,81 +250,19 @@ async fn run_import(
         return Ok(());
     };
     let Some(writer) = session.bulk() else {
-        let message = "this driver does not offer bulk import".to_string();
-        emit(
-            runtime,
-            Action::TransferFailed {
-                operation,
-                message: message.clone(),
-            },
-        )
-        .await;
-        return Err(message);
+        let message = "This connection cannot import data.".to_string();
+        return Err(fail(operation, runtime, message).await);
     };
     let cancel = Arc::new(AtomicBool::new(false));
-    manager
-        .running
-        .insert(operation, RunningTransfer::Cooperative(Arc::clone(&cancel)));
-    let decoded = tokio::task::spawn_blocking({
-        let path = path.clone();
-        move || {
-            let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
-            decode_document(format, &FormatOptions::default(), &bytes)
-        }
-    })
-    .await
-    .map_err(|error| error.to_string())?;
-    let (columns, rows) = match decoded {
-        Ok(value) => value,
-        Err(message) => {
-            manager.running.remove(&operation);
-            emit(
-                runtime,
-                Action::TransferFailed {
-                    operation,
-                    message: message.clone(),
-                },
-            )
-            .await;
-            return Err(message);
-        }
-    };
-    let import_rows_data: Vec<(usize, Vec<DbValue>, Vec<String>)> = rows
-        .into_iter()
-        .enumerate()
-        .map(|(index, values)| (index + 1, values, Vec::new()))
-        .collect();
-    let tx = runtime.map(|access| access.action_tx.clone());
-    let result = import_rows(
-        writer,
-        &target,
-        &columns,
-        import_rows_data,
-        strategy,
-        cancel.as_ref(),
-        None,
-        |rows| {
-            if let Some(tx) = &tx {
-                let _ = tx.try_send(Action::TransferProgress {
-                    operation,
-                    rows,
-                    bytes: 0,
-                });
-            }
-        },
+    manager.start(operation, RunningTransfer::Cooperative(Arc::clone(&cancel)));
+    let result = import_file(
+        &session, writer, &path, format, &target, strategy, &cancel, operation, runtime,
     )
     .await;
-    manager.running.remove(&operation);
+    manager.finish(operation);
     match result {
-        Ok(report) => {
-            emit(
-                runtime,
-                Action::TransferFinished {
-                    operation,
-                    message: format!("imported {} rows", report.committed),
-                },
-            )
-            .await;
+        Ok(message) => {
+            emit(runtime, Action::TransferFinished { operation, message }).await;
             Ok(())
         }
         Err(message) if message == "cancelled" => {
@@ -279,22 +273,71 @@ async fn run_import(
             .await;
             Err(message)
         }
-        Err(message) => {
-            emit(
-                runtime,
-                Action::TransferFailed {
-                    operation,
-                    message: message.clone(),
-                },
-            )
-            .await;
-            Err(message)
-        }
+        Err(message) => Err(fail(operation, runtime, message).await),
     }
 }
 
+/// Reads `path` a batch at a time, fits its rows to the table and writes them. The error
+/// is a sentence for the dialog.
+#[allow(clippy::too_many_arguments)]
+async fn import_file(
+    session: &Arc<dyn Session>,
+    writer: &dyn dexo_driver_api::BulkWriter,
+    path: &Path,
+    format: dexo_app::transfer::TransferFormat,
+    target: &QualifiedName,
+    strategy: ErrorStrategy,
+    cancel: &AtomicBool,
+    operation: OperationId,
+    runtime: Option<&RuntimeAccess>,
+) -> Result<String, String> {
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    let table = target.display_unquoted();
+    let rejects = (strategy == ErrorStrategy::RejectFile)
+        .then(|| path.with_file_name(format!("{name}.rejects.csv")));
+    let tx = runtime.map(|access| access.action_tx.clone());
+    let report = dexo_app::transfer::import_file(
+        writer,
+        session.catalog(),
+        ImportRequest {
+            source: ImportSource::File(path.to_path_buf()),
+            format,
+            target: target.clone(),
+            mapping: Vec::new(),
+            strategy,
+            reject_path: rejects.clone(),
+        },
+        cancel,
+        |rows| {
+            if let Some(tx) = &tx {
+                let _ = tx.try_send(Action::TransferProgress {
+                    operation,
+                    rows,
+                    bytes: 0,
+                });
+            }
+        },
+    )
+    .await?;
+    let mut message = format!("Imported {} into {table}.", rows_of(report.committed));
+    if report.skipped > 0 {
+        message.push_str(&format!(" {} skipped.", rows_of(report.skipped)));
+    }
+    if let Some(rejects) = rejects.filter(|_| !report.rejected.is_empty()) {
+        message.push_str(&format!(
+            " {} set aside in {}.",
+            rows_of(report.rejected.len() as u64),
+            rejects.display()
+        ));
+    }
+    Ok(message)
+}
+
 async fn run_native(
-    manager: &mut TransferManager,
+    manager: &TransferManager,
     operation: OperationId,
     path: PathBuf,
     mode: TransferMode,
@@ -304,23 +347,16 @@ async fn run_native(
         // ponytail: recording double records Restore/Backup without touching path.
         return Ok(());
     };
-    let driver = access.driver.as_deref().unwrap_or_default();
+    let driver =
+        dexo_driver_api::DriverDescriptor::family(access.driver.as_deref().unwrap_or_default());
     let kind = match (mode, driver) {
         (TransferMode::Backup, "postgres") => NativeToolKind::PgDump,
         (TransferMode::Restore, "postgres") => NativeToolKind::PgRestore,
         (TransferMode::Backup, "mysql") => NativeToolKind::MysqlDump,
         (TransferMode::Restore, "mysql") => NativeToolKind::MysqlRestore,
         _ => {
-            let message = "this driver does not offer backup".to_string();
-            emit(
-                runtime,
-                Action::TransferFailed {
-                    operation,
-                    message: message.clone(),
-                },
-            )
-            .await;
-            return Err(message);
+            let message = format!("Dexo has no {} for this kind of database.", mode.as_str());
+            return Err(fail(operation, runtime, message).await);
         }
     };
     let request = NativeToolRequest {
@@ -329,36 +365,70 @@ async fn run_native(
         port: access.port.unwrap_or(5432),
         database: access.database.clone().unwrap_or_default(),
         username: access.username.clone().unwrap_or_default(),
-        path,
+        path: path.clone(),
         secret: access
             .secret
             .clone()
             .unwrap_or_else(|| SecretString::from(String::new())),
         expected_major: 0,
     };
+    // A cancel that comes before the tool is running is kept, and acted on once it is.
+    let cancel = Arc::new(AtomicBool::new(false));
+    manager.start(operation, RunningTransfer::Cooperative(Arc::clone(&cancel)));
     let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
     let runner = NativeToolRunner::<TokioProcessRunner>::new(TokioProcessRunner);
-    let handle = runner
-        .start(request, "0", dir.path())
-        .await
-        .map_err(|error: dexo_app::transfer::NativeToolError| error.to_string())?;
-    manager
-        .running
-        .insert(operation, RunningTransfer::Native(Box::new(handle)));
-    let Some(RunningTransfer::Native(handle)) = manager.running.remove(&operation) else {
-        return Ok(());
+    let handle = match runner.start(request, "0", dir.path()).await {
+        Ok(handle) => Arc::new(handle),
+        Err(error) => {
+            manager.finish(operation);
+            return Err(fail(operation, runtime, error.to_string()).await);
+        }
     };
-    let result = handle.outcome().await.map_err(|error| error.to_string())?;
+    manager.start(operation, RunningTransfer::Native(Arc::clone(&handle)));
+    if cancel.load(Ordering::Acquire) {
+        let _ = handle.cancel().await;
+    }
+    // The size of a backup as it grows is the progress there is to show; a restore has
+    // only the time it has taken, which the dialog counts.
+    let ticker = tokio::spawn({
+        let handle = Arc::clone(&handle);
+        let tx = access.action_tx.clone();
+        async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let _ = tx
+                    .send(Action::TransferProgress {
+                        operation,
+                        rows: 0,
+                        bytes: handle.written_bytes(),
+                    })
+                    .await;
+            }
+        }
+    });
+    let outcome = handle.outcome().await;
+    ticker.abort();
+    manager.finish(operation);
+    let result = match outcome {
+        Ok(result) => result,
+        Err(error) => return Err(fail(operation, runtime, error.to_string()).await),
+    };
     match result.status {
         NativeStatus::Succeeded => {
-            emit(
-                runtime,
-                Action::TransferFinished {
-                    operation,
-                    message: format!("{} completed", mode.as_str()),
-                },
-            )
-            .await;
+            let message = match (mode, result.ignored_errors) {
+                (TransferMode::Backup, _) => {
+                    let size = std::fs::metadata(&path).map_or(0, |metadata| metadata.len());
+                    format!("Backup written to {} ({}).", path.display(), size_of(size))
+                }
+                (_, Some(ignored)) => format!(
+                    "Restored from {} with {ignored} ignored error{}. First: {}",
+                    path.display(),
+                    if ignored == 1 { "" } else { "s" },
+                    first_error(&result.sanitized_log)
+                ),
+                (_, None) => format!("Restored from {}.", path.display()),
+            };
+            emit(runtime, Action::TransferFinished { operation, message }).await;
             Ok(())
         }
         NativeStatus::Cancelled => {
@@ -370,17 +440,49 @@ async fn run_native(
             Err("cancelled".into())
         }
         NativeStatus::Failed | NativeStatus::Running => {
-            let message = result.sanitized_log;
-            emit(
-                runtime,
-                Action::TransferFailed {
-                    operation,
-                    message: message.clone(),
-                },
-            )
-            .await;
-            Err(message)
+            let tool = result
+                .command_line
+                .split_whitespace()
+                .next()
+                .unwrap_or("The tool");
+            let message = failure_text(tool, &result.sanitized_log);
+            Err(fail(operation, runtime, message).await)
         }
+    }
+}
+
+/// What the tool said first that was an error, without its program prefix.
+fn first_error(log: &str) -> String {
+    log.lines()
+        .find(|line| line.to_ascii_lowercase().contains("error"))
+        .map(|line| line.split_once(": ").map_or(line, |(_, rest)| rest))
+        .map(|line| {
+            let lower = line.to_ascii_lowercase();
+            // `pg_restore: error: x` and `psql:file.sql:7: ERROR:  x` both say error once.
+            if lower.starts_with("error: ") || lower.starts_with("error:") {
+                &line[line.find(':').map_or(0, |at| at + 1)..]
+            } else {
+                line
+            }
+        })
+        .unwrap_or("see the tool's output")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The tool's own last words as the reason: `pg_restore: error: ...`, not a command line.
+fn failure_text(tool: &str, log: &str) -> String {
+    let lines: Vec<String> = log
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect();
+    let tail = lines[lines.len().saturating_sub(4)..].join(" ");
+    if tail.is_empty() {
+        format!("{tool} failed without saying why.")
+    } else {
+        format!("{tool} failed: {tail}")
     }
 }
 
@@ -404,17 +506,58 @@ impl RuntimeAccess {
         let (connect, _) = profile
             .connect_request(secret.clone())
             .map_err(|error| error.to_string())?;
-        let (host, port) = dexo_driver_api::split_endpoint(&connect.endpoint)
-            .map_err(|error| error.to_string())?;
+        // A file's endpoint is its path; there is no host for a native tool to dial.
+        let (host, port) = if profile.is_file() {
+            (None, None)
+        } else {
+            let (host, port) = dexo_driver_api::split_endpoint(&connect.endpoint)
+                .map_err(|error| error.to_string())?;
+            (Some(host), Some(port))
+        };
         Ok(Self {
             action_tx,
             session: Some(session),
             driver: Some(profile.driver.clone()),
-            host: Some(host),
-            port: Some(port),
+            host,
+            port,
             database: connect.database.clone(),
             username: Some(connect.username.clone()),
             secret: Some(secret),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{failure_text, first_error};
+
+    #[test]
+    fn a_failure_is_the_tools_own_words() {
+        let log = "pg_restore: error: connection to server at \"127.0.0.1\", port 5432 failed: FATAL:  password authentication failed for user \"dexo\"\n";
+        assert_eq!(
+            failure_text("pg_restore", log),
+            "pg_restore failed: pg_restore: error: connection to server at \"127.0.0.1\", port 5432 failed: FATAL: password authentication failed for user \"dexo\""
+        );
+        assert_eq!(
+            failure_text("mysqldump", ""),
+            "mysqldump failed without saying why."
+        );
+    }
+
+    #[test]
+    fn a_scripts_first_error_is_read_like_a_restores() {
+        assert_eq!(
+            first_error("psql:shop.sql:7: ERROR:  relation \"t\" already exists"),
+            "relation \"t\" already exists"
+        );
+    }
+
+    #[test]
+    fn the_first_error_loses_its_program_prefix() {
+        let log = "pg_restore: error: could not execute query: ERROR:  unrecognized configuration parameter \"transaction_timeout\"\npg_restore: warning: errors ignored on restore: 1";
+        assert_eq!(
+            first_error(log),
+            "could not execute query: ERROR: unrecognized configuration parameter \"transaction_timeout\""
+        );
     }
 }

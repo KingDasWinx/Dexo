@@ -32,6 +32,8 @@ impl ConnectionFactory for PostgresFactory {
         if let Some(database) = &request.database {
             config.dbname(database);
         }
+        // pg_stat_activity, and every tool reading it, tells Dexo's sessions apart by this.
+        config.application_name("dexo");
         if request.read_only {
             config.options("-c default_transaction_read_only=on");
         }
@@ -39,9 +41,7 @@ impl ConnectionFactory for PostgresFactory {
             .tls
             .as_ref()
             .is_some_and(|tls| tls.mode != TlsMode::Disable);
-        if !use_tls {
-            config.ssl_mode(tokio_postgres::config::SslMode::Disable);
-        }
+        config.ssl_mode(ssl_mode(transport.tls.as_ref().map(|tls| tls.mode)));
         let cancel = PostgresCancelContext {
             config: config.clone(),
             transport: transport.clone(),
@@ -52,7 +52,10 @@ impl ConnectionFactory for PostgresFactory {
             let tls = rustls_from_request(tls_req, &original_host)?;
             let mut cancel = cancel;
             cancel.tls = Some(tls.clone());
-            let (client, mut connection) = config.connect(tls).await.map_err(map_error)?;
+            let (client, mut connection) = config
+                .connect(tls)
+                .await
+                .map_err(|error| connect_error(error, &transport, lease.as_ref()))?;
             let notice_rx = {
                 let (notice_tx, notice_rx) = tokio::sync::mpsc::unbounded_channel();
                 tokio::spawn(async move {
@@ -72,14 +75,14 @@ impl ConnectionFactory for PostgresFactory {
                 });
                 notice_rx
             };
-            return Ok(Box::new(PostgresSession::new(
-                client, notice_rx, cancel, lease,
-            )));
+            let session = PostgresSession::new(client, notice_rx, cancel, lease);
+            session.read_backend_pid().await;
+            return Ok(Box::new(session));
         }
         let (client, mut connection) = config
             .connect(tokio_postgres::NoTls)
             .await
-            .map_err(map_error)?;
+            .map_err(|error| connect_error(error, &transport, lease.as_ref()))?;
         let notice_rx = {
             let (notice_tx, notice_rx) = tokio::sync::mpsc::unbounded_channel();
             tokio::spawn(async move {
@@ -98,9 +101,56 @@ impl ConnectionFactory for PostgresFactory {
             });
             notice_rx
         };
-        Ok(Box::new(PostgresSession::new(
-            client, notice_rx, cancel, lease,
-        )))
+        let session = PostgresSession::new(client, notice_rx, cancel, lease);
+        session.read_backend_pid().await;
+        Ok(Box::new(session))
+    }
+}
+
+/// A failed connect, said in terms of the address it tried. What the server answered --
+/// a rejected password, a missing database -- keeps the server's own words; a failure
+/// before any answer (refused, no route, a name that does not resolve, a server that
+/// will not speak TLS) names the host and the reason, where the driver's own text is
+/// just "error connecting to server".
+fn connect_error(
+    error: tokio_postgres::Error,
+    transport: &TransportRequest,
+    lease: Option<&TransportLease>,
+) -> DriverError {
+    // A proxy or tunnel that would not carry the connection shows to the driver only as
+    // a socket that closed; the lease knows why.
+    if let Some(message) = lease
+        .and_then(TransportLease::failure)
+        .and_then(|cause| transport.route.failure_message(&cause))
+    {
+        return DriverError::new(DriverErrorCategory::Transport, message);
+    }
+    if error.as_db_error().is_some() || error.is_closed() {
+        return map_error(error);
+    }
+    let (host, port) = (transport.target_host.as_str(), transport.target_port);
+    let cause = dexo_driver_api::root_cause(&error);
+    if cause.contains("does not support TLS") {
+        return DriverError::new(
+            DriverErrorCategory::Configuration,
+            format!(
+                "{host}:{port} does not support TLS, which this connection's tls_mode requires: \
+                 turn TLS on in the server, or lower tls_mode"
+            ),
+        );
+    }
+    DriverError::unreachable(host, port, &cause)
+}
+
+/// What the driver does when the server will not speak TLS. Only `preferred` may carry on
+/// in plaintext: `required`, `verify_ca` and `verify_full` promise that nothing travels
+/// unencrypted, and the driver's own default (`prefer`) quietly breaks that promise.
+fn ssl_mode(mode: Option<TlsMode>) -> tokio_postgres::config::SslMode {
+    use tokio_postgres::config::SslMode;
+    match mode {
+        None | Some(TlsMode::Disable) => SslMode::Disable,
+        Some(TlsMode::Preferred) => SslMode::Prefer,
+        Some(TlsMode::Required | TlsMode::VerifyCa | TlsMode::VerifyFull) => SslMode::Require,
     }
 }
 
@@ -143,9 +193,15 @@ async fn bind_route(
             Ok((endpoint.ip().to_string(), endpoint.port(), Some(lease)))
         }
         RouteRequest::Ssh(ssh) => {
-            let auth = match request.secrets.get("ssh_password") {
-                Some(password) => SshAuth::Password(password.clone()),
-                None => SshAuth::Agent,
+            // A key file is the key to use, with its passphrase when it has one; without
+            // one, the password, and failing that the agent.
+            let auth = match (&ssh.key_file, request.secrets.get("ssh_password")) {
+                (Some(path), _) => {
+                    SshAuth::from_key_file(path, request.secrets.get("ssh_passphrase").cloned())
+                        .map_err(map_transport)?
+                }
+                (None, Some(password)) => SshAuth::Password(password.clone()),
+                (None, None) => SshAuth::Agent,
             };
             let lease = TransportLease::ssh(
                 SshTunnelRequest {
@@ -184,4 +240,20 @@ pub(crate) fn capabilities() -> Vec<CapabilityState> {
         CapabilityState::available(Capability::Import),
         CapabilityState::available(Capability::Export),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_postgres::config::SslMode;
+
+    #[test]
+    fn only_preferred_tls_may_fall_back_to_plaintext() {
+        assert_eq!(ssl_mode(None), SslMode::Disable);
+        assert_eq!(ssl_mode(Some(TlsMode::Disable)), SslMode::Disable);
+        assert_eq!(ssl_mode(Some(TlsMode::Preferred)), SslMode::Prefer);
+        for mode in [TlsMode::Required, TlsMode::VerifyCa, TlsMode::VerifyFull] {
+            assert_eq!(ssl_mode(mode.into()), SslMode::Require, "{mode:?}");
+        }
+    }
 }

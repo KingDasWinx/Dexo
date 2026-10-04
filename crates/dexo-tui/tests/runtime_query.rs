@@ -34,21 +34,26 @@ async fn storage_worker_creates_and_loads_the_default_project() {
 }
 
 struct FakeSession {
+    executions: AtomicU64,
     commits: AtomicU64,
     cancels: AtomicU64,
     tx: Mutex<TransactionState>,
     remaining: Mutex<VecDeque<usize>>,
     catalog_parents: Mutex<Vec<Option<ObjectId>>>,
+    /// The server ended this session: every statement fails on the network.
+    dead: std::sync::atomic::AtomicBool,
 }
 
 impl Default for FakeSession {
     fn default() -> Self {
         Self {
+            executions: AtomicU64::new(0),
             commits: AtomicU64::new(0),
             cancels: AtomicU64::new(0),
             tx: Mutex::new(TransactionState::Idle),
             remaining: Mutex::new(VecDeque::new()),
             catalog_parents: Mutex::new(Vec::new()),
+            dead: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -69,6 +74,13 @@ impl Session for FakeSession {
     }
 
     async fn execute(&self, _request: QueryRequest) -> Result<QueryStream, DriverError> {
+        self.executions.fetch_add(1, Ordering::SeqCst);
+        if self.dead.load(Ordering::SeqCst) {
+            return Err(DriverError::new(
+                dexo_driver_api::DriverErrorCategory::Network,
+                "connection closed",
+            ));
+        }
         let count = self
             .remaining
             .lock()
@@ -91,6 +103,7 @@ impl Session for FakeSession {
         events.push(QueryEvent::ResultSetFinished {
             index: 0,
             rows_affected: Some(count as u64),
+            truncated: false,
         });
         events.push(QueryEvent::Finished {
             rows_affected: Some(count as u64),
@@ -156,6 +169,13 @@ impl CatalogReader for FakeSession {
     }
 
     async fn dependents(&self, _id: &ObjectId) -> Result<Vec<ObjectId>, DriverError> {
+        Ok(Vec::new())
+    }
+
+    async fn foreign_keys(
+        &self,
+        _table: &dexo_driver_api::QualifiedName,
+    ) -> Result<Vec<dexo_driver_api::ForeignKeyRef>, DriverError> {
         Ok(Vec::new())
     }
 }
@@ -259,12 +279,13 @@ async fn connection_folder_loads_driver_root_and_keeps_ui_parent() {
         })
         .await;
 
+    // Read off the loop: its answer says it is done.
+    let action = actions.recv().await.expect("catalog loaded action");
     assert_eq!(
         *fake.catalog_parents.lock().expect("catalog parents"),
         vec![None],
         "the synthetic sidebar folder must load the driver's catalog root"
     );
-    let action = actions.recv().await.expect("catalog loaded action");
     assert!(matches!(
         action,
         Action::CatalogLoaded { parent: Some(actual), .. } if actual == connection
@@ -274,7 +295,7 @@ async fn connection_folder_loads_driver_root_and_keeps_ui_parent() {
 #[tokio::test]
 async fn driver_owned_connection_prefixed_parent_is_not_treated_as_the_ui_folder() {
     let fake = Arc::new(FakeSession::default());
-    let (_dir, mut runtime, _actions) = runtime_with_named_session("prod", fake.clone()).await;
+    let (_dir, mut runtime, mut actions) = runtime_with_named_session("prod", fake.clone()).await;
     let session = runtime.sessions().ids()[0];
     let driver_parent = ObjectId::new("connection:remote");
 
@@ -289,6 +310,7 @@ async fn driver_owned_connection_prefixed_parent_is_not_treated_as_the_ui_folder
         })
         .await;
 
+    actions.recv().await.expect("catalog loaded action");
     assert_eq!(
         *fake.catalog_parents.lock().expect("catalog parents"),
         vec![Some(driver_parent)]
@@ -299,9 +321,12 @@ fn script_request(sql: &str) -> ScriptRequest {
     ScriptRequest {
         key: OperationKey::new(OperationId::new(), "session-a", "doc-a", 1),
         statements: statements_for(sql, dexo_app::ExecutionTarget::Document, 0, None),
+        dialect: dexo_sql::Dialect::Postgres,
         policy: ScriptPolicy::StopOnError,
         parameters: Vec::new(),
+        named: Vec::new(),
         timeout: std::time::Duration::from_secs(5),
+        read_only: false,
     }
 }
 
@@ -376,4 +401,83 @@ async fn stale_generation_is_ignored_by_the_reducer() {
         },
     );
     assert_eq!(model.results.row_count(), 0);
+}
+
+/// Backslash commands are answered from the catalog in the runtime: in a script with SQL
+/// around them, only the SQL reaches the driver, and each still gets its result set.
+#[tokio::test]
+async fn backslash_commands_never_reach_the_driver() {
+    let fake = Arc::new(FakeSession::with_rows(vec![1]));
+    let (_dir, mut runtime, mut actions) = runtime_with_session(fake.clone()).await;
+    runtime
+        .start_script(script_request("\\l\nselect 1;\n\\dt"))
+        .await
+        .unwrap();
+    let received = collect_until_finished(&mut actions).await;
+    assert_eq!(fake.executions.load(Ordering::SeqCst), 1);
+    assert_eq!(result_set_indexes(&received), vec![0, 1, 2]);
+    let databases = received.iter().find_map(|action| match action {
+        Action::QueryRows { index: 0, rows, .. } => Some(rows.clone()),
+        _ => None,
+    });
+    assert_eq!(databases, Some(vec![vec![DbValue::Text("db".into())]]));
+}
+
+/// A session the server ended fails every statement with "connection closed": the run
+/// says the connection is lost, so it is closed and the next run connects again.
+#[tokio::test]
+async fn a_session_that_stops_answering_is_reported_lost() {
+    let fake = Arc::new(FakeSession::default());
+    fake.dead.store(true, Ordering::SeqCst);
+    let (_dir, mut runtime, mut actions) = runtime_with_session(fake).await;
+    runtime
+        .start_script(script_request("select 1"))
+        .await
+        .unwrap();
+    let received = collect_until_finished(&mut actions).await;
+    assert!(
+        received.iter().any(
+            |action| matches!(action, Action::SessionLost { session } if session == "session-a")
+        ),
+        "{received:?}"
+    );
+}
+
+/// Ctrl+F2 stops a statement the person asked to stop: Messages says so as a line, not
+/// as an error.
+#[test]
+fn a_statement_the_person_cancelled_is_a_line_not_an_error() {
+    let mut model = dexo_tui::Model::default();
+    let key = OperationKey::new(OperationId::new(), "", "scratch", 0);
+    dexo_tui::update(
+        &mut model,
+        Action::QueryFailed {
+            key,
+            index: 0,
+            message: "query cancelled".into(),
+            details: Vec::new(),
+            position: None,
+            cancelled: true,
+        },
+    );
+    let last = model.messages.last().expect("a line");
+    assert_eq!(last.message, "Query cancelled.");
+    assert_eq!(last.severity, dexo_tui::model::Severity::Info);
+}
+
+/// A failed statement on a session that still answers is only that statement's failure.
+#[tokio::test]
+async fn a_finished_statement_on_a_live_session_is_not_a_lost_session() {
+    let fake = Arc::new(FakeSession::default());
+    let (_dir, mut runtime, mut actions) = runtime_with_session(fake).await;
+    runtime
+        .start_script(script_request("select 1"))
+        .await
+        .unwrap();
+    let received = collect_until_finished(&mut actions).await;
+    assert!(
+        !received
+            .iter()
+            .any(|action| matches!(action, Action::SessionLost { .. }))
+    );
 }

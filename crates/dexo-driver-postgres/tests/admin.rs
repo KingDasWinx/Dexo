@@ -54,6 +54,8 @@ async fn sessions_locks_sizes_stats_variables_and_blocker() {
         ))
     };
     let admin = connect().await.unwrap();
+    // The list leaves out the session that reads it: there has to be another to show.
+    let _other = connect().await.unwrap();
     let provider = admin.admin().unwrap();
     let created = admin
         .execute(dexo_driver_api::QueryRequest::write(
@@ -131,6 +133,25 @@ async fn sessions_locks_sizes_stats_variables_and_blocker() {
         drain(stream).await;
     });
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // The locks are the others': the session that reads them takes some to read, which
+    // are not what anyone looks for.
+    let locks = provider.list_locks().await.unwrap();
+    assert!(
+        locks
+            .items
+            .iter()
+            .any(|lock| lock.relation.as_deref() == Some("admin_lock")),
+        "{:?}",
+        locks.items
+    );
+    assert!(
+        !locks
+            .items
+            .iter()
+            .any(|lock| lock.relation.as_deref() == Some("pg_locks")),
+        "the reader's own: {:?}",
+        locks.items
+    );
     let graph = provider.blocking_graph().await.unwrap();
     assert!(
         graph
@@ -172,6 +193,100 @@ async fn sessions_locks_sizes_stats_variables_and_blocker() {
     assert!(
         limited_sessions.restriction.is_some(),
         "restricted role must keep a safe reason"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn variables_show_the_values_in_force_with_their_units() {
+    let pair = dexo_test_support::DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write("set work_mem = '7MB'"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let vars = session.admin().unwrap().variables().await.unwrap();
+    let value = |name: &str, scope: dexo_driver_api::VariableScope| {
+        vars.items
+            .iter()
+            .find(|item| item.name == name && item.scope == scope)
+            .and_then(|item| item.value.clone())
+    };
+    use dexo_driver_api::VariableScope::{Server, Session};
+    assert_eq!(value("work_mem", Session).as_deref(), Some("7168 kB"));
+    assert_eq!(value("work_mem", Server).as_deref(), Some("4096 kB"));
+    // The image's configuration file listens everywhere; the compiled-in default is
+    // localhost, which the server is not running with.
+    assert_eq!(value("listen_addresses", Server).as_deref(), Some("*"));
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn the_server_sees_dexo_as_the_application_behind_its_sessions() {
+    use futures_util::StreamExt;
+    let pair = dexo_test_support::DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    let mut stream = session
+        .execute(dexo_driver_api::QueryRequest::read(
+            "select application_name from pg_stat_activity where pid = pg_backend_pid()",
+            1,
+        ))
+        .await
+        .unwrap();
+    let mut name = None;
+    while let Some(event) = stream.next().await {
+        if let dexo_driver_api::QueryEvent::Rows(batch) = event.unwrap() {
+            name = batch.rows[0].first().cloned();
+        }
+    }
+    assert_eq!(name, Some(dexo_driver_api::DbValue::Text("dexo".into())));
+    // Another session lists it with that name, and where it comes from.
+    let watcher = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    let listed = watcher.admin().unwrap().list_sessions().await.unwrap();
+    assert!(
+        listed
+            .items
+            .iter()
+            .any(|info| info.application.as_deref() == Some("dexo") && info.client.is_some()),
+        "{:?}",
+        listed.items
+    );
+    // The session says what the server calls it, and the list calls it that.
+    let own = session.server_session_id().expect("a backend pid");
+    assert!(
+        listed.items.iter().any(|info| info.id == own),
+        "{own} in {:?}",
+        listed.items
     );
 }
 

@@ -34,6 +34,7 @@ async fn run_driver(driver: &str, endpoint: &str, sleep_sql: &str) {
     let (host, port) = endpoint.rsplit_once(':').expect("host:port");
     runtime
         .dispatch(Effect::CreateConnection {
+            connect: true,
             input: NewConnection {
                 name: format!("{driver}-live"),
                 driver: driver.into(),
@@ -53,9 +54,12 @@ async fn run_driver(driver: &str, endpoint: &str, sleep_sql: &str) {
         .dispatch(Effect::StartScript(ScriptRequest {
             key: key.clone(),
             statements: vec!["select 1".into()],
+            dialect: dexo_app::dialect_for_driver(driver),
             policy: ScriptPolicy::StopOnError,
             parameters: Vec::new(),
+            named: Vec::new(),
             timeout: Duration::from_secs(10),
+            read_only: false,
         }))
         .await;
     assert!(wait_rows(&mut rx).await, "{driver} select 1 returned rows");
@@ -73,9 +77,12 @@ async fn run_driver(driver: &str, endpoint: &str, sleep_sql: &str) {
         .dispatch(Effect::StartScript(ScriptRequest {
             key: sleep_key.clone(),
             statements: vec![sleep_sql.into()],
+            dialect: dexo_app::dialect_for_driver(driver),
             policy: ScriptPolicy::StopOnError,
             parameters: Vec::new(),
+            named: Vec::new(),
             timeout: Duration::from_secs(30),
+            read_only: false,
         }))
         .await;
     runtime

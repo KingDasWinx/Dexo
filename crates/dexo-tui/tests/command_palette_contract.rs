@@ -14,6 +14,16 @@ const COMMAND_IDS: &[&str] = &[
     "transaction.commit",
     "transaction.rollback",
     "help.open",
+    "screen.workbench",
+    "screen.connections",
+    "screen.agents",
+    "screen.server",
+    "screen.compare",
+    "screen.history",
+    "screen.previous",
+    "screen.list",
+    "screen.detail",
+    "mcp.setup",
     "focus.explorer",
     "focus.editor",
     "focus.results",
@@ -29,6 +39,7 @@ const COMMAND_IDS: &[&str] = &[
     "layout.results_shrink",
     "layout.explorer_grow",
     "layout.explorer_shrink",
+    "data.copy.cell",
     "data.copy.csv",
     "data.copy.text",
     "data.copy.json",
@@ -40,6 +51,7 @@ const COMMAND_IDS: &[&str] = &[
     "data.refresh",
     "data.toggle_delete",
     "data.insert_row",
+    "data.edit_cell",
     "data.nav_back",
     "data.page_next",
     "data.page_prev",
@@ -47,16 +59,24 @@ const COMMAND_IDS: &[&str] = &[
     "data.filter",
     "data.review",
     "data.related",
+    "editor.save_query",
+    "editor.open_saved_query",
     "data.inspect",
     "schema.preview",
     "schema.raw",
     "schema.diff",
+    "schema.alter_table",
+    "schema.new_view",
+    "schema.new_index",
+    "schema.new_routine",
+    "schema.new_trigger",
     "transfer.export",
     "transfer.import",
     "backup.dump",
     "backup.restore",
     "schema.security",
     "explain.open",
+    "explain.try_index",
     "results.cycle_view",
     "explain.analyze",
     "admin.sessions",
@@ -65,9 +85,16 @@ const COMMAND_IDS: &[&str] = &[
     "explorer.refresh",
     "explorer.refresh_all",
     "explorer.inspect",
+    "explorer.note",
     "explorer.ddl",
     "explorer.up",
     "explorer.down",
+    "explorer.first",
+    "explorer.last",
+    "explorer.page_up",
+    "explorer.page_down",
+    "explorer.collapse",
+    "explorer.open",
     "explorer.dependencies",
     "document.next",
     "document.prev",
@@ -80,8 +107,12 @@ const COMMAND_IDS: &[&str] = &[
     "document.open",
     "results.select_row",
     "results.select_column",
+    "results.sort_column",
+    "results.count",
+    "results.sort_add_column",
     "results.next_tab",
     "results.prev_tab",
+    "settings.theme",
     "settings.mode",
     "settings.accent",
     "settings.keymap",
@@ -103,6 +134,10 @@ const COMMAND_IDS: &[&str] = &[
     "results.pageup",
     "results.pagedown",
     "results.top",
+    "results.bottom",
+    "results.collapse",
+    "results.first_column",
+    "results.last_column",
     "results.extend_up",
     "results.extend_down",
     "results.actions",
@@ -111,6 +146,8 @@ const COMMAND_IDS: &[&str] = &[
     "connection.close_session",
     "connection.new",
     "connection.edit",
+    "connection.save_temporary",
+    "connection.find_docker",
     "connection.test",
     "connection.duplicate",
     "connection.move_group",
@@ -128,9 +165,18 @@ const COMMAND_IDS: &[&str] = &[
     "recovery.restore",
     "recovery.discard",
     "mcp.audit",
+    "mcp.grant",
     "mcp.revoke_all",
     "editor.complete",
     "editor.format",
+    "results.record_view",
+    "editor.find",
+    "editor.replace",
+    "editor.external",
+    "editor.toggle_comment",
+    "editor.duplicate_line",
+    "editor.move_line_up",
+    "editor.move_line_down",
     "editor.undo",
     "editor.redo",
     "editor.select_all",
@@ -149,8 +195,6 @@ const FLOW_IDS: &[&str] = &[
     "transaction.savepoint",
     "transaction.rollback_savepoint",
     "transaction.release_savepoint",
-    "data.sort",
-    "data.filter",
     "data.review",
     "schema.preview",
     "schema.raw",
@@ -186,8 +230,6 @@ const FLOW_INTENTS: &[(&str, FlowIntent)] = &[
         "transaction.release_savepoint",
         FlowIntent::SavepointRelease,
     ),
-    ("data.sort", FlowIntent::DataSort),
-    ("data.filter", FlowIntent::DataFilter),
     ("data.review", FlowIntent::DataReview),
     ("schema.preview", FlowIntent::SchemaPreview),
     ("schema.raw", FlowIntent::SchemaRaw),
@@ -217,8 +259,8 @@ fn registry_contains_each_command_exactly_once() {
     let specs = dexo_tui::palette::command_specs();
     let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
-    assert_eq!(specs.len(), 142);
-    assert_eq!(actual.len(), 142, "duplicate command id");
+    assert_eq!(specs.len(), 188);
+    assert_eq!(actual.len(), 188, "duplicate command id");
     assert_eq!(actual, expected);
 }
 
@@ -227,7 +269,7 @@ fn registry_contains_each_command_exactly_once() {
 #[test]
 fn palette_shows_only_the_curated_subset() {
     let visible = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
-    assert_eq!(visible.len(), 90);
+    assert_eq!(visible.len(), 160);
 }
 
 /// A category with no display name falls back to the raw prefix, which looks like a
@@ -300,13 +342,13 @@ fn query_commands_expose_one_action_per_execution_scope() {
     let actual: Vec<_> = entries
         .iter()
         .filter(|entry| entry.id.starts_with("query.execute"))
-        .map(|entry| (entry.id, entry.shortcut))
+        .map(|entry| (entry.id, entry.shortcut.as_deref()))
         .collect();
 
     assert_eq!(
         actual,
         vec![
-            ("query.execute_statement", Some("Ctrl+Enter")),
+            ("query.execute_statement", Some("Ctrl+J")),
             ("query.execute_selection", None),
             ("query.execute_document", Some("Ctrl+Shift+F10")),
         ]
@@ -344,7 +386,6 @@ fn default_model_explains_missing_context() {
         ("query.execute_statement", "connect a session first"),
         ("data.copy.csv", "no results available"),
         ("explorer.copy_name", "select an explorer object first"),
-        ("editor.history.clear", "history is empty"),
     ] {
         let entry = entries.iter().find(|entry| entry.id == id).unwrap();
         assert_eq!(entry.disabled_reason.as_deref(), Some(reason));
@@ -451,7 +492,6 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
                 model.set_sql("select :id");
                 dexo_tui::screens::editor::refresh_intelligence(model, false);
             }
-            History => model.editor.history.push("select 1".into()),
         }
     }
 
@@ -477,9 +517,23 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
             }
             Requirement::ActiveQuery => model.active_operation = None,
             Requirement::Parameters => model.editor.parameters.clear(),
-            Requirement::History => model.editor.history.clear(),
         }
         model
+    }
+
+    /// A command for a table's own rows runs on a table's document.
+    fn on_a_table(id: &str, model: &mut Model) {
+        if dexo_tui::palette::table_only(id) {
+            model.active_document_mut().kind =
+                dexo_tui::model::DocumentKind::Table(dexo_app::parse_qualified("public.orders"));
+        }
+    }
+
+    /// A screen's list and detail are another screen's than the workbench's.
+    fn on_a_screen(id: &str, model: &mut Model) {
+        if matches!(id, "screen.list" | "screen.detail") {
+            model.screen = dexo_tui::model::Screen::History;
+        }
     }
 
     fn apply_transaction_context(id: &str, model: &mut Model) {
@@ -502,6 +556,8 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
         let requirements = command_spec(id).unwrap().requirements;
         let mut ready_model = model_satisfying(requirements);
         apply_transaction_context(id, &mut ready_model);
+        on_a_table(id, &mut ready_model);
+        on_a_screen(id, &mut ready_model);
         let ready = palette_entries(&ready_model)
             .into_iter()
             .find(|entry| entry.id == id)
@@ -509,7 +565,8 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
         assert!(ready.disabled_reason.is_none(), "{id}");
 
         for requirement in requirements {
-            let blocked_model = model_missing(requirements, *requirement);
+            let mut blocked_model = model_missing(requirements, *requirement);
+            on_a_table(id, &mut blocked_model);
             let blocked = palette_entries(&blocked_model)
                 .into_iter()
                 .find(|entry| entry.id == id)
@@ -521,4 +578,55 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
             );
         }
     }
+}
+
+/// A driver that cannot back up says so in the palette, before anything is tried.
+#[test]
+fn backup_and_restore_carry_the_drivers_reason() {
+    let mut model = dexo_tui::Model::default();
+    let session = dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(9));
+    model.active_session = Some(session);
+    model.unavailable.insert(
+        session,
+        vec![(
+            dexo_driver_api::Capability::Backup,
+            "copy the file to back it up".into(),
+        )],
+    );
+    let entries = dexo_tui::palette::palette_entries(&model);
+    for id in ["backup.dump", "backup.restore"] {
+        let entry = entries.iter().find(|entry| entry.id == id).expect(id);
+        assert_eq!(
+            entry.disabled_reason.as_deref(),
+            Some("copy the file to back it up"),
+            "{id}"
+        );
+    }
+}
+
+/// The palette shows each command's key in the keymap in use, not a fixed label.
+#[test]
+fn shortcuts_follow_the_active_keymap() {
+    let shortcut = |keymap: dexo_tui::keymap::Keymap, id: &str| {
+        let model = dexo_tui::Model {
+            keymap,
+            ..dexo_tui::Model::default()
+        };
+        dexo_tui::palette::palette_entries(&model)
+            .into_iter()
+            .find(|entry| entry.id == id)
+            .and_then(|entry| entry.shortcut)
+    };
+    assert_eq!(
+        shortcut(
+            dexo_tui::keymap::Keymap::default_profile(),
+            "editor.external"
+        )
+        .as_deref(),
+        Some("Ctrl+E")
+    );
+    assert_eq!(
+        shortcut(dexo_tui::keymap::Keymap::emacs_profile(), "editor.external").as_deref(),
+        Some("Ctrl+X Ctrl+E")
+    );
 }

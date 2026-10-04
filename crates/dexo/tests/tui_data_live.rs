@@ -68,6 +68,7 @@ async fn postgres_data_page_and_filter() {
     let data = session.data().expect("data");
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: QualifiedName::new(None::<String>, Some("public"), "live_items"),
             columns: vec![ColumnId("id".into()), ColumnId("n".into())],
             filter: Some(Filter::Gt(ColumnId("n".into()), DbValue::I64(10))),
@@ -131,6 +132,7 @@ async fn postgres_changes_apply_insert_update_delete() {
     .unwrap();
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table,
             columns: vec![ColumnId("id".into()), ColumnId("n".into())],
             filter: None,
@@ -208,6 +210,7 @@ async fn postgres_foreign_key_composite_and_simple() {
         .data()
         .unwrap()
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: fk.referenced_table,
             columns: vec![],
             filter: Some(filter),
@@ -265,6 +268,7 @@ async fn mysql_foreign_key_simple() {
         .data()
         .unwrap()
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: fk.referenced_table,
             columns: vec![],
             filter: Some(filter),

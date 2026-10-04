@@ -31,7 +31,7 @@ async fn connect_seeded() -> Fixture {
         "SET GLOBAL log_bin_trust_function_creators = 1",
         "CREATE TABLE orders (
             id INT PRIMARY KEY AUTO_INCREMENT,
-            note VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci
+            note VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
         ) ENGINE=InnoDB
         PARTITION BY RANGE (id) (
             PARTITION p0 VALUES LESS THAN (1000),
@@ -277,4 +277,180 @@ async fn mysql_catalog_contract() {
             ),
         "least-privilege user must get a restriction or permission error, not empty success"
     );
+}
+
+/// Foreign keys from and to a table, a composite one's columns in order.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn foreign_keys_are_listed_from_and_to_a_table() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = MysqlFactory
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE TABLE fk_customers (id INT PRIMARY KEY) ENGINE=InnoDB",
+        "CREATE TABLE fk_orders (id INT, region VARCHAR(8), customer_id INT,
+             PRIMARY KEY (id, region),
+             FOREIGN KEY (customer_id) REFERENCES fk_customers (id)) ENGINE=InnoDB",
+        "CREATE TABLE fk_lines (n INT, order_id INT, order_region VARCHAR(8),
+             FOREIGN KEY (order_id, order_region) REFERENCES fk_orders (id, region)) ENGINE=InnoDB",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let orders = dexo_driver_api::QualifiedName::new(Some("dexo"), None::<String>, "fk_orders");
+    let keys = session
+        .catalog()
+        .unwrap()
+        .foreign_keys(&orders)
+        .await
+        .unwrap();
+    let ends: Vec<_> = keys
+        .iter()
+        .map(|key| {
+            (
+                key.from.object().to_string(),
+                key.from_columns.join(","),
+                key.to.object().to_string(),
+                key.to_columns.join(","),
+            )
+        })
+        .collect();
+    assert_eq!(ends.len(), 2, "{ends:?}");
+    assert!(ends.contains(&(
+        "fk_orders".into(),
+        "customer_id".into(),
+        "fk_customers".into(),
+        "id".into()
+    )));
+    assert!(ends.contains(&(
+        "fk_lines".into(),
+        "order_id,order_region".into(),
+        "fk_orders".into(),
+        "id,region".into()
+    )));
+    // Both ends named as a table opened from the sidebar is, so its open tab is found.
+    let key = keys
+        .iter()
+        .find(|key| key.from.object() == "fk_orders")
+        .unwrap();
+    assert_eq!(key.from, dexo_app::parse_qualified("dexo.fk_orders"));
+    assert_eq!(key.to, dexo_app::parse_qualified("dexo.fk_customers"));
+}
+
+/// Table and column comments come with the catalog, as each object's `comment`.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn comments_come_with_tables_and_columns() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = MysqlFactory
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write(
+                "CREATE TABLE noted (id INT, total DECIMAL(10,2) COMMENT 'Gross, in cents') COMMENT 'One row per paid checkout'",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let catalog = session.catalog().unwrap();
+    let options = CatalogListOptions::default();
+    let top = catalog.list_children(None, &options).await.unwrap().objects;
+    let tables = catalog
+        .list_children(Some(&top[0].id), &options)
+        .await
+        .unwrap()
+        .objects;
+    let table = tables
+        .iter()
+        .find(|object| object.qualified_name.object() == "noted")
+        .unwrap();
+    assert_eq!(
+        table.attributes.get("comment"),
+        Some(&serde_json::json!("One row per paid checkout"))
+    );
+    let columns = catalog
+        .list_children(Some(&table.id), &options)
+        .await
+        .unwrap()
+        .objects;
+    let comment = |name: &str| {
+        columns
+            .iter()
+            .find(|object| object.qualified_name.object() == name)
+            .and_then(|object| object.attributes.get("comment").cloned())
+    };
+    assert_eq!(
+        comment("noted.total"),
+        Some(serde_json::json!("Gross, in cents"))
+    );
+    assert_eq!(comment("noted.id"), None);
+}
+
+/// `\d name` describes the current database's table of that name, and one named with
+/// its database -- a system one too -- from that database.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn describe_resolves_a_name_in_the_current_database() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = MysqlFactory
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write(
+                "CREATE TABLE described (id INT PRIMARY KEY, total DECIMAL(10, 2))",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let catalog = session.catalog().unwrap();
+    let describe = |line: &'static str| async move {
+        let command = dexo_app::meta_command::parse(line).unwrap();
+        dexo_app::meta_command::answer(catalog, &command)
+            .await
+            .map(|answer| {
+                answer
+                    .rows
+                    .into_iter()
+                    .map(|row| row[0].to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+            })
+    };
+    let columns = describe("\\d described").await.unwrap();
+    assert!(columns.contains(&"total".to_string()), "{columns:?}");
+    let columns = describe("\\d dexo.DESCRIBED").await.unwrap();
+    assert!(columns.contains(&"total".to_string()), "{columns:?}");
+    let columns = describe("\\d information_schema.tables").await.unwrap();
+    assert!(columns.contains(&"table_name".to_string()), "{columns:?}");
+    assert!(describe("\\d tables").await.is_err());
 }

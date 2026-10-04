@@ -8,7 +8,7 @@ use dexo_driver_api::{
     AlterOp, CatalogObject, ColumnSpec, DdlExecutor, DdlOutcome, DdlPlan, DriverError, ObjectId,
     ObjectKind, QualifiedName, SchemaChange, TableDef, TableShape,
 };
-use dexo_tui::runtime::explain_manager::ExplainManager;
+use dexo_tui::runtime::explain_manager::statement_sql;
 use dexo_tui::runtime::schema_manager::{DiffFilters, DiffRequest, SchemaManager};
 use dexo_tui::screens::file_picker::FilePicker;
 
@@ -199,13 +199,32 @@ fn editor_with_cursor_in_second_statement() -> (String, usize) {
 
 #[tokio::test]
 async fn explain_uses_statement_at_editor_cursor() {
-    let runtime = ExplainManager::default();
     let (sql, cursor) = editor_with_cursor_in_second_statement();
-    runtime.explain(&sql, cursor, false).await.unwrap();
-    assert_eq!(runtime.explain_sql(), "SELECT * FROM orders");
-    assert!(runtime.explain(&sql, cursor, true).await.is_err());
-    runtime.confirm_analyze();
-    runtime.explain(&sql, cursor, true).await.unwrap();
+    assert_eq!(
+        statement_sql(&sql, cursor, dexo_sql::Dialect::Postgres).as_deref(),
+        Some("SELECT * FROM orders")
+    );
+    // Split as the connection's dialect reads it: a SQLite `[a;b]` is one name, and a
+    // MySQL `#` comment's apostrophe opens no string.
+    assert_eq!(
+        statement_sql(
+            "select [a;b] from t; select 2",
+            3,
+            dexo_sql::Dialect::Sqlite
+        )
+        .as_deref(),
+        Some("select [a;b] from t")
+    );
+    let mysql = "select 1; # it's\nselect 2;\nselect 3";
+    assert_eq!(
+        statement_sql(
+            mysql,
+            mysql.find("select 2").unwrap(),
+            dexo_sql::Dialect::Mysql
+        )
+        .as_deref(),
+        Some("select 2")
+    );
 }
 
 fn transfer_session() -> dexo_tui::runtime::SessionId {
@@ -270,7 +289,7 @@ async fn import_and_restore_never_write_to_the_source_path() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.dump");
     std::fs::write(&source, b"ORIGINAL").unwrap();
-    let mut runtime = recording_transfer_runtime();
+    let runtime = recording_transfer_runtime();
     runtime
         .run(TransferRequest::restore(source.clone(), transfer_session()))
         .await
@@ -297,22 +316,33 @@ fn press(model: &mut dexo_tui::Model, code: crossterm::event::KeyCode) -> Vec<de
 fn schema_diff_command_starts_loading_instead_of_opening_empty_default() {
     let mut model = connected_model();
     choose(&mut model, "schema.diff");
-    assert!(model.schema_diff.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Compare);
     assert!(model.schema_diff.source_prompt);
     assert!(model.schema_diff.entries.is_empty());
 }
 
+/// Manage Grants is the Privileges view of a table's document: with none in front,
+/// nothing is read and the person is told to open one.
 #[test]
-fn security_loads_and_closes_with_escape() {
+fn manage_grants_is_the_privileges_view_of_a_table() {
     let mut model = connected_model();
     let effects = choose_effects(&mut model, "schema.security");
-    assert!(model.security.open);
-    assert!(matches!(
-        effects.as_slice(),
-        [dexo_tui::Effect::LoadSecurity { .. }]
-    ));
-    press(&mut model, crossterm::event::KeyCode::Esc);
-    assert!(!model.security.open);
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::LoadSecurity { .. })),
+        "{effects:?}"
+    );
+    model.active_document_mut().kind =
+        dexo_tui::model::DocumentKind::Table(dexo_app::parse_qualified("local.public.orders"));
+    let effects = choose_effects(&mut model, "schema.security");
+    assert_eq!(model.results.view, dexo_tui::model::ResultsView::Privileges);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::LoadSecurity { .. })),
+        "{effects:?}"
+    );
 }
 
 #[test]
@@ -379,4 +409,101 @@ fn explain_effect_carries_second_statement_cursor() {
         effects.as_slice(),
         [Effect::RunExplain { cursor, .. }] if *cursor > 0
     ));
+}
+
+/// Import and Restore write into the database, through the driver and through native
+/// tools whose connections never get the read-only setting; a read-only connection
+/// refuses them before anything starts.
+#[test]
+fn a_read_only_connection_refuses_import_and_restore() {
+    use dexo_tui::screens::transfer::TransferMode;
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("rows.csv");
+    std::fs::write(&source, b"id\n1\n").unwrap();
+    let started = |read_only: bool, mode: TransferMode| {
+        let mut model = transfer_ready_model();
+        model.connection.read_only = read_only;
+        choose(
+            &mut model,
+            match mode {
+                TransferMode::Import => "transfer.import",
+                _ => "backup.restore",
+            },
+        );
+        model.transfer.path.set_text(source.display().to_string());
+        model.transfer.table.set_text("rows");
+        // A restore asks once more before it writes into the database.
+        let mut effects = press(&mut model, crossterm::event::KeyCode::Enter);
+        if mode == TransferMode::Restore && model.transfer.confirm.is_some() {
+            model.transfer.footer = dexo_tui::widgets::form::FooterFocus::Submit;
+            effects = press(&mut model, crossterm::event::KeyCode::Enter);
+        }
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::RunTransfer(_)))
+    };
+    for mode in [TransferMode::Import, TransferMode::Restore] {
+        assert!(
+            started(false, mode),
+            "{mode:?} does not start even when writable"
+        );
+        assert!(
+            !started(true, mode),
+            "{mode:?} started on a read-only connection"
+        );
+    }
+}
+
+/// An SQL export writes the connection's dialect: a SQLite blob as `X'..'`, which
+/// SQLite reads back as a blob, not Postgres's `'\x..'`, which it reads as text.
+#[tokio::test]
+async fn an_sql_export_speaks_the_connections_dialect() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.sql");
+    let manager = dexo_tui::runtime::transfer_manager::TransferManager::default();
+    manager
+        .run_with(
+            dexo_tui::action::TransferRequest::Export {
+                operation: dexo_tui::runtime::OperationId::new(),
+                path: path.clone(),
+                format: dexo_app::transfer::TransferFormat::Sql,
+                columns: vec!["data".into()],
+                rows: std::sync::Arc::new(vec![vec![dexo_driver_api::DbValue::Bytes(vec![
+                    0xca, 0xfe,
+                ])]]),
+                dialect: dexo_app::data::SqlDialect::Sqlite,
+                table: Some("blobs".into()),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("X'cafe'"), "{written}");
+    // The table the request names, not one called after the file.
+    assert!(written.contains("INSERT INTO \"blobs\""), "{written}");
+}
+
+/// Ctrl+F cycles the formats; an import never lands on SQL, which is a script to run,
+/// not data it can read, while an export does.
+#[test]
+fn an_import_never_offers_sql() {
+    let formats = |id: &str| {
+        let mut model = transfer_ready_model();
+        choose(&mut model, id);
+        (0..6)
+            .map(|_| {
+                dexo_tui::update(
+                    &mut model,
+                    dexo_tui::Action::Key(crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Char('f'),
+                        crossterm::event::KeyModifiers::CONTROL,
+                    )),
+                );
+                model.transfer.format.clone()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(!formats("transfer.import").contains(&"sql".to_string()));
+    assert!(formats("transfer.export").contains(&"sql".to_string()));
 }

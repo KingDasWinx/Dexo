@@ -54,12 +54,6 @@ fn dialogs() -> Vec<Dialog> {
             footer: |m| m.document_name_prompt.footer,
         },
         Dialog {
-            name: "data query prompt",
-            open: |m| m.data.query_prompt.open = true,
-            is_open: |m| m.data.query_prompt.open,
-            footer: |m| m.data.query_prompt.footer,
-        },
-        Dialog {
             name: "project name",
             open: |m| {
                 m.projects.open = true;
@@ -154,14 +148,24 @@ fn left_and_right_step_between_the_buttons() {
             "the arrows never reached Submit in the {}",
             dialog.name
         );
-        update(&mut model, key(KeyCode::Right));
+        // The connection form has a Test button between the two.
+        let steps = if dialog.name == "connection form" {
+            2
+        } else {
+            1
+        };
+        for _ in 0..steps {
+            update(&mut model, key(KeyCode::Right));
+        }
         assert_eq!(
             (dialog.footer)(&model),
             FooterFocus::Cancel,
             "Right from Submit in the {}",
             dialog.name
         );
-        update(&mut model, key(KeyCode::Left));
+        for _ in 0..steps {
+            update(&mut model, key(KeyCode::Left));
+        }
         assert_eq!(
             (dialog.footer)(&model),
             FooterFocus::Submit,

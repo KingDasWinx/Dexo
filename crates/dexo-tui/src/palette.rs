@@ -3,14 +3,13 @@ use crate::model::Model;
 
 mod registry;
 pub use registry::{command_spec, command_specs, palette_entries};
+pub(crate) use registry::{pretty_chord, shortcut_for};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FlowIntent {
     SavepointCreate,
     SavepointRollback,
     SavepointRelease,
-    DataSort,
-    DataFilter,
     DataReview,
     SchemaPreview,
     SchemaRaw,
@@ -58,7 +57,8 @@ pub struct PaletteEntry {
     pub id: &'static str,
     pub title: &'static str,
     pub keywords: &'static [&'static str],
-    pub shortcut: Option<&'static str>,
+    /// The key the active keymap gives the command, as the palette shows it.
+    pub shortcut: Option<String>,
     pub requirements: &'static [Requirement],
     pub disabled_reason: Option<String>,
     pub invocation: PaletteInvocation,
@@ -75,7 +75,6 @@ pub enum Requirement {
     PendingChanges,
     ActiveQuery,
     Parameters,
-    History,
 }
 
 impl Requirement {
@@ -90,7 +89,6 @@ impl Requirement {
             Self::PendingChanges => "no pending changes",
             Self::ActiveQuery => "no query is running",
             Self::Parameters => "no query parameters",
-            Self::History => "history is empty",
         }
     }
 }
@@ -121,6 +119,7 @@ pub fn node_menu_items(kind: NodeMenuKind) -> &'static [&'static str] {
             "explorer.copy_name",
             "connection.test",
             "explorer.refresh",
+            "explorer.refresh_all",
             "editor.history",
             "schema.security",
             "admin.sessions",
@@ -139,6 +138,9 @@ pub fn node_menu_items(kind: NodeMenuKind) -> &'static [&'static str] {
             "explorer.inspect",
             "explorer.ddl",
             "explorer.copy_ddl",
+            "schema.alter_table",
+            "schema.new_index",
+            "schema.new_trigger",
             "explorer.dependencies",
             "explorer.copy_name",
             "explorer.copy_simple",
@@ -150,6 +152,8 @@ pub fn node_menu_items(kind: NodeMenuKind) -> &'static [&'static str] {
             "explorer.copy_name",
             "explorer.copy_simple",
             "explorer.favorite",
+            "schema.new_view",
+            "schema.new_routine",
             "explorer.refresh",
         ],
     }
@@ -164,19 +168,42 @@ pub fn node_menu_entries(model: &Model, kind: NodeMenuKind) -> Vec<PaletteEntry>
         .collect()
 }
 
-pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
-    &[
-        ("copy-cell", "Copy cell"),
-        ("data.copy.json", "Copy as JSON"),
-        ("data.copy.csv", "Copy as CSV"),
-        ("data.copy.markdown", "Copy as Markdown"),
-        ("data.copy.sql", "Copy as SQL"),
-        ("data.inspect", "Inspect value"),
-        ("data.filter", "Apply remote filter"),
-        ("data.related", "Open related"),
-        ("data.refresh", "Refresh table data"),
-    ]
+/// What a row's menu offers: a table's rows offer what only a table's can do, a query's
+/// result does not -- "Edit cell" there renamed the document.
+pub fn results_menu_items(table: bool) -> Vec<(&'static str, &'static str)> {
+    ALL_RESULTS_MENU_ITEMS
+        .iter()
+        .copied()
+        .filter(|(id, _)| table || !table_only(id))
+        .collect()
 }
+
+/// Commands that act on a table's own rows, which a query's result is not.
+pub fn table_only(id: &str) -> bool {
+    matches!(
+        id,
+        "data.edit_cell" | "data.related" | "data.nav_back" | "data.refresh"
+    )
+}
+
+const ALL_RESULTS_MENU_ITEMS: &[(&str, &str)] = &[
+    ("data.edit_cell", "Edit cell"),
+    ("data.copy.cell", "Copy cell"),
+    ("data.copy.text", "Copy as Text"),
+    ("data.copy.json", "Copy as JSON"),
+    ("data.copy.csv", "Copy as CSV"),
+    ("data.copy.markdown", "Copy as Markdown"),
+    ("data.copy.sql", "Copy as SQL"),
+    ("data.inspect", "Inspect value"),
+    ("data.filter", "Filter rows (WHERE)"),
+    ("data.sort", "Sort rows (ORDER BY)"),
+    ("results.sort_column", "Sort by this column"),
+    ("results.sort_add_column", "Add column to sort"),
+    ("results.count", "Count rows"),
+    ("data.related", "Related rows…"),
+    ("data.nav_back", "Back from related rows"),
+    ("data.refresh", "Refresh table data"),
+];
 
 /// Rows the popup spends on itself: two borders, the query line, and the footer that
 /// carries why the selected command cannot run.
@@ -249,6 +276,17 @@ pub const POPUP_MAX_WIDTH: u16 = 76;
 
 const CATEGORIES: &[(&str, &str)] = &[
     ("query", "Query"),
+    ("document", "Document"),
+    ("editor", "Editor"),
+    ("screen", "Screen"),
+    ("workbench", "Workbench"),
+    ("palette", "Workbench"),
+    ("help", "Workbench"),
+    ("config", "Workbench"),
+    ("admin", "Workbench"),
+    ("diagnostics", "Workbench"),
+    ("connection", "Connection"),
+    ("explorer", "Explorer"),
     ("transaction", "Transaction"),
     ("data", "Data"),
     ("results", "Results"),
@@ -256,10 +294,6 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("explain", "Explain"),
     ("transfer", "Transfer"),
     ("backup", "Backup"),
-    ("explorer", "Explorer"),
-    ("connection", "Connection"),
-    ("document", "Document"),
-    ("editor", "Editor"),
     ("project", "Project"),
     ("mcp", "MCP"),
     ("recovery", "Recovery"),
@@ -267,12 +301,6 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("layout", "Layout"),
     ("focus", "Focus"),
     ("tab", "Tab"),
-    ("workbench", "Workbench"),
-    ("palette", "Workbench"),
-    ("help", "Workbench"),
-    ("config", "Workbench"),
-    ("admin", "Workbench"),
-    ("diagnostics", "Workbench"),
 ];
 
 fn category_index(id: &str) -> usize {
@@ -299,57 +327,182 @@ fn unusable(entry: &PaletteEntry) -> bool {
 }
 
 pub fn filter_entries<'a>(entries: &'a [PaletteEntry], query: &str) -> Vec<&'a PaletteEntry> {
+    let query = query.trim();
     if query.is_empty() {
         let mut browse: Vec<&PaletteEntry> = entries.iter().collect();
         browse.sort_by_key(|entry| (unusable(entry), category_index(entry.id)));
         return browse;
     }
-    let mut scored: Vec<(u8, &PaletteEntry)> = entries
+    let mut scored: Vec<(u32, usize, &PaletteEntry)> = entries
         .iter()
-        .filter_map(|entry| score(entry, query).map(|s| (s, entry)))
+        .enumerate()
+        .filter_map(|(index, entry)| score(entry, query).map(|s| (s, index, entry)))
         .collect();
+    // Letters scattered across a title are a last resort: once something matches by its
+    // words or a typo, they are noise. `stat` listed `Reset layout` beside the real hit.
+    if scored.iter().any(|(score, ..)| *score >= 400) {
+        scored.retain(|(score, ..)| *score >= 400);
+    }
+    // Equal matches keep the registry's order inside a category, the categories their
+    // own: `save` lists Save Document before Save Query As, not by the alphabet.
+    // A command that cannot run sorts after the ones that can -- but only among those
+    // the title names: a disabled `Execute Statement` is still the answer to `exec`, and
+    // a keyword match that happens to be usable is not.
+    let by_title = |score: u32| score < 700;
     scored.sort_by(|a, b| {
-        unusable(a.1)
-            .cmp(&unusable(b.1))
+        by_title(a.0)
+            .cmp(&by_title(b.0))
+            .then_with(|| unusable(a.2).cmp(&unusable(b.2)))
             .then_with(|| b.0.cmp(&a.0))
-            .then_with(|| a.1.title.cmp(b.1.title))
+            .then_with(|| category_index(a.2.id).cmp(&category_index(b.2.id)))
+            .then_with(|| a.1.cmp(&b.1))
     });
-    scored.into_iter().map(|(_, entry)| entry).collect()
+    scored.into_iter().map(|(_, _, entry)| entry).collect()
 }
 
-fn score(entry: &PaletteEntry, query: &str) -> Option<u8> {
-    let query = query.to_ascii_lowercase();
-    let haystacks = std::iter::once(entry.title)
-        .chain(entry.keywords.iter().copied())
-        .chain(std::iter::once(entry.id));
-    haystacks.filter_map(|text| score_text(text, &query)).max()
+/// What `query` is worth against a command, best first; `None` is no match.
+///
+/// The title is what the user reads, so it outranks every other way in: a command whose
+/// title starts with the query, then one that has the words in it, then its keywords,
+/// then a typo. A scattered match inside the keywords or the id put `Copy Object Name`
+/// above `Execute Statement` for `exec`.
+fn score(entry: &PaletteEntry, query: &str) -> Option<u32> {
+    let query = query.to_lowercase();
+    let title = entry.title.to_lowercase();
+    // The id is how the docs and the keymap name a command, so typed whole it is a hit.
+    if entry.id == query || title == query {
+        return Some(1000);
+    }
+    if title.starts_with(&query) {
+        return Some(950);
+    }
+    if query.contains('.') && entry.id.starts_with(&query) {
+        return Some(900);
+    }
+    let words: Vec<&str> = query.split_whitespace().collect();
+    let title_words = words_of(&title);
+    if words.iter().all(|word| {
+        title_words
+            .iter()
+            .any(|candidate| candidate.starts_with(word))
+    }) {
+        return Some(850);
+    }
+    if title.contains(&query) {
+        return Some(750);
+    }
+    // A slip of the keys in the title: one letter missing, extra, wrong or swapped in a
+    // word of four or more letters, the others matching as above.
+    if words.iter().all(|word| {
+        title_words
+            .iter()
+            .any(|candidate| candidate.starts_with(word) || is_typo(candidate, word))
+    }) {
+        return Some(720);
+    }
+    let keyword_words: Vec<String> = entry
+        .keywords
+        .iter()
+        .flat_map(|keyword| words_of(&keyword.to_lowercase()))
+        .collect();
+    if words.iter().all(|word| {
+        title_words
+            .iter()
+            .chain(&keyword_words)
+            .any(|candidate| candidate.starts_with(word))
+    }) {
+        return Some(650);
+    }
+    // The same slip, in the title or the keywords.
+    if words.iter().all(|word| {
+        title_words
+            .iter()
+            .chain(&keyword_words)
+            .any(|candidate| candidate.starts_with(word) || is_typo(candidate, word))
+    }) {
+        return Some(500);
+    }
+    if entry.id.starts_with(&query) {
+        return Some(400);
+    }
+    // Letters in order across the title: `qit` for Quit. Nothing but the title, or the
+    // keywords and the id would match anything.
+    if words.len() == 1 && query.chars().count() >= 2 && is_subsequence(&title, &query) {
+        return Some(100);
+    }
+    None
 }
 
-/// Whether any of `texts` fuzzy-matches `query` (case-insensitive), the same scoring
-/// the command palette uses. An empty `query` always matches.
+fn words_of(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// `typed` is `word` with one letter dropped, added, changed or swapped with the next,
+/// or the start of `word` with one such slip. Short words are exact: `sav` is not a
+/// typo of anything.
+fn is_typo(word: &str, typed: &str) -> bool {
+    let typed: Vec<char> = typed.chars().collect();
+    if typed.len() < 4 {
+        return false;
+    }
+    let word: Vec<char> = word.chars().collect();
+    // The typed text is a whole word or the start of one, so compare it with the word
+    // cut to the same length, give or take the letter that slipped.
+    (typed.len().saturating_sub(1)..=typed.len() + 1)
+        .any(|length| word.len() >= length && one_slip(&word[..length], &typed))
+}
+
+/// Whether `a` and `b` differ by one edit: a letter added, removed, changed, or two
+/// neighbours swapped.
+fn one_slip(a: &[char], b: &[char]) -> bool {
+    if a == b {
+        return false;
+    }
+    match a.len().cmp(&b.len()) {
+        std::cmp::Ordering::Equal => {
+            let diff: Vec<usize> = (0..a.len()).filter(|&i| a[i] != b[i]).collect();
+            diff.len() == 1
+                || (diff.len() == 2
+                    && diff[1] == diff[0] + 1
+                    && a[diff[0]] == b[diff[1]]
+                    && a[diff[1]] == b[diff[0]])
+        }
+        std::cmp::Ordering::Less => skips_one(b, a),
+        std::cmp::Ordering::Greater => skips_one(a, b),
+    }
+}
+
+/// `long` is `short` with one more letter somewhere.
+fn skips_one(long: &[char], short: &[char]) -> bool {
+    long.len() == short.len() + 1
+        && (0..long.len()).any(|skip| {
+            long.iter()
+                .enumerate()
+                .filter(|(i, _)| *i != skip)
+                .map(|(_, c)| c)
+                .eq(short.iter())
+        })
+}
+
+/// Whether any of `texts` holds every word of `query`, each at the start of a word
+/// (case-insensitive). The F1 help filters with it: a scattered match listed `Object
+/// Actions` for `exec`. An empty `query` always matches.
 pub(crate) fn matches_any(texts: &[&str], query: &str) -> bool {
+    let query = query.trim().to_lowercase();
     if query.is_empty() {
         return true;
     }
-    let query = query.to_ascii_lowercase();
-    texts.iter().any(|text| score_text(text, &query).is_some())
-}
-
-fn score_text(text: &str, query: &str) -> Option<u8> {
-    let text = text.to_ascii_lowercase();
-    if text.starts_with(query) {
-        return Some(3);
-    }
-    if text
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|word| word.starts_with(query))
-    {
-        return Some(2);
-    }
-    if is_subsequence(&text, query) {
-        return Some(1);
-    }
-    None
+    texts.iter().any(|text| {
+        let text = text.to_lowercase();
+        let words = words_of(&text);
+        text.contains(&query)
+            || query
+                .split_whitespace()
+                .all(|word| words.iter().any(|candidate| candidate.starts_with(word)))
+    })
 }
 
 fn is_subsequence(text: &str, query: &str) -> bool {
@@ -362,6 +515,35 @@ mod tests {
     use super::{filter_entries, palette_entries, popup_list_rows, scroll_to_selection};
     use crate::model::Model;
     use dexo_driver_api::TransactionState;
+
+    /// The key shown is the one that works everywhere -- Help is F1, not the explorer's
+    /// `?` -- and a bare letter reads as typed, apart from Shift and the letter.
+    #[test]
+    fn the_palette_shows_the_key_that_works_and_letters_as_typed() {
+        let model = Model::default();
+        let entries = crate::palette::registry::all_entries(&model);
+        let key = |id: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .and_then(|entry| entry.shortcut.clone())
+        };
+        assert_eq!(key("help.open").as_deref(), Some("F1"));
+        assert_eq!(key("results.sort_column").as_deref(), Some("s"));
+        assert_eq!(key("results.sort_add_column").as_deref(), Some("Shift+S"));
+    }
+
+    /// A key keymap.toml gives a command no built-in keymap binds shows in the palette.
+    #[test]
+    fn an_overlay_only_binding_shows_its_key() {
+        let mut model = Model::default();
+        model.keymap =
+            crate::keymap::merge_overlay(&model.keymap, "[global]\n\"f9\" = \"connection.test\"\n")
+                .unwrap();
+        let entries = palette_entries(&model);
+        let test = entries.iter().find(|e| e.id == "connection.test").unwrap();
+        assert_eq!(test.shortcut.as_deref(), Some("F9"));
+    }
 
     #[test]
     fn palette_explains_disabled_commit() {
@@ -388,17 +570,111 @@ mod tests {
     #[test]
     fn fuzzy_word_start_beats_subsequence() {
         let entries = palette_entries(&Model::default());
-        // "Submit Parameters" starts a word with the query; "Compare Schema" only
+        // "Edit Parameters…" starts a word with the query; "Compare Schema" only
         // matches it as a scattered subsequence. Asserting the pair rather than
         // index 0 keeps the test about ranking, not about the rest of the registry.
         let filtered = filter_entries(&entries, "para");
         let rank = |id: &str| filtered.iter().position(|entry| entry.id == id);
-        let word_start = rank("editor.parameters").expect("word-start match");
-        let subsequence = rank("schema.diff").expect("subsequence match");
-        assert!(
-            word_start < subsequence,
-            "word start should outrank subsequence: {filtered:?}"
-        );
+        assert_eq!(rank("editor.parameters"), Some(0), "{filtered:?}");
+        assert_eq!(rank("schema.diff"), None, "{filtered:?}");
+    }
+
+    /// What users type and what they should get first, the ten the QA run tried.
+    #[test]
+    fn the_obvious_command_is_first() {
+        let entries = palette_entries(&Model::default());
+        let first = |query: &str| {
+            filter_entries(&entries, query)
+                .first()
+                .map(|entry| entry.id)
+                .unwrap_or("none")
+        };
+        for (query, id) in [
+            ("exec", "query.execute_statement"),
+            ("exec st", "query.execute_statement"),
+            ("stat", "query.execute_statement"),
+            ("save", "document.save"),
+            ("svae", "document.save"),
+            ("clsoe doc", "document.close"),
+            ("reanme", "document.rename"),
+            ("qit", "workbench.quit"),
+            ("excute", "query.execute_statement"),
+            ("statment", "query.execute_statement"),
+            ("project.create", "project.create"),
+        ] {
+            assert_eq!(first(query), id, "`{query}`");
+        }
+    }
+
+    /// Letters scattered over keywords and ids made `exec` find `Copy Object Name`.
+    #[test]
+    fn scattered_letters_in_the_id_find_nothing() {
+        let entries = palette_entries(&Model::default());
+        let ids: Vec<_> = filter_entries(&entries, "exec")
+            .iter()
+            .map(|entry| entry.id)
+            .collect();
+        assert!(!ids.contains(&"explorer.copy_name"), "{ids:?}");
+        assert!(ids.contains(&"explain.analyze"), "{ids:?}");
+    }
+
+    /// The empty palette used to open on `Data  Back from Related Rows` with no table
+    /// open, and listed a group twice: what can run comes first, group by group, and the
+    /// rest follows in the same order.
+    #[test]
+    fn the_empty_palette_leads_with_what_can_run_and_names_each_group_once() {
+        let entries = palette_entries(&Model::default());
+        let browse = filter_entries(&entries, "");
+        let first = browse[0];
+        assert!(first.disabled_reason.is_none(), "{first:?}");
+        for (usable, name) in [(true, "can run"), (false, "cannot run")] {
+            let mut labels: Vec<&str> = Vec::new();
+            for entry in browse
+                .iter()
+                .filter(|entry| entry.disabled_reason.is_none() == usable)
+            {
+                let label = super::category_label(entry.id);
+                if labels.last() != Some(&label) {
+                    assert!(
+                        !labels.contains(&label),
+                        "{label} twice among those that {name}"
+                    );
+                    labels.push(label);
+                }
+            }
+        }
+        let rank = |id: &str| browse.iter().position(|entry| entry.id == id).unwrap();
+        assert!(rank("workbench.quit") < rank("results.record_view"));
+        assert!(rank("help.open") < rank("explain.open"));
+    }
+
+    #[test]
+    fn the_settings_and_layout_commands_are_in_the_palette() {
+        let entries = palette_entries(&Model::default());
+        for id in [
+            "settings.theme",
+            "settings.mode",
+            "settings.accent",
+            "settings.keymap",
+            "settings.mouse",
+            "settings.animation",
+            "settings.unicode",
+            "settings.reset",
+            "layout.hide_explorer",
+            "layout.hide_results",
+            "layout.results_grow",
+            "layout.results_shrink",
+            "layout.explorer_grow",
+            "layout.explorer_shrink",
+            "focus.explorer",
+            "focus.editor",
+            "focus.results",
+            "focus.tabs",
+            "document.next",
+            "document.prev",
+        ] {
+            assert!(entries.iter().any(|entry| entry.id == id), "{id}");
+        }
     }
 
     #[test]
@@ -437,8 +713,8 @@ mod tests {
     fn palette_exposes_only_curated_commands() {
         let entries = palette_entries(&Model::default());
         let ids: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
-        assert_eq!(entries.len(), 90);
-        assert_eq!(ids.len(), 90);
+        assert_eq!(entries.len(), 160);
+        assert_eq!(ids.len(), 160);
     }
 
     #[test]
@@ -497,5 +773,13 @@ mod tests {
         update(&mut model, Action::Focus(FocusTarget::Editor));
         let view = crate::render::render_to_string(&model, 100, 40);
         assert!(view.contains("▸ SQL") || view.contains("> SQL"));
+    }
+
+    /// A name with accents is words like any other, in any case.
+    #[test]
+    fn accented_names_match_by_word_and_case() {
+        assert!(super::matches_any(&["Relatório Mensal"], "mensal"));
+        assert!(super::matches_any(&["Relatório Mensal"], "RELATÓ"));
+        assert!(super::matches_any(&["vendas_por_região"], "região"));
     }
 }

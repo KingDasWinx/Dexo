@@ -22,6 +22,8 @@ pub struct DriverDescriptor {
     pub display_name: &'static str,
     pub default_port: u16,
     pub options: ConnectionOptions,
+    /// Opens a file instead of dialling a host: no port, user, password or transport.
+    pub file: bool,
 }
 
 impl DriverDescriptor {
@@ -36,6 +38,7 @@ impl DriverDescriptor {
                 ssh: true,
                 proxy: true,
             },
+            file: false,
         }
     }
 
@@ -50,13 +53,61 @@ impl DriverDescriptor {
                 ssh: true,
                 proxy: true,
             },
+            file: false,
+        }
+    }
+
+    pub fn sqlite() -> Self {
+        Self {
+            id: "sqlite",
+            display_name: "SQLite",
+            default_port: 0,
+            options: ConnectionOptions {
+                tls: false,
+                client_certificate: false,
+                ssh: false,
+                proxy: false,
+            },
+            file: true,
+        }
+    }
+
+    /// A DuckDB file, `:memory:`, or a CSV, Parquet or JSON file read as a table.
+    pub fn duckdb() -> Self {
+        Self {
+            id: "duckdb",
+            display_name: "DuckDB",
+            ..Self::sqlite()
+        }
+    }
+
+    pub fn mariadb() -> Self {
+        Self {
+            id: "mariadb",
+            display_name: "MariaDB",
+            ..Self::mysql()
+        }
+    }
+
+    /// The SQL family a driver id speaks: MariaDB speaks MySQL. Everything keyed on
+    /// the dialect asks this instead of comparing ids.
+    pub fn family(id: &str) -> &str {
+        match id {
+            "mariadb" => "mysql",
+            other => other,
         }
     }
 
     pub fn for_id(id: &str) -> Option<Self> {
-        [Self::postgres(), Self::mysql()]
-            .into_iter()
-            .find(|descriptor| descriptor.id == id)
+        [
+            Self::postgres(),
+            Self::mysql(),
+            Self::mariadb(),
+            Self::sqlite(),
+            Self::duckdb(),
+        ]
+        .into_iter()
+        .find(|descriptor| descriptor.id == id)
     }
 }
 
@@ -104,6 +155,9 @@ pub trait ConnectionFactory: Send + Sync {
     async fn connect(&self, request: ConnectRequest) -> Result<Box<dyn Session>, DriverError>;
 }
 
+/// A database session. A wrapper -- `dexo_app::pre_connect`'s, which keeps a tunnel
+/// with its session -- forwards every method: an optional one added here that it does
+/// not forward reads as `None` through it.
 #[async_trait::async_trait]
 pub trait Session: Send + Sync {
     fn capabilities(&self) -> &[CapabilityState];
@@ -139,6 +193,12 @@ pub trait Session: Send + Sync {
     }
 
     fn admin(&self) -> Option<&dyn AdministrationProvider> {
+        None
+    }
+
+    /// What the server calls this session in its own list of them: a Postgres backend's
+    /// pid, a MySQL connection id. It is how Dexo's own sessions are told from others'.
+    fn server_session_id(&self) -> Option<String> {
         None
     }
 

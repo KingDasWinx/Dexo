@@ -59,6 +59,13 @@ impl SqlDocument {
         self.revision
     }
 
+    /// Counts as an edit without changing the text: a buffer restored from a draft is
+    /// not what any file holds, and says so by differing from the revision last saved.
+    /// It leaves no undo step, so an undo cannot empty the restored draft.
+    pub fn mark_modified(&mut self) {
+        self.revision += 1;
+    }
+
     pub fn cursor(&self) -> usize {
         self.cursor
     }
@@ -96,6 +103,21 @@ impl SqlDocument {
                 self.undo.pop();
             }
             self.open_group = false;
+        }
+    }
+
+    /// How many undo steps there are, to hand to [`Self::merge_undo_since`].
+    pub fn undo_depth(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// Every undo step taken since `depth` becomes one, so a change made of several
+    /// edits -- Vim's `cw` and the typing after it -- undoes in one go.
+    pub fn merge_undo_since(&mut self, depth: usize) {
+        self.end_group();
+        if self.undo.len() > depth + 1 {
+            let merged: Vec<Inverse> = self.undo.drain(depth..).flatten().collect();
+            self.undo.push(merged);
         }
     }
 

@@ -25,6 +25,10 @@ pub struct MysqlSession {
     opts: Opts,
     capabilities: Vec<dexo_driver_api::CapabilityState>,
     tx_state: std::sync::Mutex<TransactionState>,
+    /// What the last COMMIT or ROLLBACK warned of, until it is taken.
+    notice: std::sync::Mutex<Option<String>>,
+    /// MariaDB speaks the protocol and the catalog, not every EXPLAIN form.
+    mariadb: bool,
     _lease: Option<dexo_transport::TransportLease>,
 }
 
@@ -45,8 +49,19 @@ impl MysqlSession {
             opts,
             capabilities: capabilities(),
             tx_state: std::sync::Mutex::new(TransactionState::Idle),
+            notice: std::sync::Mutex::new(None),
+            mariadb: false,
             _lease: lease,
         }
+    }
+
+    pub(crate) fn with_mariadb(mut self, mariadb: bool) -> Self {
+        self.mariadb = mariadb;
+        self
+    }
+
+    pub(crate) fn is_mariadb(&self) -> bool {
+        self.mariadb
     }
 
     pub fn bump_generation(&self) {
@@ -56,6 +71,63 @@ impl MysqlSession {
     fn set_state(&self, state: TransactionState) {
         *self.tx_state.lock().expect("mysql tx state poisoned") = state;
     }
+}
+
+/// Where a read that must not write runs: the session's next transactions read-only --
+/// the statement's own when no transaction is open -- and a savepoint rolled back after
+/// it, which undoes what a function wrote inside the user's open transaction. A
+/// `START TRANSACTION READ ONLY` would have committed that transaction instead.
+pub(crate) struct ReadOnly {
+    /// The session's own setting before, put back after.
+    was_read_only: bool,
+}
+
+impl ReadOnly {
+    pub(crate) async fn start(conn: &Mutex<Conn>) -> Result<Self, DriverError> {
+        let mut conn = conn.lock().await;
+        // MariaDB before 11.1 knows the setting only as `tx_read_only`.
+        let was_read_only: Option<i64> = match conn
+            .query_first("SELECT @@session.transaction_read_only")
+            .await
+        {
+            Ok(value) => value,
+            Err(_) => conn
+                .query_first("SELECT @@session.tx_read_only")
+                .await
+                .map_err(map_error)?,
+        };
+        for sql in [
+            "SET SESSION TRANSACTION READ ONLY",
+            "SAVEPOINT dexo_read_only",
+        ] {
+            conn.query_drop(sql).await.map_err(map_error)?;
+        }
+        Ok(Self {
+            was_read_only: was_read_only == Some(1),
+        })
+    }
+
+    pub(crate) async fn end(self, conn: &Mutex<Conn>) {
+        let mut conn = conn.lock().await;
+        // Outside a transaction the savepoint went with its own: these then fail, as
+        // there is nothing to undo.
+        let _ = conn
+            .query_drop("ROLLBACK TO SAVEPOINT dexo_read_only")
+            .await;
+        let _ = conn.query_drop("RELEASE SAVEPOINT dexo_read_only").await;
+        if !self.was_read_only {
+            let _ = conn.query_drop("SET SESSION TRANSACTION READ WRITE").await;
+        }
+    }
+}
+
+/// Stops the query connection `conn_id` is running, from a connection of its own.
+async fn kill_query(opts: Opts, conn_id: u32) -> Result<(), DriverError> {
+    let mut killer = Conn::new(opts).await.map_err(map_error)?;
+    killer
+        .query_drop(format!("KILL QUERY {conn_id}"))
+        .await
+        .map_err(map_error)
 }
 
 #[async_trait::async_trait]
@@ -70,14 +142,40 @@ impl Session for MysqlSession {
         let row_limit = request.row_limit;
         let parameters = request.parameters;
         let timeout = request.timeout;
+        let read_only = request.read_only;
+        let (opts, conn_id) = (self.opts.clone(), self.conn_id);
         let (tx, rx) = tokio::sync::mpsc::channel(4);
         tokio::spawn(async move {
+            let guard = if read_only {
+                match ReadOnly::start(&conn).await {
+                    Ok(guard) => Some(guard),
+                    Err(error) => {
+                        let _ = tx.send(Err(error)).await;
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+            let ended = Arc::clone(&conn);
             let run = run_mysql_query(conn, sql, parameters, row_limit, tx.clone());
-            if timeout == Duration::ZERO {
+            let timed_out = if timeout == Duration::ZERO {
                 run.await;
-                return;
+                false
+            } else {
+                tokio::time::timeout(timeout, run).await.is_err()
+            };
+            if timed_out {
+                // Dropping the future stopped only the waiting: the server goes on with
+                // the query until it is told to stop.
+                let _ = kill_query(opts, conn_id).await;
             }
-            if tokio::time::timeout(timeout, run).await.is_err() {
+            // Ended after the run, and after a kill too: the session never stays read-only
+            // on Dexo's account.
+            if let Some(guard) = guard {
+                guard.end(&ended).await;
+            }
+            if timed_out {
                 let _ = tx
                     .send(Err(DriverError::new(
                         DriverErrorCategory::Timeout,
@@ -100,11 +198,7 @@ impl Session for MysqlSession {
         }
         // ponytail: cache conn_id at connect so KILL QUERY does not wait on the execute lock.
         // Ceiling: id is stale after a server-side reconnect. Store a generation when sessions reconnect.
-        let mut killer = Conn::new(self.opts.clone()).await.map_err(map_error)?;
-        killer
-            .query_drop(format!("KILL QUERY {}", self.conn_id))
-            .await
-            .map_err(map_error)
+        kill_query(self.opts.clone(), self.conn_id).await
     }
 
     async fn close(self: Box<Self>) -> Result<(), DriverError> {
@@ -142,6 +236,10 @@ impl Session for MysqlSession {
     fn admin(&self) -> Option<&dyn dexo_driver_api::AdministrationProvider> {
         Some(self)
     }
+
+    fn server_session_id(&self) -> Option<String> {
+        Some(self.conn_id.to_string())
+    }
 }
 
 #[async_trait::async_trait]
@@ -173,6 +271,17 @@ impl TransactionControl for MysqlSession {
         match self.exec_sql("ROLLBACK").await {
             Ok(()) => {
                 self.set_state(TransactionState::Idle);
+                // 1196: tables that are not transactional (MyISAM) kept what was written.
+                let warnings: Vec<(String, u32, String)> = {
+                    let mut conn = self.conn.lock().await;
+                    conn.query("SHOW WARNINGS").await.unwrap_or_default()
+                };
+                if warnings.iter().any(|(_, code, _)| *code == 1196) {
+                    *self.notice.lock().expect("mysql notice poisoned") = Some(
+                        "Some tables changed in this transaction cannot be rolled back (they are not InnoDB), so their changes stay."
+                            .into(),
+                    );
+                }
                 Ok(())
             }
             Err(error) => {
@@ -200,6 +309,10 @@ impl TransactionControl for MysqlSession {
 
     fn state(&self) -> TransactionState {
         *self.tx_state.lock().expect("mysql tx state poisoned")
+    }
+
+    fn take_notice(&self) -> Option<String> {
+        self.notice.lock().expect("mysql notice poisoned").take()
     }
 }
 
@@ -273,6 +386,27 @@ async fn emit_mysql_sets<P>(
     let mut last_affected = None;
     loop {
         if result.is_empty() {
+            // A write comes back as an empty result straight away (MariaDB's prepared
+            // ones too); the count is still on it. It is sent as a result set of its own,
+            // as Postgres and SQLite do, because the grid and the messages read the
+            // count from there: leaving here first made an UPDATE look like nothing ran.
+            if index == 0 {
+                let affected = Some(result.affected_rows());
+                last_affected = affected;
+                for event in [
+                    QueryEvent::ResultSetStarted { index },
+                    QueryEvent::Columns(Vec::new()),
+                    QueryEvent::ResultSetFinished {
+                        index,
+                        rows_affected: affected,
+                        truncated: false,
+                    },
+                ] {
+                    if tx.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                }
+            }
             break;
         }
         if tx
@@ -288,6 +422,7 @@ async fn emit_mysql_sets<P>(
         }
         let mut batch = Vec::new();
         let mut emitted = 0_u64;
+        let mut truncated = false;
         loop {
             match result.next().await {
                 Ok(Some(row)) => {
@@ -304,6 +439,19 @@ async fn emit_mysql_sets<P>(
                         return;
                     }
                     if row_limit > 0 && emitted >= row_limit {
+                        // The server sends the whole set whatever is read of it. Left
+                        // unread, its rest came back as a second result set: the limit
+                        // stopped holding and the last `truncated: false` won.
+                        loop {
+                            match result.next().await {
+                                Ok(Some(_)) => truncated = true,
+                                Ok(None) => break,
+                                Err(error) => {
+                                    let _ = tx.send(Err(map_error(error))).await;
+                                    return;
+                                }
+                            }
+                        }
                         break;
                     }
                 }
@@ -328,6 +476,7 @@ async fn emit_mysql_sets<P>(
             .send(Ok(QueryEvent::ResultSetFinished {
                 index,
                 rows_affected,
+                truncated,
             }))
             .await
             .is_err()

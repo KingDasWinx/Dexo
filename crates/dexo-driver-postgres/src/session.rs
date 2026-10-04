@@ -1,4 +1,3 @@
-use std::pin::pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,9 +20,16 @@ pub const ROW_BATCH_SIZE: usize = 256;
 pub struct PostgresSession {
     pub(crate) client: Arc<tokio_postgres::Client>,
     capabilities: Vec<dexo_driver_api::CapabilityState>,
-    tx_state: Mutex<TransactionState>,
+    /// Shared with the tasks that run statements: a statement that fails inside an open
+    /// transaction leaves it aborted, which only they see.
+    tx_state: Arc<Mutex<TransactionState>>,
     notices: tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<SessionEvent>>>,
     cancel: PostgresCancelContext,
+    /// `server_version_num`, asked once, the first time something depends on it.
+    server_version: tokio::sync::OnceCell<i32>,
+    /// The backend's pid, asked once the session is open: what `pg_stat_activity` calls
+    /// it.
+    backend_pid: std::sync::OnceLock<String>,
     _lease: Option<dexo_transport::TransportLease>,
 }
 
@@ -37,15 +43,97 @@ impl PostgresSession {
         Self {
             client: Arc::new(client),
             capabilities: capabilities(),
-            tx_state: Mutex::new(TransactionState::Idle),
+            tx_state: Arc::new(Mutex::new(TransactionState::Idle)),
             notices: tokio::sync::Mutex::new(Some(notices)),
             cancel,
+            server_version: tokio::sync::OnceCell::new(),
+            backend_pid: std::sync::OnceLock::new(),
             _lease: lease,
+        }
+    }
+
+    /// Asks the server for the backend's pid. A session behind a pooler may get another
+    /// backend next time; it is then simply not told apart.
+    pub(crate) async fn read_backend_pid(&self) {
+        if let Ok(row) = self
+            .client
+            .query_one("SELECT pg_backend_pid()::text", &[])
+            .await
+        {
+            let _ = self.backend_pid.set(row.get(0));
         }
     }
 
     fn set_state(&self, state: TransactionState) {
         *self.tx_state.lock().expect("postgres tx state poisoned") = state;
+    }
+
+    /// The server's version as a number, `160009` for 16.9.
+    pub(crate) async fn server_version(&self) -> Result<i32, DriverError> {
+        self.server_version
+            .get_or_try_init(|| async {
+                let row = self
+                    .client
+                    .query_one("SELECT current_setting('server_version_num')::int", &[])
+                    .await
+                    .map_err(map_error)?;
+                Ok(row.get::<_, i32>(0))
+            })
+            .await
+            .copied()
+    }
+}
+
+/// Where a read that must not write runs: a read-only transaction of its own, or --
+/// inside the user's open transaction, where no read-only one can start -- a savepoint
+/// rolled back after it, so whatever a function in it wrote is undone.
+pub(crate) enum ReadOnly {
+    Transaction,
+    Savepoint,
+}
+
+impl ReadOnly {
+    pub(crate) async fn start(client: &tokio_postgres::Client) -> Result<Self, DriverError> {
+        match client.batch_execute("SAVEPOINT dexo_read_only").await {
+            Ok(()) => Ok(Self::Savepoint),
+            // Not in a transaction block: one of its own, read-only.
+            Err(error)
+                if error.code()
+                    == Some(&tokio_postgres::error::SqlState::NO_ACTIVE_SQL_TRANSACTION) =>
+            {
+                client
+                    .batch_execute("BEGIN READ ONLY")
+                    .await
+                    .map_err(map_error)?;
+                Ok(Self::Transaction)
+            }
+            // A failed transaction, say: left as it is, for the user to end.
+            Err(error) => Err(map_error(error)),
+        }
+    }
+
+    pub(crate) async fn end(self, client: &tokio_postgres::Client) {
+        let sql = match self {
+            Self::Transaction => "ROLLBACK",
+            Self::Savepoint => {
+                "ROLLBACK TO SAVEPOINT dexo_read_only; RELEASE SAVEPOINT dexo_read_only"
+            }
+        };
+        let _ = client.batch_execute(sql).await;
+    }
+}
+
+/// Tells the server to stop the query the session is running, over the same TLS.
+async fn cancel_with(
+    token: &tokio_postgres::CancelToken,
+    tls: Option<crate::tls::NamedRustls>,
+) -> Result<(), DriverError> {
+    match tls {
+        Some(tls) => token.cancel_query(tls).await.map_err(map_error),
+        None => token
+            .cancel_query(tokio_postgres::NoTls)
+            .await
+            .map_err(map_error),
     }
 }
 
@@ -62,22 +150,56 @@ impl Session for PostgresSession {
         let sql = request.sql;
         let parameters = request.parameters;
         let timeout = request.timeout;
+        let read_only = request.read_only;
+        let token = client.cancel_token();
+        let tls = self.cancel.tls.clone();
+        let tx_state = Arc::clone(&self.tx_state);
         tokio::spawn(async move {
+            let guard = if read_only {
+                match ReadOnly::start(&client).await {
+                    Ok(guard) => Some(guard),
+                    Err(error) => {
+                        let _ = tx.send(Err(error)).await;
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+            let ended = Arc::clone(&client);
+            let wrapped = guard.is_some();
             let run = run_postgres_query(client, sql, parameters, row_limit, tx.clone());
             if timeout == Duration::ZERO {
-                run.await;
+                let failed = run.await;
+                if let Some(guard) = guard {
+                    guard.end(&ended).await;
+                }
+                abort_open_transaction(&tx_state, failed && !wrapped);
                 return;
             }
-            match tokio::time::timeout(timeout, run).await {
-                Ok(()) => {}
-                Err(_) => {
-                    let _ = tx
-                        .send(Err(DriverError::new(
-                            DriverErrorCategory::Timeout,
-                            "query timed out",
-                        )))
-                        .await;
-                }
+            let outcome = tokio::time::timeout(timeout, run).await;
+            // A timeout stops the statement on the server, which aborts what it ran in.
+            abort_open_transaction(
+                &tx_state,
+                !wrapped && (outcome.is_err() || outcome.as_ref().is_ok_and(|failed| *failed)),
+            );
+            if outcome.is_err() {
+                // Dropping the future stopped only the waiting: the server goes on with
+                // the query until it is told to stop.
+                let _ = cancel_with(&token, tls).await;
+            }
+            // Ended after the run, and after a cancel too: the session never stays in a
+            // read-only transaction of Dexo's.
+            if let Some(guard) = guard {
+                guard.end(&ended).await;
+            }
+            if outcome.is_err() {
+                let _ = tx
+                    .send(Err(DriverError::new(
+                        DriverErrorCategory::Timeout,
+                        "query timed out",
+                    )))
+                    .await;
             }
         });
         Ok(Box::pin(futures_util::stream::unfold(rx, |mut rx| async {
@@ -86,14 +208,7 @@ impl Session for PostgresSession {
     }
 
     async fn cancel(&self, _query: QueryId) -> Result<(), DriverError> {
-        let token = self.client.cancel_token();
-        match &self.cancel.tls {
-            Some(tls) => token.cancel_query(tls.clone()).await.map_err(map_error),
-            None => token
-                .cancel_query(tokio_postgres::NoTls)
-                .await
-                .map_err(map_error),
-        }
+        cancel_with(&self.client.cancel_token(), self.cancel.tls.clone()).await
     }
 
     async fn close(self: Box<Self>) -> Result<(), DriverError> {
@@ -132,6 +247,10 @@ impl Session for PostgresSession {
         Some(self)
     }
 
+    fn server_session_id(&self) -> Option<String> {
+        self.backend_pid.get().cloned()
+    }
+
     fn events(&self) -> Option<SessionEventStream> {
         let mut slot = self.notices.try_lock().ok()?;
         let rx = slot.take()?;
@@ -147,28 +266,33 @@ async fn run_postgres_query(
     parameters: Vec<dexo_driver_api::DbValue>,
     row_limit: u64,
     tx: tokio::sync::mpsc::Sender<Result<QueryEvent, DriverError>>,
-) {
+) -> bool {
     let statement = match client.prepare(&sql).await {
         Ok(statement) => statement,
         Err(error) => {
             let _ = tx.send(Err(map_error(error))).await;
-            return;
+            return true;
         }
     };
     let params = match crate::params::bind(&statement, &parameters) {
         Ok(params) => params,
         Err(error) => {
             let _ = tx.send(Err(error)).await;
-            return;
+            return true;
         }
     };
     let refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|value| value as _).collect();
     let columns: Vec<ColumnMeta> = statement.columns().iter().map(column_meta).collect();
+    // A reg* value shows the name the server gives it, asked once all the rows are in:
+    // asked while the result streams, the lookup would wait behind it.
+    // ponytail: such a result shows only once whole, held in memory up to the row limit;
+    // casting those columns to text in the statement would stream it.
+    let named = crate::decode::needs_names(statement.columns());
     let rows = match client.query_raw(&statement, refs).await {
         Ok(rows) => rows,
         Err(error) => {
             let _ = tx.send(Err(map_error(error))).await;
-            return;
+            return true;
         }
     };
     if tx
@@ -176,56 +300,86 @@ async fn run_postgres_query(
         .await
         .is_err()
     {
-        return;
+        return false;
     }
     if tx.send(Ok(QueryEvent::Columns(columns))).await.is_err() {
-        return;
+        return false;
     }
-    let mut rows = pin!(rows);
+    let mut rows = Box::pin(rows);
     let mut batch = Vec::new();
     let mut emitted = 0_u64;
+    let mut truncated = false;
     loop {
         if row_limit > 0 && emitted >= row_limit {
+            truncated = matches!(rows.next().await, Some(Ok(_)));
             break;
         }
         match rows.next().await {
             Some(Ok(row)) => {
-                batch.push(decode_row(&row));
+                batch.push(row);
                 emitted += 1;
-                if batch.len() >= ROW_BATCH_SIZE
+                if !named
+                    && batch.len() >= ROW_BATCH_SIZE
                     && tx
                         .send(Ok(QueryEvent::Rows(RowBatch {
-                            rows: std::mem::take(&mut batch),
+                            rows: std::mem::take(&mut batch).iter().map(decode_row).collect(),
                         })))
                         .await
                         .is_err()
                 {
-                    return;
+                    return false;
                 }
             }
             Some(Err(error)) => {
                 let _ = tx.send(Err(map_error(error))).await;
-                return;
+                return true;
             }
             None => break,
         }
     }
-    if !batch.is_empty()
-        && tx
-            .send(Ok(QueryEvent::Rows(RowBatch { rows: batch })))
+    let rows_affected = rows.rows_affected();
+    // Dropped, so a result cut at the limit no longer holds the connection.
+    drop(rows);
+    let names = if named {
+        crate::decode::reg_names(&client, &batch).await
+    } else {
+        crate::decode::RegNames::default()
+    };
+    for chunk in batch.chunks(ROW_BATCH_SIZE) {
+        let rows = chunk
+            .iter()
+            .map(|row| crate::decode::decode_row_named(row, &names))
+            .collect();
+        if tx
+            .send(Ok(QueryEvent::Rows(RowBatch { rows })))
             .await
             .is_err()
-    {
-        return;
+        {
+            return false;
+        }
     }
-    let rows_affected = rows.rows_affected();
     let _ = tx
         .send(Ok(QueryEvent::ResultSetFinished {
             index: 0,
             rows_affected,
+            truncated,
         }))
         .await;
     let _ = tx.send(Ok(QueryEvent::Finished { rows_affected })).await;
+    false
+}
+
+/// A statement that fails inside an open transaction aborts it: the server refuses
+/// everything until ROLLBACK, or ROLLBACK TO a savepoint. The state says so, so the screen
+/// can tell the person what to do instead of letting every statement fail the same way.
+fn abort_open_transaction(state: &Mutex<TransactionState>, failed: bool) {
+    if !failed {
+        return;
+    }
+    let mut state = state.lock().expect("postgres tx state poisoned");
+    if *state == TransactionState::Active {
+        *state = TransactionState::Failed;
+    }
 }
 
 #[async_trait::async_trait]
@@ -279,7 +433,12 @@ impl TransactionControl for PostgresSession {
         self.client
             .batch_execute(&format!("ROLLBACK TO SAVEPOINT {name}"))
             .await
-            .map_err(map_error)
+            .map_err(map_error)?;
+        // Back to a savepoint, an aborted transaction is a working one again.
+        if self.state() == TransactionState::Failed {
+            self.set_state(TransactionState::Active);
+        }
+        Ok(())
     }
 
     async fn release_savepoint(&self, name: &str) -> Result<(), DriverError> {

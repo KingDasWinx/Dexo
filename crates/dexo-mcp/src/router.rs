@@ -100,15 +100,10 @@ impl McpConnectionRouter {
     ) -> Result<SessionLease<'a>, AppError> {
         let mut guard = slot.session.lock().await;
         if guard.is_none() {
-            let session =
-                tokio::time::timeout(self.connect_timeout, self.backend.connect(&slot.meta.name))
-                    .await
-                    .map_err(|_| {
-                        AppError::new(
-                            ErrorCategory::Timeout,
-                            format!("connecting to {} timed out", slot.meta.name),
-                        )
-                    })??;
+            let session = self
+                .backend
+                .connect(&slot.meta.name, self.connect_timeout)
+                .await?;
             *guard = Some(session);
         }
         Ok(SessionLease {

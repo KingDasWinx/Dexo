@@ -21,19 +21,22 @@ pub use admin::{
 };
 pub use capability::{Capability, CapabilityState};
 pub use catalog::{
-    CatalogList, CatalogListOptions, CatalogObject, CatalogReader, CatalogRestriction, ObjectId,
-    ObjectKind,
+    CatalogList, CatalogListOptions, CatalogObject, CatalogReader, CatalogRestriction,
+    ForeignKeyRef, ObjectId, ObjectKind,
 };
 pub use connection::{
     ConnectRequest, ConnectionFactory, ConnectionOptions, DriverDescriptor, Session,
 };
 pub use ddl::{DdlExecutor, DdlOutcome, DdlPlan, DdlStatement, ObjectDdl, SecurityAdmin};
-pub use error::{DriverError, DriverErrorCategory};
-pub use explain::{ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, PlanNode};
+pub use error::{DriverError, DriverErrorCategory, plain_cause, root_cause};
+pub use explain::{
+    ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, PlanNode, hypothetical_unsupported,
+    parameters_unsupported,
+};
 pub use identifier::QualifiedName;
 pub use mutation::{
     ColumnId, ColumnKeyInfo, DataMutator, DataPage, DataRequest, Filter, Mutation,
-    MutationConflict, Page, RemoteValueRef, Sort,
+    MutationConflict, Page, RawClauses, RemoteValueRef, Sort,
 };
 pub use query::{
     ColumnMeta, QueryEvent, QueryId, QueryRequest, QueryStream, RowBatch, SessionEvent,
@@ -52,4 +55,4 @@ pub use transport::{
     ConnectionSecrets, ProxyMode, RouteRequest, SshRequest, TlsMode, TlsRequest, TransportRequest,
     split_endpoint,
 };
-pub use value::DbValue;
+pub use value::{DbValue, mysql_string_literal};

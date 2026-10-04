@@ -11,6 +11,8 @@ pub enum Capability {
     Admin,
     Import,
     Export,
+    /// A dump and restore of the whole database through the database's own tools.
+    Backup,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

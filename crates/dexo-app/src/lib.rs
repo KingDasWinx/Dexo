@@ -1,18 +1,26 @@
 pub mod admin_service;
 pub mod catalog_service;
+pub mod connect;
 pub mod connection_policy;
 pub mod connection_profile;
 pub mod connection_service;
+pub mod connection_url;
 pub mod data;
 pub mod diagnostic_service;
+pub mod docker;
 pub mod driver_registry;
 pub mod error;
 pub mod event;
 pub mod explain_service;
 pub mod mcp;
+pub mod meta_command;
+pub mod password_command;
+pub mod pre_connect;
+pub mod process;
 pub mod project;
 pub mod query_service;
 pub mod recovery_service;
+pub mod run_guard;
 pub mod schema;
 pub mod schema_diff;
 pub mod script;
@@ -36,7 +44,10 @@ pub use driver_registry::DriverRegistry;
 pub use error::{AppError, ErrorCategory};
 pub use project::{Project, ProjectId};
 pub use query_service::{QueryService, QueryTask, map_driver_error};
-pub use script::{ExecutionTarget, ScriptPolicy, statements_for};
+pub use script::{
+    ExecutionTarget, ScriptPolicy, dialect_for_driver, statement_spans_for_dialect, statements_for,
+    statements_for_dialect,
+};
 pub use search_service::{SearchHit, SearchService, UsageHint, search_with_usage};
 pub use session_manager::{SessionManager, SessionState};
 pub use transaction_service::TransactionService;

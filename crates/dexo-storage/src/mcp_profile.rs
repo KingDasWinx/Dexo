@@ -85,6 +85,25 @@ impl<'a> McpProfileRepository<'a> {
         Ok(())
     }
 
+    /// Removes a profile, its selectors and its tool rules. False when there was none.
+    pub fn delete(&self, name: &str) -> anyhow::Result<bool> {
+        let Some(profile) = self.get_by_name(name)? else {
+            return Ok(false);
+        };
+        let id = profile.id.to_string();
+        self.conn.execute(
+            "DELETE FROM mcp_selectors WHERE profile_id = ?1",
+            params![id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM mcp_tool_rules WHERE profile_id = ?1",
+            params![id],
+        )?;
+        self.conn
+            .execute("DELETE FROM mcp_profiles WHERE id = ?1", params![id])?;
+        Ok(true)
+    }
+
     pub fn get_by_name(&self, name: &str) -> anyhow::Result<Option<McpProfile>> {
         let mut profile = match self.conn.query_row(
             "SELECT id, name, enabled, persistent_access, max_rows, max_bytes, timeout_secs,
@@ -184,6 +203,18 @@ mod tests {
     use super::McpProfileRepository;
     use crate::Database;
     use dexo_app::mcp::{Effect, McpProfile, PersistentAccess, SelectorRule};
+
+    #[test]
+    fn a_deleted_profile_is_gone_with_its_rules() {
+        let db = Database::open_in_memory().unwrap();
+        let repo = McpProfileRepository::new(db.connection());
+        let mut profile = McpProfile::new("assistant");
+        profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
+        repo.save(&profile).unwrap();
+        assert!(repo.delete("assistant").unwrap());
+        assert!(repo.get_by_name("assistant").unwrap().is_none());
+        assert!(!repo.delete("assistant").unwrap());
+    }
 
     #[test]
     fn new_profile_round_trip_stays_disabled_read_only() {

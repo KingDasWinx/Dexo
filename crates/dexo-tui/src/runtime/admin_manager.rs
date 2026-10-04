@@ -57,14 +57,8 @@ pub async fn load_live(
 ) {
     let Some(admin) = session.admin() else {
         let _ = tx
-            .send(crate::action::Action::OperationFailed {
-                key: crate::runtime::OperationKey::new(
-                    crate::runtime::OperationId::new(),
-                    "",
-                    "",
-                    0,
-                ),
-                message: "admin unavailable".into(),
+            .send(crate::action::Action::AdminFailed {
+                message: "This connection has no session administration.".into(),
             })
             .await;
         return;
@@ -73,13 +67,7 @@ pub async fn load_live(
         Ok(list) => list,
         Err(error) => {
             let _ = tx
-                .send(crate::action::Action::OperationFailed {
-                    key: crate::runtime::OperationKey::new(
-                        crate::runtime::OperationId::new(),
-                        "",
-                        "",
-                        0,
-                    ),
+                .send(crate::action::Action::AdminFailed {
                     message: error.to_string(),
                 })
                 .await;
@@ -100,44 +88,79 @@ pub async fn load_live(
         .await;
 }
 
-pub async fn terminate_live(
+/// Reads `view` -- locks, sizes, statistics or settings -- off `session`.
+pub async fn load_view(
     session: std::sync::Arc<dyn dexo_driver_api::Session>,
-    target: String,
+    through: crate::runtime::SessionId,
+    view: crate::screens::admin::ServerView,
+) -> crate::action::Action {
+    use crate::screens::admin::{ServerView, ViewRows};
+    let result = match session.admin() {
+        None => Err("This connection has no server administration.".to_string()),
+        Some(admin) => {
+            let text = |error: dexo_driver_api::DriverError| error.to_string();
+            match view {
+                ServerView::Sessions => Err("Sessions are read on their own.".to_string()),
+                ServerView::Locks => admin
+                    .list_locks()
+                    .await
+                    .map(|list| (ViewRows::Locks(list.items), list.restriction))
+                    .map_err(text),
+                ServerView::Sizes => match dexo_driver_api::Page::new(0, 200) {
+                    Ok(page) => admin
+                        .sizes(page)
+                        .await
+                        .map(|list| (ViewRows::Sizes(list.items), list.restriction))
+                        .map_err(text),
+                    Err(error) => Err(error.to_string()),
+                },
+                ServerView::Stats => admin
+                    .statistics()
+                    .await
+                    .map(|list| (ViewRows::Stats(list.items), list.restriction))
+                    .map_err(text),
+                ServerView::Settings => admin
+                    .variables()
+                    .await
+                    .map(|list| (ViewRows::Settings(list.items), list.restriction))
+                    .map_err(text),
+            }
+        }
+    };
+    crate::action::Action::AdminViewLoaded {
+        session: through,
+        view,
+        result,
+    }
+}
+
+/// Runs `act` -- a cancel or a terminate -- and says how it went.
+pub async fn act_live(
+    session: std::sync::Arc<dyn dexo_driver_api::Session>,
+    act: dexo_driver_api::AdminAction,
     tx: tokio::sync::mpsc::Sender<crate::action::Action>,
 ) {
-    let Some(admin) = session.admin() else {
-        return;
+    let result = match session.admin() {
+        Some(admin) => admin
+            .execute_action(act.clone())
+            .await
+            .map(|outcome| outcome.message)
+            .map_err(|error| error.to_string()),
+        None => Err("this connection has no administration".into()),
     };
-    let action = dexo_driver_api::AdminAction::TerminateSession {
-        session_id: target.clone(),
-    };
-    match admin.execute_action(action).await {
-        Ok(outcome) => {
-            let _ = tx
-                .send(crate::action::Action::OperationFailed {
-                    key: crate::runtime::OperationKey::new(
-                        crate::runtime::OperationId::new(),
-                        "",
-                        "",
-                        0,
-                    ),
-                    message: outcome.message,
-                })
-                .await;
+    let _ = tx.send(acted(&act, result)).await;
+}
+
+/// What became of `act`, as the screen hears it.
+pub fn acted(
+    act: &dexo_driver_api::AdminAction,
+    result: Result<String, String>,
+) -> crate::action::Action {
+    match act {
+        dexo_driver_api::AdminAction::CancelQuery { .. } => {
+            crate::action::Action::AdminCancelled { result }
         }
-        Err(error) => {
-            let _ = tx
-                .send(crate::action::Action::OperationFailed {
-                    key: crate::runtime::OperationKey::new(
-                        crate::runtime::OperationId::new(),
-                        "",
-                        "",
-                        0,
-                    ),
-                    message: error.to_string(),
-                })
-                .await;
-        }
+        _ => crate::action::Action::AdminTerminated { result },
     }
 }
 
@@ -149,6 +172,8 @@ pub fn session_info(id: &str) -> SessionInfo {
         state: "idle".into(),
         duration_ms: None,
         current_query: None,
+        application: None,
+        client: None,
     }
 }
 

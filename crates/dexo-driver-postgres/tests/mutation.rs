@@ -61,6 +61,182 @@ async fn connect() -> Fixture {
     }
 }
 
+async fn run(session: &dyn Session, sql: &str) {
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write(sql))
+            .await
+            .unwrap(),
+    )
+    .await;
+}
+
+/// Deletes every row of `table` the way the grid does: each found by its key, `id`, and
+/// checked against every value it was read with. Then nothing is left.
+async fn delete_as_the_grid_does(session: &dyn Session, table: &str) {
+    let data = session.data().unwrap();
+    let object = QualifiedName::new(None::<String>, Some("public"), table);
+    let fetch = || DataRequest {
+        clauses: Default::default(),
+        object: object.clone(),
+        columns: vec![],
+        filter: None,
+        sort: vec![],
+        page: Page::new(0, 100).unwrap(),
+    };
+    let page = data.fetch(fetch()).await.unwrap();
+    assert!(!page.rows.is_empty(), "{table} has rows to delete");
+    let names: Vec<ColumnId> = page
+        .columns
+        .iter()
+        .map(|column| ColumnId(column.name.clone()))
+        .collect();
+    for row in page.rows {
+        let identity = vec![(ColumnId("id".into()), row[0].clone())];
+        let original = names.iter().cloned().zip(row).collect();
+        data.apply(&[Mutation::Delete {
+            table: object.clone(),
+            identity,
+            original,
+        }])
+        .await
+        .unwrap_or_else(|error| panic!("{table}: {error}"));
+    }
+    assert!(
+        data.fetch(fetch()).await.unwrap().rows.is_empty(),
+        "{table}"
+    );
+}
+
+/// Transaction ids and command ids read as plain integers went back as bigints, and
+/// the delete, which compares every column, failed: "operator does not exist: xid =
+/// bigint". The reg* types the same.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_row_with_transaction_ids_is_deleted_from_the_grid() {
+    let fixture = connect().await;
+    let session = &*fixture.session;
+    run(
+        session,
+        "create table ids (id int primary key, x xid, x8 xid8, c cid, r regclass, t regtype,
+                           n regnamespace, p regproc)",
+    )
+    .await;
+    run(
+        session,
+        "insert into ids values (1, '42', '4200000000', '7', 'pg_class', 'int4', 'public', 'now')",
+    )
+    .await;
+    delete_as_the_grid_does(session, "ids").await;
+}
+
+/// The delete compares every column with what it read, and many types have no `=`:
+/// it failed with "operator does not exist" on any table holding one. Each type is
+/// checked on a table of its own, and the common ones all together.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_row_with_columns_that_have_no_equality_is_deleted_from_the_grid() {
+    let fixture = connect().await;
+    let session = &*fixture.session;
+    run(session, "create extension if not exists ltree").await;
+    for (ty, value) in [
+        ("lquery", "'*.b.*'"),
+        ("jsonpath", "'$.a[*] ? (@ > 1)'"),
+        ("polygon", "'((0,0),(1,1),(1,0))'"),
+        ("refcursor", "'cur'"),
+        ("pg_snapshot", "'10:20:12,15'"),
+        ("txid_snapshot", "'10:20:'"),
+        ("point", "'(1e300,1e-7)'"),
+        ("path", "'[(0,0),(1,1)]'"),
+        ("line", "'{1,-1,0}'"),
+        ("json", "'{\"a\": [1, 2.50]}'"),
+        ("xml", "'<a b=\"1\">text</a>'"),
+        ("point[]", "array['(1,2)']::point[]"),
+    ] {
+        let table = format!("no_eq_{}", ty.trim_end_matches("[]"));
+        let table = if ty.ends_with("[]") {
+            format!("{table}_array")
+        } else {
+            table
+        };
+        run(
+            session,
+            &format!("create table {table} (id int primary key, v {ty})"),
+        )
+        .await;
+        run(
+            session,
+            &format!("insert into {table} values (1, {value}), (2, null)"),
+        )
+        .await;
+        delete_as_the_grid_does(session, &table).await;
+    }
+    for sql in [
+        "create extension if not exists citext",
+        "create type mood as enum ('ok', 'sad')",
+        "create type pair as (a int, b text)",
+        "create table common (id int primary key, i2 int2, i8 int8, num numeric(6,2),
+             f4 float4, f8 float8, t text, c char(5), vc varchar(9), b bool, by bytea,
+             d date, ts timestamp, tz timestamptz, iv interval, u uuid, jb jsonb, ip inet,
+             a int4[], tv tsvector, tq tsquery, m money, o oid, bx box, e mood, p pair,
+             r int4range, ci citext, lt ltree)",
+    ] {
+        run(session, sql).await;
+    }
+    run(
+        session,
+        "insert into common values (1, 2, 9000000000, 1.50, 0.1, 1e300, 'text', 'ab',
+             'varchar', true, '\\x00ff', '2020-02-29', '2020-01-01 10:00:00.5',
+             '2020-01-01 10:00:00+03', '1 day 2 hours', gen_random_uuid(), '{\"k\": 1}',
+             '10.0.0.1/8', '{1,NULL,3}', 'fat cats', 'fat & !cat', 12.34, 7,
+             '(3,4),(1,2)', 'sad', row(1, 'x y'), '[1,5)', 'MiXed', 'a.b')",
+    )
+    .await;
+    delete_as_the_grid_does(session, "common").await;
+}
+
+/// A name without a schema is the table the search_path finds, for the estimate and
+/// the key columns alike; a partitioned table's estimate is its partitions'.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn estimates_follow_the_search_path_and_add_up_partitions() {
+    let fixture = connect().await;
+    for sql in [
+        "create schema sales",
+        "create table sales.orders (code text primary key)",
+        "insert into sales.orders select g::text from generate_series(1, 7) g",
+        "create table public.orders (id int primary key)",
+        "create table events (at date not null) partition by range (at)",
+        "create table events_2025 partition of events
+             for values from ('2025-01-01') to ('2026-01-01')",
+        "create table events_2026 partition of events
+             for values from ('2026-01-01') to ('2027-01-01')",
+        "insert into events select date '2025-06-01' from generate_series(1, 30)",
+        "insert into events select date '2026-06-01' from generate_series(1, 12)",
+        "analyze",
+        "set search_path = sales, public",
+    ] {
+        drain(
+            fixture
+                .session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let data = fixture.session.data().unwrap();
+    let bare = |name: &str| QualifiedName::new(None::<String>, None::<String>, name);
+    assert_eq!(data.estimate_rows(&bare("orders")).await.unwrap(), Some(7));
+    let keys = data.table_columns(&bare("orders")).await.unwrap();
+    assert_eq!(keys.len(), 1);
+    assert!(keys[0].name == "code" && keys[0].primary_key);
+    let public = QualifiedName::new(None::<String>, Some("public"), "orders");
+    assert_eq!(data.estimate_rows(&public).await.unwrap(), Some(0));
+    assert_eq!(data.estimate_rows(&bare("events")).await.unwrap(), Some(42));
+    assert_eq!(data.estimate_rows(&bare("missing")).await.unwrap(), None);
+}
+
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn postgres_paging_and_typed_filter() {
@@ -68,6 +244,7 @@ async fn postgres_paging_and_typed_filter() {
     let data = fixture.session.data().unwrap();
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: QualifiedName::new(None::<String>, Some("public"), "items"),
             columns: vec![ColumnId("id".into()), ColumnId("n".into())],
             filter: Some(Filter::Gt(ColumnId("n".into()), DbValue::I64(10))),
@@ -113,6 +290,7 @@ async fn postgres_mutation_conflict_commits_zero() {
     assert_eq!(error.category(), DriverErrorCategory::Conflict);
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table,
             columns: vec![ColumnId("n".into())],
             filter: Some(Filter::Eq(ColumnId("id".into()), DbValue::I64(1))),
@@ -152,6 +330,7 @@ async fn postgres_batch_insert_update_delete() {
     .unwrap();
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table,
             columns: vec![ColumnId("id".into())],
             filter: None,
@@ -192,6 +371,7 @@ async fn postgres_partial_failure_rolls_back() {
     assert_eq!(error.category(), DriverErrorCategory::Conflict);
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table,
             columns: vec![ColumnId("id".into())],
             filter: Some(Filter::Eq(ColumnId("id".into()), DbValue::I64(4))),
@@ -211,6 +391,7 @@ async fn postgres_empty_apply_is_cancel() {
     data.apply(&[]).await.unwrap();
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: QualifiedName::new(None::<String>, Some("public"), "items"),
             columns: vec![ColumnId("id".into())],
             filter: None,
@@ -241,6 +422,7 @@ async fn postgres_bulk_insert_batch() {
         .data()
         .unwrap()
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table,
             columns: vec![ColumnId("id".into())],
             filter: Some(Filter::Eq(ColumnId("id".into()), DbValue::I64(20))),
@@ -250,4 +432,150 @@ async fn postgres_bulk_insert_batch() {
         .await
         .unwrap();
     assert_eq!(page.rows.len(), 1);
+}
+
+async fn texts(session: &dyn Session, sql: &str) -> Vec<String> {
+    let mut stream = session
+        .execute(dexo_driver_api::QueryRequest::read(sql, 100))
+        .await
+        .unwrap();
+    let mut texts = Vec::new();
+    while let Some(event) = stream.next().await {
+        if let dexo_driver_api::QueryEvent::Rows(batch) = event.unwrap() {
+            for row in batch.rows {
+                match &row[0] {
+                    DbValue::Text(text) => texts.push(text.clone()),
+                    other => panic!("{other:?}"),
+                }
+            }
+        }
+    }
+    texts
+}
+
+/// A batch goes in as one statement: NULL and the empty text stay apart, bytes, JSON
+/// and booleans read as themselves, text goes into any column that reads it, and a bad
+/// row names its place in the batch, which goes in whole or not at all. A statement the
+/// server refuses leaves the session usable.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn postgres_bulk_insert_is_one_statement_and_names_the_bad_row() {
+    let fixture = connect().await;
+    let session = &*fixture.session;
+    run(
+        session,
+        "create table bulk (id int primary key, t text, b bytea, j jsonb, f boolean)",
+    )
+    .await;
+    let writer = session.bulk().unwrap();
+    let table = QualifiedName::new(None::<String>, Some("public"), "bulk");
+    let columns: Vec<String> = ["id", "t", "b", "j", "f"].map(String::from).to_vec();
+    let written = writer
+        .insert_batch(
+            &table,
+            &columns,
+            &[
+                vec![
+                    DbValue::I64(1),
+                    DbValue::Text(String::new()),
+                    DbValue::Bytes(vec![0xde, 0xad]),
+                    DbValue::Json("{\"a\": 1}".into()),
+                    DbValue::Bool(true),
+                ],
+                vec![
+                    DbValue::I64(2),
+                    DbValue::Null,
+                    DbValue::Null,
+                    DbValue::Null,
+                    DbValue::Null,
+                ],
+                vec![
+                    DbValue::Text("3".into()),
+                    DbValue::Text("say \"hi\", ok\nnext".into()),
+                    DbValue::Text("\\x00ff".into()),
+                    DbValue::Text("[1,2]".into()),
+                    DbValue::Text("false".into()),
+                ],
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(written, 3);
+    let read = "select concat_ws('|', id, coalesce(t, '-'), coalesce(encode(b, 'hex'), '-'),
+                                 coalesce(j::text, '-'), coalesce(f::text, '-'))
+                from bulk order by id";
+    assert_eq!(
+        texts(session, read).await,
+        [
+            "1||dead|{\"a\": 1}|true",
+            "2|-|-|-|-",
+            "3|say \"hi\", ok\nnext|00ff|[1, 2]|false"
+        ]
+    );
+    let error = writer
+        .insert_batch(
+            &table,
+            &columns[..1],
+            &[vec![DbValue::I64(4)], vec![DbValue::Text("x".into())]],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.row(), Some(2), "{error}");
+    assert!(
+        writer
+            .insert_batch(&table, &["nope".to_string()], &[vec![DbValue::I64(5)]])
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        texts(session, "select count(*)::text from bulk").await,
+        ["3"]
+    );
+}
+
+/// A batch goes into a view and into a table under row-level security, which COPY
+/// would refuse.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn postgres_bulk_insert_writes_into_views_and_guarded_tables() {
+    let fixture = connect().await;
+    let session = &*fixture.session;
+    for sql in [
+        "create table guarded (id int primary key)",
+        "create view guarded_view as select * from guarded",
+        "create role bulk_writer",
+        "grant all on guarded, guarded_view to bulk_writer",
+        "alter table guarded enable row level security",
+        "create policy anyone on guarded using (true) with check (true)",
+    ] {
+        run(session, sql).await;
+    }
+    let writer = session.bulk().unwrap();
+    let id = vec!["id".to_string()];
+    writer
+        .insert_batch(
+            &QualifiedName::new(None::<String>, Some("public"), "guarded_view"),
+            &id,
+            &[vec![DbValue::I64(1)]],
+        )
+        .await
+        .unwrap();
+    run(session, "set role bulk_writer").await;
+    writer
+        .insert_batch(
+            &QualifiedName::new(None::<String>, Some("public"), "guarded"),
+            &id,
+            &[vec![DbValue::I64(2)], vec![DbValue::I64(3)]],
+        )
+        .await
+        .unwrap();
+    run(session, "reset role").await;
+    assert_eq!(
+        texts(
+            session,
+            "select string_agg(id::text, ',' order by id) from guarded"
+        )
+        .await,
+        ["1,2,3"]
+    );
 }

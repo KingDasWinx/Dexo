@@ -79,7 +79,7 @@ pub fn render_unquoted(change: &SchemaChange) -> Result<DdlPlan, String> {
         SchemaChange::DropObject { target, kind } => {
             format!(
                 "DROP {} {}",
-                kind.as_str().to_ascii_uppercase(),
+                kind.as_str().to_ascii_uppercase().replace('_', " "),
                 target.display_unquoted()
             )
         }
@@ -160,7 +160,7 @@ pub fn to_change(difference: &SchemaDifference) -> SchemaChange {
         },
         SchemaDifference::Removed(object) => SchemaChange::DropObject {
             target: object.qualified_name.clone(),
-            kind: object.kind.clone(),
+            kind: crate::catalog_service::exact_kind(object),
         },
         SchemaDifference::Changed { before, after } => SchemaChange::RenameObject {
             target: before.qualified_name.clone(),
@@ -173,7 +173,7 @@ fn invert(difference: &SchemaDifference) -> Option<SchemaChange> {
     match difference {
         SchemaDifference::Added(object) => Some(SchemaChange::DropObject {
             target: object.qualified_name.clone(),
-            kind: object.kind.clone(),
+            kind: crate::catalog_service::exact_kind(object),
         }),
         SchemaDifference::Removed(_) => None,
         SchemaDifference::Changed { before, after } => Some(SchemaChange::RenameObject {

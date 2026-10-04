@@ -2,23 +2,23 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
-demo  local  public                                         
- scratch.sql ×  +                                           
-┌MCP profiles──────────────────────────────────────────────┐
-│mcp profile=assistant enabled=true confirm=false          │
-│scope allow db.public.*                                   │
-│scope deny db.public.secrets                              │
-│tool catalog_search                                       │
-│tool object_describe                                      │
-│resource db.public.items                                  │
-│grant data_write data_insert 900s                         │
-│diff profile db.public.* -> grant db.public.items         │
-│confirm revoke all grants                                 │
-│e enable/disable  r revoke profile  R revoke all  up/down │
+[Agents]  demo  local  public                               
+ 1 Approvals   2 Activity  [3 Profiles]  4 Setup            
+┌▸ assistant───────────────────────────────────────────────┐
+│ State        disabled                                    │
+│ Connections  local                                       │
+│ Access       browse and describe only                    │
+│ Sees         db.public.*                                 │
+│ Never        db.public.secrets                           │
+│ Tools        catalog_search, object_describe             │
+│ ── Grants                                                │
+│ data_insert on db.public.items (local): one write, then  │
+│ it is spent, ends in 15 min                              │
 │                                                          │
+│Enable assistant?                                         │
+│Agents that connect through it can then use what it allows│
+│Connections: local.                                       │
 │                                                          │
+│ [Enable]  >[Cancel]                                      │
 └──────────────────────────────────────────────────────────┘
-│                                                          │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
-local  Ctrl+Enter run  Ctrl+N new sql             Ctrl+P  F1
+Agents  Left/Right pick  Enter answer             Ctrl+P  F1

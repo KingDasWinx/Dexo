@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use dexo_app::mcp::audit::{AuditEvent, SqlAuditMode};
 use dexo_app::mcp::ledger::GrantLedger;
-use dexo_app::mcp::{McpConnection, McpService, advertised_tools};
+use dexo_app::mcp::{McpConnection, McpService, WRITE_TOOLS, advertised_tools};
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -20,14 +20,14 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::backend::McpBackend;
-use crate::error::{HIDDEN, tool_error};
+use crate::error::{HIDDEN, busy, tool_error};
 use crate::router::McpConnectionRouter;
 use crate::tools_write::{now_secs, write_tool_names};
 use crate::{prompts, resources};
 
 /// Bumped whenever a tool's name, input schema or annotations change; the snapshot test
 /// in `tests/protocol.rs` fails until it is (MCP-020).
-pub const TOOL_SCHEMA_VERSION: u32 = 2;
+pub const TOOL_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone)]
 pub struct DexoMcpServer {
@@ -40,7 +40,7 @@ pub(crate) struct Inner {
     pub router: McpConnectionRouter,
     pub ledger: Arc<dyn GrantLedger>,
     pub session_id: String,
-    calls: Semaphore,
+    pub calls: Semaphore,
     last_revision: Mutex<u64>,
     stop: CancellationToken,
 }
@@ -56,6 +56,9 @@ impl DexoMcpServer {
         let connect_timeout = Duration::from_secs(service.profile.limits.timeout_secs);
         let retention = i64::from(service.profile.audit_retention_days).saturating_mul(86_400);
         ledger.prune_audits(now_secs().saturating_sub(retention));
+        // Requests left by a server that was killed while it waited lose their SQL now,
+        // not when someone next opens Approvals.
+        ledger.sweep_approvals(now_secs());
         Self {
             inner: Arc::new(Inner {
                 router: McpConnectionRouter::new(connections, backend, connect_timeout),
@@ -146,11 +149,49 @@ impl DexoMcpServer {
             .map(str::to_string)
             .collect();
         tools.extend(
-            write_tool_names(self.inner.ledger.as_ref(), &profile.name, now_secs())
-                .into_iter()
-                .filter(|tool| profile.tool_allowed(tool)),
+            write_tool_names(
+                self.inner.ledger.as_ref(),
+                &profile.name,
+                now_secs(),
+                &|name| {
+                    self.inner
+                        .router
+                        .connections()
+                        .find(|connection| connection.name == name)
+                        .is_some_and(|connection| connection.accepts_writes().is_ok())
+                },
+            )
+            .into_iter()
+            .filter(|tool| profile.tool_allowed(tool)),
         );
         tools
+    }
+}
+
+/// An argument the client got wrong, in words: the deserializer's own text is
+/// `failed to deserialize parameters: missing field `name``, which names the Rust side.
+pub(crate) fn plain_params_error(message: &str) -> String {
+    let Some(detail) = message.strip_prefix("failed to deserialize parameters: ") else {
+        return message.to_string();
+    };
+    let quoted = |text: &str| {
+        text.split('`')
+            .nth(1)
+            .map(str::to_string)
+            .unwrap_or_default()
+    };
+    if detail.starts_with("missing field") {
+        format!(
+            "the required argument `{}` is missing; the tool's inputSchema lists its arguments",
+            quoted(detail)
+        )
+    } else if detail.starts_with("unknown field") {
+        format!(
+            "`{}` is not an argument of this tool; the tool's inputSchema lists its arguments",
+            quoted(detail)
+        )
+    } else {
+        format!("an argument has the wrong type or value: {detail}")
     }
 }
 
@@ -211,14 +252,17 @@ impl ServerHandler for DexoMcpServer {
             );
             return Ok(denied);
         }
-        let Ok(_permit) = self.inner.calls.try_acquire() else {
-            let busy: CallToolResponse = tool_error(
-                "BUSY",
-                "too many calls in flight for this profile; retry shortly",
-            )
-            .into();
-            self.audit(&tool, &arguments, &request_id, "deny", Some(&busy), started);
-            return Ok(busy);
+        // A write takes its permit itself, once it may run: one that waits for a person
+        // holds none meanwhile.
+        let _permit = if WRITE_TOOLS.contains(&tool.as_str()) {
+            None
+        } else {
+            let Ok(permit) = self.inner.calls.try_acquire() else {
+                let busy: CallToolResponse = busy().into();
+                self.audit(&tool, &arguments, &request_id, "deny", Some(&busy), started);
+                return Ok(busy);
+            };
+            Some(permit)
         };
         let response = self
             .tool_router
@@ -232,7 +276,21 @@ impl ServerHandler for DexoMcpServer {
             response.as_ref().ok(),
             started,
         );
-        response
+        // The deserializer's refusal of a call's arguments arrives as an error result.
+        let wrong_arguments = match &response {
+            Ok(CallToolResponse::Complete(result)) if result.is_error == Some(true) => result
+                .content
+                .first()
+                .and_then(|block| block.as_text())
+                .map(|text| text.text.as_str())
+                .filter(|text| text.contains("failed to deserialize parameters: "))
+                .map(|text| plain_params_error(text.trim_start_matches("Error [INVALID_INPUT]: "))),
+            _ => None,
+        };
+        match wrong_arguments {
+            Some(message) => Ok(tool_error("INVALID_INPUT", &message).into()),
+            None => response,
+        }
     }
 
     async fn list_resources(
