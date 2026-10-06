@@ -41,7 +41,7 @@ pub struct Live {
     pub rpc: Arc<RpcClient>,
     log: Arc<Mutex<VecDeque<String>>>,
     /// Hangs up when stderr ends: what a crash said is read before it is reported.
-    log_done: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    log_done: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     child: Mutex<Option<Child>>,
     /// Stopped on purpose -- idle, removed, Dexo leaving -- rather than crashed.
     stopped: AtomicBool,
@@ -50,7 +50,7 @@ pub struct Live {
 impl Live {
     fn start(spawned: Spawned) -> Self {
         let log: Arc<Mutex<VecDeque<String>>> = Arc::default();
-        let (done, log_done) = std::sync::mpsc::channel::<()>();
+        let (done, log_done) = tokio::sync::oneshot::channel::<()>();
         if let Some(stderr) = spawned.stderr {
             let log = log.clone();
             std::thread::spawn(move || {
@@ -78,9 +78,10 @@ impl Live {
     }
 
     /// The plugin's last line of log, once its stderr had a moment to end.
-    fn last_log(&self) -> Option<String> {
-        if let Some(done) = lock(&self.log_done).take() {
-            let _ = done.recv_timeout(Duration::from_millis(500));
+    async fn last_log(&self) -> Option<String> {
+        let done = lock(&self.log_done).take();
+        if let Some(done) = done {
+            let _ = tokio::time::timeout(Duration::from_millis(500), done).await;
         }
         lock(&self.log).back().cloned()
     }
@@ -124,7 +125,7 @@ fn log_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> bool {
 pub struct PluginHost {
     name: String,
     drivers: Vec<String>,
-    spawn: Spawner,
+    spawn: Arc<Spawner>,
     idle: Duration,
     starting: tokio::sync::Mutex<()>,
     state: Mutex<HostState>,
@@ -145,7 +146,7 @@ impl PluginHost {
         Self {
             name: name.into(),
             drivers,
-            spawn,
+            spawn: Arc::new(spawn),
             idle: IDLE,
             starting: tokio::sync::Mutex::new(()),
             state: Mutex::default(),
@@ -169,35 +170,49 @@ impl PluginHost {
             if previous.rpc.closed().is_none() {
                 return Ok(previous);
             }
-            if !previous.stopped.load(Ordering::SeqCst) {
-                let now = Instant::now();
-                let mut state = lock(&self.state);
-                state
-                    .crashes
-                    .retain(|at| now.duration_since(*at) < Duration::from_secs(60));
-                if state.crashes.len() >= RESTARTS {
-                    return Err(DriverError::new(
-                        DriverErrorCategory::Network,
-                        format!(
-                            "the {} plugin stopped {RESTARTS} times in a minute: try again in a minute",
-                            self.name
-                        ),
-                    ));
-                }
-                state.crashes.push_back(now);
-            }
+            let crashed = !previous.stopped.load(Ordering::SeqCst);
             previous.reap();
-            lock(&self.state).live = None;
+            let mut state = lock(&self.state);
+            state.live = None;
+            if crashed {
+                state.crashes.push_back(Instant::now());
+            }
         }
-        let spawned = (self.spawn)().map_err(|error| {
-            DriverError::new(
-                DriverErrorCategory::Configuration,
-                format!("the {} plugin did not start: {error}", self.name),
-            )
-        })?;
+        {
+            let now = Instant::now();
+            let mut state = lock(&self.state);
+            state
+                .crashes
+                .retain(|at| now.duration_since(*at) < Duration::from_secs(60));
+            if state.crashes.len() > RESTARTS {
+                return Err(DriverError::new(
+                    DriverErrorCategory::Network,
+                    format!(
+                        "the {} plugin stopped {RESTARTS} times in a minute: try again in a minute",
+                        self.name
+                    ),
+                ));
+            }
+        }
+        // Starting a process waits on the system, and on a busy executable a moment:
+        // not on one of the runtime's workers.
+        let spawn = self.spawn.clone();
+        let spawned = tokio::task::spawn_blocking(move || spawn())
+            .await
+            .map_err(std::io::Error::other)
+            .and_then(|spawned| spawned)
+            .map_err(|error| {
+                DriverError::new(
+                    DriverErrorCategory::Configuration,
+                    format!("the {} plugin did not start: {error}", self.name),
+                )
+            })?;
         let live = Arc::new(Live::start(spawned));
         if let Err(why) = self.handshake(&live).await {
             self.stop_live(&live, &why);
+            // A plugin that dies in its handshake is restarted no more than one that
+            // dies later.
+            lock(&self.state).crashes.push_back(Instant::now());
             return Err(DriverError::new(
                 DriverErrorCategory::Internal,
                 format!("the {} plugin is broken: {why}", self.name),
@@ -223,7 +238,7 @@ impl PluginHost {
             }
             Err(CallError::Remote(error)) => return Err(error.message),
             Err(CallError::Closed(closed)) => {
-                return Err(live.last_log().unwrap_or(closed.why));
+                return Err(live.last_log().await.unwrap_or(closed.why));
             }
         };
         if reply.protocol != PROTOCOL {
@@ -255,7 +270,7 @@ impl PluginHost {
         match live.rpc.call(method, params, timeout).await {
             Ok(reply) => Ok(reply),
             Err(CallError::Remote(error)) => Err(error.into_driver_error()),
-            Err(CallError::Closed(closed)) => Err(self.failure(live, &closed)),
+            Err(CallError::Closed(closed)) => Err(self.failure(live, &closed).await),
             Err(CallError::TimedOut) => Err(DriverError::new(
                 DriverErrorCategory::Timeout,
                 format!("the {} plugin did not answer in time", self.name),
@@ -264,11 +279,11 @@ impl PluginHost {
     }
 
     /// "the DuckDB plugin stopped: <why>" -- for a crash, the last thing it logged.
-    fn failure(&self, live: &Live, closed: &Closed) -> DriverError {
+    async fn failure(&self, live: &Live, closed: &Closed) -> DriverError {
         let why = if live.stopped.load(Ordering::SeqCst) || closed.violation {
             closed.why.clone()
         } else {
-            live.last_log().unwrap_or_else(|| closed.why.clone())
+            live.last_log().await.unwrap_or_else(|| closed.why.clone())
         };
         let category = if closed.violation {
             DriverErrorCategory::Internal

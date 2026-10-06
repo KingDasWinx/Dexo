@@ -45,17 +45,28 @@ impl ConnectionFactory for PluginFactory {
     }
 
     async fn connect(&self, request: ConnectRequest) -> Result<Box<dyn Session>, DriverError> {
-        let live = self.host.live().await?;
-        let opened: SessionOpenResult = self
-            .host
-            .ask(
-                &live,
-                method::SESSION_OPEN,
-                SessionOpenParams::new(&self.descriptor.id, &request),
-                None,
-            )
-            .await?;
+        // Counted from the start: an idle timer running out meanwhile leaves it be.
         self.host.session_opened();
+        let opening = async {
+            let live = self.host.live().await?;
+            let opened: SessionOpenResult = self
+                .host
+                .ask(
+                    &live,
+                    method::SESSION_OPEN,
+                    SessionOpenParams::new(&self.descriptor.id, &request),
+                    None,
+                )
+                .await?;
+            Ok::<_, DriverError>((live, opened))
+        };
+        let (live, opened) = match opening.await {
+            Ok(opened) => opened,
+            Err(error) => {
+                self.host.session_closed();
+                return Err(error);
+            }
+        };
         Ok(Box::new(ProxySession {
             host: self.host.clone(),
             live,

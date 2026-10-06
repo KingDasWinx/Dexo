@@ -78,3 +78,61 @@ async fn the_transaction_state_follows_the_plugin() {
     assert_eq!(control.state(), TransactionState::Idle);
     session.close().await.unwrap();
 }
+
+/// A plugin whose `session/open` takes `slow` to answer.
+fn slow_open(slow: std::time::Duration) -> dexo_app::plugin::host::Spawner {
+    use dexo_plugin_protocol::{Request, Response, read_line, write_line};
+    Box::new(move || {
+        let (host_reader, mut plugin_writer) = std::io::pipe()?;
+        let (plugin_reader, host_writer) = std::io::pipe()?;
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(plugin_reader);
+            let mut line = Vec::new();
+            while read_line(&mut reader, &mut line).unwrap_or(false) {
+                let request: Request = serde_json::from_slice(&line).unwrap();
+                let reply = match request.method.as_str() {
+                    "initialize" => serde_json::json!({
+                        "protocol": 1, "driver_version": "1", "drivers": ["sqlite"]}),
+                    "session/open" => {
+                        std::thread::sleep(slow);
+                        serde_json::json!({"session": "s1", "capabilities": [], "families": []})
+                    }
+                    _ => serde_json::Value::Null,
+                };
+                let _ = write_line(&mut plugin_writer, &Response::ok(request.id, reply));
+            }
+        });
+        Ok(Spawned {
+            reader: Box::new(host_reader),
+            writer: Box::new(host_writer),
+            stderr: None,
+            child: None,
+        })
+    })
+}
+
+#[tokio::test]
+async fn a_session_opening_when_the_plugin_goes_idle_keeps_it() {
+    let host = Arc::new(
+        PluginHost::new(
+            "Slow",
+            vec!["sqlite".into()],
+            slow_open(std::time::Duration::from_millis(300)),
+        )
+        .with_idle(std::time::Duration::from_millis(50)),
+    );
+    host.live().await.unwrap();
+    // The last session closes: the plugin stops in 50 ms unless one opens.
+    host.session_opened();
+    host.session_closed();
+    let opened = PluginFactory::new(DriverDescriptor::sqlite(), host)
+        .connect(ConnectRequest::new(
+            "x",
+            None,
+            String::new(),
+            SecretString::from(String::new()),
+            false,
+        ))
+        .await;
+    assert!(opened.is_ok(), "{:?}", opened.err());
+}

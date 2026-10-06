@@ -246,3 +246,32 @@ async fn a_result_answered_after_it_was_given_up_on_is_closed() {
         json!({"method": "query/close", "params": {"cursor": "c1"}})
     );
 }
+
+#[tokio::test]
+async fn a_plugin_that_dies_in_its_handshake_counts_toward_the_restarts() {
+    let host = PluginHost::new("Fake", vec!["fake".into()], silent_then_exit());
+    let mut last = None;
+    for _ in 0..6 {
+        last = host.live().await.err();
+    }
+    let error = last.unwrap();
+    assert!(
+        error.to_string().contains("stopped 3 times in a minute"),
+        "{error}"
+    );
+}
+
+/// A plugin that exits before it answers anything.
+fn silent_then_exit() -> Spawner {
+    Box::new(|| {
+        let (host_reader, plugin_writer) = std::io::pipe()?;
+        let (plugin_reader, host_writer) = std::io::pipe()?;
+        drop((plugin_writer, plugin_reader));
+        Ok(Spawned {
+            reader: Box::new(host_reader),
+            writer: Box::new(host_writer),
+            stderr: None,
+            child: None,
+        })
+    })
+}
