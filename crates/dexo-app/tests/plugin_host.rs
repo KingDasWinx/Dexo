@@ -176,3 +176,30 @@ async fn a_stopped_plugin_says_why() {
         "the SQLite plugin stopped: it was removed"
     );
 }
+
+#[tokio::test]
+async fn a_log_line_that_is_not_utf8_or_very_long_does_not_stop_the_log() {
+    let mut log = b"caf\xe9 broken\n".to_vec();
+    log.extend(std::iter::repeat_n(b'a', 100_000));
+    log.extend(b"\nlast words\n");
+    let inner = fake(handshake(1, &["fake"]), true);
+    let host = PluginHost::new(
+        "Fake",
+        vec!["fake".into()],
+        Box::new(move || {
+            let mut spawned = inner()?;
+            spawned.stderr = Some(Box::new(std::io::Cursor::new(log.clone())));
+            Ok(spawned)
+        }),
+    );
+    let live = host.live().await.unwrap();
+    while live.rpc.closed().is_none() {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let error = host
+        .ask::<Value>(&live, "catalog/databases", json!({}), None)
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().ends_with("last words"), "{error}");
+}

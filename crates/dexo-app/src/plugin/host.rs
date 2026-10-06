@@ -22,6 +22,8 @@ pub const IDLE: Duration = Duration::from_secs(60);
 pub const CANCEL: Duration = Duration::from_secs(5);
 const RESTARTS: usize = 3;
 const LOG_LINES: usize = 20;
+/// The most of one log line kept.
+const LOG_LINE: usize = 8 * 1024;
 
 /// A started plugin: its pipes, its log, and its process when it is one.
 pub struct Spawned {
@@ -53,13 +55,16 @@ impl Live {
             let log = log.clone();
             std::thread::spawn(move || {
                 let _done = done;
-                for line in BufReader::new(stderr).lines() {
-                    let Ok(line) = line else { return };
+                // Read to the end whatever comes: a plugin whose log is not read blocks on
+                // it, or dies of a closed pipe.
+                let mut stderr = BufReader::new(stderr);
+                let mut line = Vec::new();
+                while log_line(&mut stderr, &mut line) {
                     let mut log = lock(&log);
                     if log.len() == LOG_LINES {
                         log.pop_front();
                     }
-                    log.push_back(line);
+                    log.push_back(String::from_utf8_lossy(&line).trim_end().to_string());
                 }
             });
         }
@@ -84,6 +89,34 @@ impl Live {
     fn reap(&self) {
         if let Some(mut child) = lock(&self.child).take() {
             crate::process::stop_group(&mut child);
+        }
+    }
+}
+
+/// The next line of a plugin's log in `line`, its first `LOG_LINE` bytes: the rest of a
+/// longer one is read and dropped. False at the end.
+fn log_line(reader: &mut impl BufRead, line: &mut Vec<u8>) -> bool {
+    line.clear();
+    let mut read_any = false;
+    loop {
+        let buffer = match reader.fill_buf() {
+            Ok(buffer) => buffer,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return read_any,
+        };
+        if buffer.is_empty() {
+            return read_any;
+        }
+        read_any = true;
+        let (taken, ended) = match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(end) => (end + 1, true),
+            None => (buffer.len(), false),
+        };
+        let room = LOG_LINE.saturating_sub(line.len());
+        line.extend_from_slice(&buffer[..taken.min(room)]);
+        reader.consume(taken);
+        if ended {
+            return true;
         }
     }
 }
