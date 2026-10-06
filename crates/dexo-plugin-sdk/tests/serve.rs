@@ -297,3 +297,22 @@ fn a_driver_that_panics_answers_an_internal_error() {
         error.message
     );
 }
+
+#[test]
+fn a_value_too_large_for_one_answer_fails_its_result_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wire = Wire::start();
+    let session = wire.open(&dir.path().join("t.db"));
+    // 50 MB of bytes is more than 64 MB of base64.
+    let cursor = wire
+        .execute(&session, "SELECT zeroblob(50 * 1024 * 1024)")
+        .cursor
+        .unwrap();
+    let page = wire.fetch(&cursor);
+    assert!(page.done);
+    let error = page.error.expect("an error");
+    assert!(error.to_string().contains("larger than"), "{error}");
+    // The plugin goes on.
+    let cursor = wire.execute(&session, "SELECT 1").cursor.unwrap();
+    assert!(wire.fetch(&cursor).error.is_none());
+}

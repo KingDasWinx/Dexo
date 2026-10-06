@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use dexo_driver_api::{
-    ConnectionFactory, DbValue, QueryEvent, QueryId, QueryStream, RowBatch, Session,
+    ConnectionFactory, DbValue, DriverError, DriverErrorCategory, QueryEvent, QueryId, QueryStream,
+    RowBatch, Session,
 };
 use dexo_plugin_protocol::{
     self as protocol, CancelRequest, Cursor, InitializeParams, InitializeResult, OnSession,
@@ -333,6 +334,21 @@ impl Server {
             .cloned()
             .ok_or_else(|| RpcError::new(code::UNKNOWN_CURSOR, format!("no cursor '{cursor}'")))?;
         let mut page = next_page(&mut *open.lock().await).await;
+        if too_long(&page) {
+            page = QueryPage {
+                cursor: None,
+                events: Vec::new(),
+                done: true,
+                error: Some(DriverError::new(
+                    DriverErrorCategory::Capability,
+                    format!(
+                        "a row of this result is larger than the {} MB a plugin's answer carries",
+                        protocol::MAX_LINE / (1024 * 1024)
+                    ),
+                )),
+                transaction: None,
+            };
+        }
         if page.done {
             lock(&self.cursors).remove(cursor);
             page.transaction = self
@@ -411,6 +427,21 @@ async fn next_page(open: &mut Open) -> QueryPage {
         }
         events.push(QueryEvent::Rows(RowBatch { rows: taken }));
     }
+}
+
+/// Whether `page` is past what one line of the protocol carries: the host would take it
+/// for a broken plugin and end every session. Measured only when the estimate is near.
+fn too_long(page: &QueryPage) -> bool {
+    let estimate: usize = page
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            QueryEvent::Rows(batch) => Some(batch.rows.iter().flatten().map(weight).sum::<usize>()),
+            _ => None,
+        })
+        .sum();
+    estimate > protocol::MAX_LINE / 8
+        && serde_json::to_vec(page).map_or(true, |line| line.len() + 64 * 1024 > protocol::MAX_LINE)
 }
 
 /// About how many bytes a value takes on the wire.
