@@ -158,7 +158,8 @@ plugins/
 - Install and update extract into `plugins/.staging/<id>-<random>/` and rename into place
   atomically; a failure leaves the previous version untouched.
 - A plugin can be **disabled** without being removed: its drivers and themes are not
-  registered.
+  registered. Its drivers are known as disabled, so a connection on one offers to enable
+  it, not to install it.
 - `dexo plugin install ./folder` installs straight from a folder, as `local`, for
   development.
 
@@ -319,14 +320,17 @@ stdin. Secrets never go on argv or the environment, and Dexo never logs message 
 
 ```json
 → {"id":7,"method":"query/execute","params":{"session":"s1","query":"q1","sql":"select …","params":[],"row_limit":1000,"timeout_ms":120000,"read_only":false,"mutating":false}}
-← {"id":7,"result":{"cursor":"c1","events":[{"columns":[…]},{"rows":[[…],[…]]}],"done":false}}
+← {"id":7,"result":{"cursor":"c1","events":[],"done":false}}
 → {"id":8,"method":"query/fetch","params":{"cursor":"c1"}}
-← {"id":8,"result":{"events":[{"rows":[…]},{"result_set_finished":{"rows_affected":null,"truncated":false}},{"finished":{}}],"done":true}}
+← {"id":8,"result":{"cursor":"c1","events":[{"columns":[…]},{"rows":[[…],[…]]}],"done":false}}
+→ {"id":9,"method":"query/fetch","params":{"cursor":"c1"}}
+← {"id":9,"result":{"events":[{"rows":[…]},{"result_set_finished":{"rows_affected":null,"truncated":false}},{"finished":{}}],"done":true}}
 ```
 
-- `query/execute` returns the first page of events (columns, rows, notices, result set
-  finished, finished) and a cursor. The proxy implements `QueryStream` by calling
-  `query/fetch` as the stream is polled. A page holds up to 500 rows or 4 MB.
+- `query/execute` answers as soon as the driver has the query, with a cursor and no
+  events, so a cancel sent next reaches it. The proxy implements `QueryStream` by calling
+  `query/fetch` as the stream is polled. A page holds up to 500 rows, 500 other events or
+  about 4 MB; a row too large for one message fails its result only.
 - Flow control is built in: the driver only produces what the host asked for, and a large
   result never holds up replies to other sessions.
 - `query/close` releases a cursor that was not read to the end.
