@@ -118,3 +118,26 @@ fn removing_a_plugin_ends_its_sessions_cleanly() {
     );
     assert!(!data.path().join("plugins/testbin").exists());
 }
+
+#[test]
+fn installed_driver_plugins_are_registered_at_start() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = driver_folder(work.path(), "testbin", "1.0.0", testbin(), "plain");
+    install::commit(
+        data.path(),
+        install::stage(data.path(), &folder).unwrap(),
+        Origin::Local,
+        None,
+    )
+    .unwrap();
+    let registry = DriverRegistry::new();
+    dexo_app::plugin::register_installed(&registry, data.path());
+    assert!(registry.has("testbin"));
+    install::set_enabled(data.path(), "testbin", false, Some(&registry)).unwrap();
+    assert!(!registry.has("testbin"));
+    let fresh = DriverRegistry::new();
+    dexo_app::plugin::register_installed(&fresh, data.path());
+    assert!(!fresh.has("testbin"));
+}

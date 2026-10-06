@@ -128,6 +128,7 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
         Command::Doctor { json: true } => println!(r#"{{"status":"ok"}}"#),
         Command::Doctor { json: false } => println!("Dexo: ok"),
         Command::Connections { command } => run_connections(registry, command)?,
+        Command::Plugin { command } => crate::plugin::run(command)?,
         Command::Completion { shell } => clap_complete::generate(
             shell,
             &mut <Args as clap::CommandFactory>::command(),

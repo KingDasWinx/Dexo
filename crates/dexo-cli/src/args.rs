@@ -74,6 +74,11 @@ pub enum Command {
         #[command(subcommand)]
         command: ConnectionsCommand,
     },
+    /// Install and manage plugins: drivers such as DuckDB, and theme packs
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
     /// Print a completion script for bash, zsh, fish, PowerShell or Elvish
     Completion {
         #[arg(value_enum)]
@@ -304,6 +309,41 @@ pub enum SessionsCommand {
         #[arg(long = "confirm-target")]
         confirm_target: Option<String>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PluginCommand {
+    /// List the installed plugins
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show an installed plugin: its version, origin and what it provides
+    Info {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install from a .tar.gz or a plugin's folder; --trust confirms its source
+    Install {
+        source: String,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        trust: bool,
+        #[arg(long)]
+        non_interactive: bool,
+    },
+    /// Remove a plugin and its files
+    Remove {
+        id: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Register a disabled plugin's drivers and themes again
+    Enable { id: String },
+    /// Keep a plugin installed without registering its drivers and themes
+    Disable { id: String },
 }
 
 #[derive(Debug, Subcommand)]

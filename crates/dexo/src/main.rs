@@ -18,7 +18,10 @@ fn main() -> anyhow::Result<()> {
     registry.register(Arc::new(MysqlFactory));
     registry.register(Arc::new(MariadbFactory));
     registry.register(Arc::new(SqliteFactory));
-    dexo_app::plugin::register_dev_overrides(&registry);
+    match dexo_storage::AppPaths::discover() {
+        Ok(paths) => dexo_app::plugin::register_installed(&registry, &paths.data_dir),
+        Err(_) => dexo_app::plugin::register_dev_overrides(&registry),
+    }
     let tui_registry = registry.clone();
     run_dispatch(Args::parse(), registry, Workbench(tui_registry))
 }

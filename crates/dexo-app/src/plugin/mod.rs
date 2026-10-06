@@ -125,3 +125,14 @@ pub fn trust_text(manifest: &manifest::Manifest) -> String {
     }
     text
 }
+
+/// Every installed, enabled driver plugin's drivers, then the `DEXO_DRIVER_<ID>` builds
+/// of drivers not installed: what Dexo connects with from its start.
+pub fn register_installed(registry: &DriverRegistry, data_dir: &Path) {
+    for (id, installed) in state::load(&plugins_dir(data_dir)).plugins {
+        if installed.enabled && installed.kind == manifest::Kind::Driver {
+            register(registry, data_dir, &id);
+        }
+    }
+    register_dev_overrides(registry);
+}
