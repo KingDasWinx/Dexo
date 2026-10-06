@@ -264,22 +264,25 @@ impl Server {
             .execute(call.args.into_request())
             .await
             .map_err(|error| RpcError::driver(&error))?;
-        let mut open = Open {
+        // Answered as soon as the driver has the query, as a built-in driver's `execute`
+        // returns: a cancel sent next reaches it, running or queued. Its events come with
+        // `query/fetch`.
+        let open = Open {
             stream,
             pending: VecDeque::new(),
         };
-        let mut page = next_page(&mut open).await;
-        if page.done {
-            page.transaction = session.transactions().map(|control| control.state());
-        } else {
-            let cursor = format!("c{}", self.next.fetch_add(1, Ordering::Relaxed));
-            lock(&self.cursors).insert(
-                cursor.clone(),
-                (call.session, Arc::new(tokio::sync::Mutex::new(open))),
-            );
-            page.cursor = Some(cursor);
-        }
-        Ok(page)
+        let cursor = format!("c{}", self.next.fetch_add(1, Ordering::Relaxed));
+        lock(&self.cursors).insert(
+            cursor.clone(),
+            (call.session, Arc::new(tokio::sync::Mutex::new(open))),
+        );
+        Ok(QueryPage {
+            cursor: Some(cursor),
+            events: Vec::new(),
+            done: false,
+            error: None,
+            transaction: None,
+        })
     }
 
     async fn fetch(&self, cursor: &str) -> Result<QueryPage, RpcError> {

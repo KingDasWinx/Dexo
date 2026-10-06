@@ -175,9 +175,10 @@ impl QueryExecute {
     }
 }
 
-/// A page of a result. While `done` is false, `cursor` names the rest. The last page
-/// carries the session's transaction state -- a statement may have changed it -- and
-/// an error ends the result.
+/// A page of a result. While `done` is false, `cursor` names the rest. `query/execute`
+/// answers with the cursor and no events, once the driver has the query; `query/fetch`
+/// answers the pages. The last page carries the session's transaction state -- a
+/// statement may have changed it -- and an error ends the result.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct QueryPage {
     #[serde(default, skip_serializing_if = "Option::is_none")]

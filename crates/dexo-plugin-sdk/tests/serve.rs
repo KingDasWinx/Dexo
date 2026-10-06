@@ -74,6 +74,25 @@ impl Wire {
         );
         serde_json::from_value(page).unwrap()
     }
+
+    fn fetch(&mut self, cursor: &str) -> QueryPage {
+        serde_json::from_value(self.ok("query/fetch", json!({"cursor": cursor}))).unwrap()
+    }
+
+    /// `sql` run to its end: its pages one after another, as one.
+    fn run(&mut self, session: &str, sql: &str) -> QueryPage {
+        let started = self.execute(session, sql);
+        assert!(started.events.is_empty() && !started.done);
+        let cursor = started.cursor.unwrap();
+        let mut whole = self.fetch(&cursor);
+        while !whole.done {
+            let next = self.fetch(&cursor);
+            whole.events.extend(next.events);
+            whole.done = next.done;
+            whole.error = next.error;
+        }
+        whole
+    }
 }
 
 const COUNT_TO_1200: &str = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1200) SELECT i FROM n";
@@ -109,15 +128,13 @@ fn a_result_comes_in_pages_of_500_rows() {
     let dir = tempfile::tempdir().unwrap();
     let mut wire = Wire::start();
     let session = wire.open(&dir.path().join("a.db"));
-    let first = wire.execute(&session, COUNT_TO_1200);
-    assert_eq!(rows_in(&first), 500);
-    assert!(!first.done);
-    let cursor = first.cursor.unwrap();
-    let fetch = |wire: &mut Wire| -> QueryPage {
-        serde_json::from_value(wire.ok("query/fetch", json!({"cursor": cursor}))).unwrap()
-    };
-    assert_eq!(rows_in(&fetch(&mut wire)), 500);
-    let last = fetch(&mut wire);
+    // The query is taken at once; its rows come with the fetches.
+    let started = wire.execute(&session, COUNT_TO_1200);
+    assert!(started.events.is_empty() && !started.done);
+    let cursor = started.cursor.unwrap();
+    assert_eq!(rows_in(&wire.fetch(&cursor)), 500);
+    assert_eq!(rows_in(&wire.fetch(&cursor)), 500);
+    let last = wire.fetch(&cursor);
     assert_eq!(rows_in(&last), 200);
     assert!(last.done && last.cursor.is_none());
     assert!(
@@ -139,8 +156,10 @@ fn a_long_result_does_not_hold_up_another_session() {
     let long = wire.open(&path);
     let short = wire.open(&path);
     let first = wire.execute(&long, COUNT_TO_1200);
-    assert!(!first.done, "the long result is still open");
-    let answer = wire.execute(&short, "SELECT 42");
+    let cursor = first.cursor.unwrap();
+    let page = wire.fetch(&cursor);
+    assert!(!page.done, "the long result is still open");
+    let answer = wire.run(&short, "SELECT 42");
     assert!(answer.done);
     let rows: Vec<Vec<DbValue>> = answer
         .events
@@ -151,7 +170,7 @@ fn a_long_result_does_not_hold_up_another_session() {
         })
         .collect();
     assert_eq!(rows, vec![vec![DbValue::I64(42)]]);
-    wire.ok("query/close", json!({"cursor": first.cursor.unwrap()}));
+    wire.ok("query/close", json!({"cursor": cursor}));
 }
 
 #[test]
@@ -159,7 +178,7 @@ fn a_driver_error_comes_back_whole() {
     let dir = tempfile::tempdir().unwrap();
     let mut wire = Wire::start();
     let session = wire.open(&dir.path().join("a.db"));
-    let page = wire.execute(&session, "SELEC 1");
+    let page = wire.run(&session, "SELEC 1");
     let Some(error) = page.error else {
         panic!("no error: {page:?}");
     };
@@ -206,7 +225,7 @@ fn a_session_answers_every_family_it_declares() {
         );
     }
     let session = opened["session"].as_str().unwrap().to_string();
-    wire.execute(
+    wire.run(
         &session,
         "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)",
     );

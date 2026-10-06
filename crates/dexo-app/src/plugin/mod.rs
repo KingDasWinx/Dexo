@@ -1,6 +1,7 @@
 //! Plugins: packages that add drivers and themes to an installed Dexo.
 
 pub mod host;
+pub mod proxy;
 pub mod rpc;
 
 use std::sync::{Mutex, MutexGuard, PoisonError};

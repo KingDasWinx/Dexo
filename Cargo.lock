@@ -2086,7 +2086,9 @@ name = "dexo-driver-sqlite"
 version = "1.4.2"
 dependencies = [
  "async-trait",
+ "dexo-app",
  "dexo-driver-api",
+ "dexo-plugin-sdk",
  "futures-util",
  "rusqlite",
  "secrecy",
