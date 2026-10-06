@@ -15,6 +15,7 @@ pub mod explain_service;
 pub mod mcp;
 pub mod meta_command;
 pub mod password_command;
+pub mod plugin;
 pub mod pre_connect;
 pub mod process;
 pub mod project;
