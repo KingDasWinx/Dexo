@@ -220,7 +220,7 @@ fn a_download_shows_a_bar_with_bytes_and_percent() {
     });
     let shown = paint(&mut model, 120, 30);
     assert!(
-        shown.contains("50%") && shown.contains("13.3 MB of 26.5 MB"),
+        shown.contains("50%") && shown.contains("13.2 MB of 26.5 MB"),
         "{shown}"
     );
     assert!(shown.contains("Esc cancels"), "{shown}");
@@ -369,4 +369,12 @@ fn esc_on_the_trust_prompt_drops_the_package() {
         "{effects:?}"
     );
     assert!(model.plugins.from_file.is_none());
+}
+
+#[test]
+fn a_small_download_is_said_in_kilobytes() {
+    let mut model = screen();
+    model.plugins.snapshot.rows[0].size = Some(5_900);
+    let shown = paint(&mut model, 120, 30);
+    assert!(shown.contains("download   5 KB"), "{shown}");
 }

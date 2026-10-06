@@ -186,10 +186,6 @@ fn list_line(row: &PluginRow, width: usize, unicode: bool) -> String {
     )
 }
 
-fn megabytes(bytes: u64) -> String {
-    format!("{:.1} MB", bytes as f64 / 1_048_576.0)
-}
-
 fn detail_lines(model: &Model, row: &PluginRow, width: u16) -> Vec<Line<'static>> {
     let mut fields = vec![FieldRow::Field("kind", row.kind.as_str().to_string())];
     if let Some(installed) = &row.installed {
@@ -218,7 +214,10 @@ fn detail_lines(model: &Model, row: &PluginRow, width: u16) -> Vec<Line<'static>
         fields.push(FieldRow::Field("protocol", protocol.to_string()));
     }
     if let Some(size) = row.size {
-        fields.push(FieldRow::Field("download", megabytes(size)));
+        fields.push(FieldRow::Field(
+            "download",
+            crate::screens::transfer::size_of(size),
+        ));
     }
     let origin = match row.installed.as_ref().map(|installed| installed.origin) {
         Some(Origin::Local) => "local, not verified",
@@ -307,11 +306,16 @@ fn footer(model: &Model) -> Vec<String> {
                 busy.id,
                 full.to_string().repeat(filled),
                 empty.to_string().repeat(10 - filled),
-                megabytes(busy.done),
-                megabytes(total)
+                crate::screens::transfer::size_of(busy.done),
+                crate::screens::transfer::size_of(total)
             )
         }
-        _ => format!("{} {}… {}", busy.verb, busy.id, megabytes(busy.done)),
+        _ => format!(
+            "{} {}… {}",
+            busy.verb,
+            busy.id,
+            crate::screens::transfer::size_of(busy.done)
+        ),
     };
     vec![line]
 }
