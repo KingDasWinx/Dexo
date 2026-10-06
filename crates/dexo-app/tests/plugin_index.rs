@@ -119,3 +119,34 @@ fn a_download_stops_at_its_cap_and_when_cancelled() {
     let missing = http::get(&server.url("/missing"), 1_000, &mut |_, _| {}, &never).unwrap_err();
     assert!(missing.contains("was not found"), "{missing}");
 }
+
+#[test]
+fn a_server_that_never_answers_is_offline() {
+    let data = tempfile::tempdir().unwrap();
+    let (_server, source) = served(EMPTY);
+    index::load(data.path(), &source, false).unwrap();
+    let (_silent, url) = HttpServer::silent();
+    let stalled = IndexSource {
+        url,
+        keys: source.keys.clone(),
+    };
+    let started = std::time::Instant::now();
+    let fetched = index::load(data.path(), &stalled, true).unwrap();
+    assert!(fetched.offline);
+    assert!(started.elapsed() < Duration::from_secs(60));
+}
+
+#[test]
+fn a_stalled_download_is_cancelled_at_once() {
+    let (_silent, url) = HttpServer::silent();
+    let cancel = std::sync::Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let started = std::time::Instant::now();
+    let error = http::get(&url, 1024, &mut |_, _| {}, &cancel).unwrap_err();
+    assert_eq!(error, "cancelled");
+    assert!(started.elapsed() < Duration::from_secs(3));
+}

@@ -175,6 +175,14 @@ impl HttpServer {
     }
 
     /// A URL nothing answers at: a port bound and let go.
+    /// A server that takes the connection and never answers, and its URL: kept up while
+    /// the listener lives.
+    pub fn silent() -> (TcpListener, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/index.json", listener.local_addr().unwrap());
+        (listener, url)
+    }
+
     pub fn dead_url() -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
