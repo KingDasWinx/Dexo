@@ -105,6 +105,13 @@ impl ConnectionSecrets {
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
+
+    /// Every secret with its purpose, in purpose order: what a driver plugin is sent.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &SecretString)> {
+        self.inner
+            .iter()
+            .map(|(purpose, secret)| (purpose.as_str(), secret))
+    }
 }
 
 impl From<SecretString> for ConnectionSecrets {

@@ -1,9 +1,9 @@
 use crate::{ColumnMeta, DbValue, DriverError, DriverErrorCategory, QualifiedName};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ColumnId(pub String);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Filter {
     Eq(ColumnId, DbValue),
     Ne(ColumnId, DbValue),
@@ -18,13 +18,13 @@ pub enum Filter {
     Not(Box<Filter>),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Sort {
     pub column: ColumnId,
     pub descending: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Page {
     pub offset: u64,
     pub limit: u32,
@@ -44,7 +44,7 @@ impl Page {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DataRequest {
     pub object: QualifiedName,
     pub columns: Vec<ColumnId>,
@@ -56,7 +56,7 @@ pub struct DataRequest {
     pub clauses: RawClauses,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RawClauses {
     pub where_sql: Option<String>,
     pub order_by: Option<String>,
@@ -113,7 +113,7 @@ impl DataRequest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DataPage {
     pub columns: Vec<ColumnMeta>,
     pub rows: Vec<Vec<DbValue>>,
@@ -143,7 +143,7 @@ impl DataPage {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Mutation {
     Insert {
         table: QualifiedName,
@@ -163,7 +163,7 @@ pub enum Mutation {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MutationConflict {
     pub message: String,
 }
@@ -176,7 +176,7 @@ impl MutationConflict {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RemoteValueRef {
     pub object: QualifiedName,
     pub identity: Vec<(ColumnId, DbValue)>,
@@ -184,7 +184,7 @@ pub struct RemoteValueRef {
     pub total: u64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ColumnKeyInfo {
     pub name: String,
     pub primary_key: bool,

@@ -33,7 +33,7 @@ pub struct ExplainPlan {
     pub raw: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExplainRequest {
     pub sql: String,
     pub analyze: bool,

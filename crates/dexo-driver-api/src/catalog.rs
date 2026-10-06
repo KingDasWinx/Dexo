@@ -114,7 +114,7 @@ impl CatalogObject {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogListOptions {
     pub include_system: bool,
 }

@@ -1,6 +1,7 @@
 use thiserror::Error;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DriverErrorCategory {
     Configuration,
     Authentication,
@@ -43,18 +44,26 @@ pub fn root_cause(error: &(dyn std::error::Error + 'static)) -> String {
     plain_cause(&innermost.to_string())
 }
 
-#[derive(Debug, Error)]
+/// Serializable so a driver plugin's error reaches Dexo with every field: a plugin's
+/// syntax error points at its position like a built-in driver's.
+#[derive(Debug, Error, serde::Serialize, serde::Deserialize)]
 #[error("{message}")]
 pub struct DriverError {
     category: DriverErrorCategory,
     message: String,
+    #[serde(default)]
     native_code: Option<String>,
     /// 1-based character offset into the statement, where the server says it failed.
+    #[serde(default)]
     position: Option<u32>,
     /// 1-based place of the failing row in a batch of rows written together.
+    #[serde(default)]
     row: Option<u32>,
+    #[serde(default)]
     detail: Option<String>,
+    #[serde(default)]
     hint: Option<String>,
+    #[serde(default)]
     retryable: bool,
 }
 

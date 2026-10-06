@@ -1,3 +1,5 @@
+pub mod base64_bytes;
+
 mod admin;
 mod capability;
 mod catalog;
