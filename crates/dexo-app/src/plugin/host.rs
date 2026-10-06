@@ -300,3 +300,65 @@ impl PluginHost {
         });
     }
 }
+
+/// Starts `executable` as a plugin: a process group of its own, stopped with Dexo, and
+/// an environment with nothing of Dexo's in it -- the connection's secrets go in the
+/// `session/open` message, never in a variable.
+pub fn process_spawner(executable: std::path::PathBuf) -> Spawner {
+    Box::new(move || {
+        let mut command = std::process::Command::new(&executable);
+        crate::process::detach(&mut command);
+        command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .env_clear()
+            .envs(plugin_env(std::env::vars_os()));
+        let mut child = command.spawn()?;
+        crate::process::register(child.id());
+        let missing = || std::io::Error::other("the plugin's pipes were not opened");
+        Ok(Spawned {
+            reader: Box::new(child.stdout.take().ok_or_else(missing)?),
+            writer: Box::new(child.stdin.take().ok_or_else(missing)?),
+            stderr: child
+                .stderr
+                .take()
+                .map(|stderr| Box::new(stderr) as Box<dyn Read + Send>),
+            child: Some(child),
+        })
+    })
+}
+
+/// The variables a plugin gets: where programs and home are, the temporary directory,
+/// the locale, and on Windows `SystemRoot`, without which programs fail to start.
+pub fn plugin_env(
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    vars.filter(|(name, _)| {
+        let upper = name.to_string_lossy().to_ascii_uppercase();
+        matches!(
+            upper.as_str(),
+            "PATH"
+                | "HOME"
+                | "USERPROFILE"
+                | "TMPDIR"
+                | "TMP"
+                | "TEMP"
+                | "LANG"
+                | "LANGUAGE"
+                | "SYSTEMROOT"
+        ) || upper.starts_with("LC_")
+    })
+    .collect()
+}
+
+/// `DEXO_DRIVER_<ID>` runs a local build in place of plugin `<ID>`, for developing one.
+pub fn dev_override(plugin: &str) -> Option<std::path::PathBuf> {
+    let name = format!(
+        "DEXO_DRIVER_{}",
+        plugin.to_ascii_uppercase().replace('-', "_")
+    );
+    std::env::var_os(name)
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+}

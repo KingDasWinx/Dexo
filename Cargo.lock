@@ -2146,6 +2146,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dexo-plugin-testbin"
+version = "1.4.2"
+dependencies = [
+ "async-trait",
+ "dexo-app",
+ "dexo-driver-api",
+ "dexo-driver-sqlite",
+ "dexo-plugin-protocol",
+ "dexo-plugin-sdk",
+ "futures-util",
+ "secrecy",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "dexo-runtime"
 version = "1.4.2"
 dependencies = [
