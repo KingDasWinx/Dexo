@@ -153,6 +153,16 @@ pub fn load(data_dir: &Path, source: &IndexSource, refresh: bool) -> Result<Fetc
             }
             let index = parse(&bytes)
                 .map_err(|message| AppError::new(ErrorCategory::Configuration, message))?;
+            // Signed, and older than one already seen: a mirror hiding updates, or one
+            // behind. The newer one stays.
+            if let Some((kept, _)) = &cached
+                && index.generated < kept.generated
+            {
+                return Err(AppError::new(
+                    ErrorCategory::Permission,
+                    "the plugin index fetched is older than the one Dexo has: nothing was installed",
+                ));
+            }
             write_cache(&plugins, &bytes, &signature);
             Ok(Fetched {
                 index,

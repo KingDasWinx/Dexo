@@ -150,3 +150,23 @@ fn a_stalled_download_is_cancelled_at_once() {
     assert_eq!(error, "cancelled");
     assert!(started.elapsed() < Duration::from_secs(3));
 }
+
+#[test]
+fn a_signed_index_older_than_the_one_kept_is_refused() {
+    let data = tempfile::tempdir().unwrap();
+    let (server, source) = served(EMPTY);
+    index::load(data.path(), &source, false).unwrap();
+    let key = TestKey::new();
+    let older = EMPTY.replace("2026-10-06", "2026-09-01");
+    server.put("/index.json", older.as_str());
+    server.put("/index.json.minisig", key.sign(older.as_bytes()));
+    let both = IndexSource {
+        url: source.url.clone(),
+        keys: vec![source.keys[0].clone(), key.public()],
+    };
+    let error = index::load(data.path(), &both, true).err().unwrap();
+    assert!(
+        error.to_string().contains("older than the one Dexo has"),
+        "{error}"
+    );
+}
