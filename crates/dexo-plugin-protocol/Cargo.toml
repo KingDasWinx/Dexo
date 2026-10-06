@@ -1,0 +1,15 @@
+[package]
+name = "dexo-plugin-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The protocol between Dexo and its driver plugins"
+
+[dependencies]
+dexo-driver-api = { path = "../dexo-driver-api" }
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true

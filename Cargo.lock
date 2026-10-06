@@ -2012,6 +2012,7 @@ name = "dexo-driver-api"
 version = "1.4.2"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "dexo-driver-postgres",
  "futures-core",
  "secrecy",
@@ -2109,6 +2110,17 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "dexo-plugin-protocol"
+version = "1.4.2"
+dependencies = [
+ "dexo-driver-api",
+ "secrecy",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
