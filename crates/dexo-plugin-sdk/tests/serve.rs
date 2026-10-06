@@ -180,3 +180,54 @@ fn the_end_of_stdin_ends_the_server() {
     // The server's end of the pipe closes once it has returned.
     assert!(!read_line(&mut from, &mut line).unwrap());
 }
+
+#[test]
+fn a_session_answers_every_family_it_declares() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wire = Wire::start();
+    let request = ConnectRequest::new(
+        dir.path().join("a.db").to_string_lossy(),
+        None,
+        String::new(),
+        SecretString::from(String::new()),
+        false,
+    );
+    let opened = wire.ok(
+        "session/open",
+        serde_json::to_value(SessionOpenParams::new("sqlite", &request)).unwrap(),
+    );
+    for family in ["catalog", "data", "bulk", "explain", "transactions"] {
+        assert!(
+            opened["families"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(family)),
+            "{family}: {opened}"
+        );
+    }
+    let session = opened["session"].as_str().unwrap().to_string();
+    wire.execute(
+        &session,
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)",
+    );
+    let on = |args: Value| json!({"session": session, "args": args});
+    let inserted = wire.ok(
+        "bulk/insert_batch",
+        on(
+            json!([{"catalog": null, "schema": "main", "object": "t"}, ["id", "name"],
+            [[{"t": "i64", "v": 1}, {"t": "text", "v": "ada"}]]]),
+        ),
+    );
+    assert_eq!(inserted, json!(1));
+    let databases = wire.ok("catalog/databases", on(Value::Null));
+    assert!(
+        databases.as_array().is_some_and(|names| !names.is_empty()),
+        "{databases}"
+    );
+    let began = wire.ok("tx/begin", on(json!("read_write")));
+    assert_eq!(began["state"], "active");
+    let rolled = wire.ok("tx/rollback", on(Value::Null));
+    assert_eq!(rolled["state"], "idle");
+    let missing = wire.call("teleport/now", on(Value::Null));
+    assert_eq!(missing.error.unwrap().code, code::METHOD_NOT_FOUND);
+}
