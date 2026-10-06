@@ -177,3 +177,26 @@ fn a_local_package_larger_than_a_download_may_be_is_refused_unread() {
     };
     assert!(error.to_string().contains("is larger than"), "{error}");
 }
+
+#[test]
+fn the_state_file_waits_its_turn_instead_of_refusing() {
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let folder = theme_folder(work.path(), "pack", "1.0.0");
+    install::commit(
+        data.path(),
+        install::stage(data.path(), &folder).unwrap(),
+        Origin::Local,
+        None,
+    )
+    .unwrap();
+    let plugins = data.path().join("plugins");
+    let held = Lock::acquire(&plugins, ".state").unwrap();
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        drop(held);
+    });
+    install::set_enabled(data.path(), "pack", false, None).unwrap();
+    release.join().unwrap();
+    assert!(!state::load(&plugins).plugins["pack"].enabled);
+}

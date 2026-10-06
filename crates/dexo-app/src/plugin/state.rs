@@ -102,7 +102,7 @@ pub fn save(plugins: &Path, state: &State) -> std::io::Result<()> {
 /// Reads, changes and writes the state under its lock: the TUI and a `dexo plugin`
 /// command may both be at it.
 pub fn change<T>(plugins: &Path, edit: impl FnOnce(&mut State) -> T) -> Result<T, AppError> {
-    let _lock = Lock::acquire(plugins, ".state")?;
+    let _lock = Lock::wait(plugins, ".state", Duration::from_secs(3))?;
     let mut state = load(plugins);
     let out = edit(&mut state);
     save(plugins, &state).map_err(|error| {
@@ -124,6 +124,23 @@ pub struct Lock {
 const STALE: Duration = Duration::from_secs(10 * 60);
 
 impl Lock {
+    /// `acquire`, tried again for up to `patience`: for a lock held a moment, as the
+    /// state file's is.
+    pub fn wait(plugins: &Path, name: &str, patience: Duration) -> Result<Self, AppError> {
+        let started = std::time::Instant::now();
+        loop {
+            match Self::acquire(plugins, name) {
+                Err(error)
+                    if error.category() == ErrorCategory::Conflict
+                        && started.elapsed() < patience =>
+                {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                done => return done,
+            }
+        }
+    }
+
     pub fn acquire(plugins: &Path, name: &str) -> Result<Self, AppError> {
         let locks = plugins.join(".locks");
         std::fs::create_dir_all(&locks).map_err(|error| {
