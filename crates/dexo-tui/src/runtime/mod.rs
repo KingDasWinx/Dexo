@@ -3195,6 +3195,7 @@ mod dial_tests {
                 file: false,
                 plugin: None,
                 installed: true,
+                disabled: false,
             }
         }
 

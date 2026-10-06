@@ -58,16 +58,13 @@ pub fn plugins_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("plugins")
 }
 
-/// Registers installed plugin `id`'s drivers, when it is an enabled driver plugin.
+/// Registers installed driver plugin `id`'s drivers; a disabled one's are only made
+/// known as disabled, so connecting says to enable it.
 pub fn register(registry: &DriverRegistry, data_dir: &Path, id: &str) {
     let plugins = plugins_dir(data_dir);
-    if !state::load(&plugins)
-        .plugins
-        .get(id)
-        .is_some_and(|installed| installed.enabled)
-    {
+    let Some(installed) = state::load(&plugins).plugins.remove(id) else {
         return;
-    }
+    };
     let folder = plugins.join(id);
     let Some(manifest) = manifest::read(&folder) else {
         return;
@@ -75,6 +72,10 @@ pub fn register(registry: &DriverRegistry, data_dir: &Path, id: &str) {
     let Some(driver) = &manifest.driver else {
         return;
     };
+    if !installed.enabled {
+        announce_drivers(&manifest, true);
+        return;
+    }
     let Some(executable) = host::dev_override(id).or_else(|| manifest.executable(&folder)) else {
         return;
     };
@@ -92,6 +93,17 @@ pub fn register(registry: &DriverRegistry, data_dir: &Path, id: &str) {
     let replaced = lock(&HOSTS).insert(id.to_string(), (plugin, driver.drivers.clone()));
     if let Some((old, _)) = replaced {
         old.stop("it was replaced");
+    }
+}
+
+/// Makes `manifest`'s drivers known as not installed, `disabled` or not.
+pub(crate) fn announce_drivers(manifest: &manifest::Manifest, disabled: bool) {
+    for descriptor in manifest.descriptors() {
+        DriverDescriptor::announce(DriverDescriptor {
+            installed: false,
+            disabled,
+            ..descriptor
+        });
     }
 }
 
@@ -134,11 +146,11 @@ pub fn trust_text(manifest: &manifest::Manifest) -> String {
     text
 }
 
-/// Every installed, enabled driver plugin's drivers, then the `DEXO_DRIVER_<ID>` builds
+/// Every installed driver plugin's drivers, the disabled ones' as disabled, then the `DEXO_DRIVER_<ID>` builds
 /// of drivers not installed: what Dexo connects with from its start.
 pub fn register_installed(registry: &DriverRegistry, data_dir: &Path) {
     for (id, installed) in state::load(&plugins_dir(data_dir)).plugins {
-        if installed.enabled && installed.kind == manifest::Kind::Driver {
+        if installed.kind == manifest::Kind::Driver {
             register(registry, data_dir, &id);
         }
     }

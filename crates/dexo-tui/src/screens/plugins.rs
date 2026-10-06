@@ -400,17 +400,22 @@ pub struct PluginOffer {
     pub focus: crate::widgets::form::FooterFocus,
     /// The connection to open once it is installed.
     pub then_connect: Option<dexo_app::ConnectionProfile>,
+    /// The plugin is installed and disabled: the offer enables it.
+    pub enable: bool,
 }
 
-/// The plugin to install for `driver`, and the driver's name, when it is a plugin's
-/// driver that is not installed.
-pub fn missing_driver(driver: &str) -> Option<(String, String)> {
+/// What to offer for `driver` when it is a plugin's driver that cannot connect: to
+/// install its plugin, or to enable it.
+pub fn missing_driver(driver: &str) -> Option<PluginOffer> {
     let descriptor = dexo_driver_api::DriverDescriptor::for_id(driver.trim())?;
     if descriptor.installed {
         return None;
     }
-    Some((
-        descriptor.plugin?.into_owned(),
-        descriptor.display_name.into_owned(),
-    ))
+    Some(PluginOffer {
+        plugin: descriptor.plugin?.into_owned(),
+        driver: descriptor.display_name.into_owned(),
+        focus: crate::widgets::form::FooterFocus::Submit,
+        then_connect: None,
+        enable: descriptor.disabled,
+    })
 }

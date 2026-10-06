@@ -30,7 +30,7 @@ dexo plugin doctor [--json]
 
 `dexo doctor` includes a one-line summary of the plugins.
 
-A saved connection whose driver is a plugin you do not have stays saved. Opening it offers to install the plugin, and once it is in, the connection opens. The connection form lists such a driver as "DuckDB · not installed", and Test or Save offers to install it there.
+A saved connection whose driver is a plugin you do not have stays saved. Opening it offers to install the plugin, and once it is in, the connection opens. The connection form lists such a driver as "DuckDB · not installed", and Test or Save offers to install it there. A disabled plugin's driver says "· disabled" instead, and the offer enables it.
 
 ## Where plugins come from
 

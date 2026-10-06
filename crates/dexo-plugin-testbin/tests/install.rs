@@ -140,6 +140,30 @@ fn installed_driver_plugins_are_registered_at_start() {
     let fresh = DriverRegistry::new();
     dexo_app::plugin::register_installed(&fresh, data.path());
     assert!(!fresh.has("testbin"));
+    // Disabled is not missing: it says to enable it, and installing would not help.
+    assert!(
+        dexo_driver_api::DriverDescriptor::for_id("testbin")
+            .unwrap()
+            .disabled
+    );
+    let disabled = fresh.get("testbin").err().unwrap();
+    assert!(
+        disabled
+            .to_string()
+            .contains("Testbin is disabled: enable it with `dexo plugin enable testbin`"),
+        "{disabled}"
+    );
+    install::set_enabled(data.path(), "testbin", true, Some(&fresh)).unwrap();
+    assert!(fresh.has("testbin"));
+    assert!(
+        !dexo_driver_api::DriverDescriptor::for_id("testbin")
+            .unwrap()
+            .disabled
+    );
+    install::set_enabled(data.path(), "testbin", false, Some(&fresh)).unwrap();
+    install::remove(data.path(), "testbin", Some(&fresh)).unwrap();
+    let removed = dexo_driver_api::DriverDescriptor::for_id("testbin");
+    assert!(removed.is_none_or(|known| !known.disabled && !known.installed));
 }
 
 #[test]

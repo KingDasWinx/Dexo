@@ -582,6 +582,8 @@ impl ConnectionForm {
                 |item| {
                     if item.installed {
                         item.display_name.into_owned()
+                    } else if item.disabled {
+                        format!("{} · disabled", item.display_name)
                     } else {
                         format!("{} · not installed", item.display_name)
                     }

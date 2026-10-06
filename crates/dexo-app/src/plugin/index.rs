@@ -341,7 +341,8 @@ pub fn announce_available(index: &Index) {
         };
         for id in &driver.drivers {
             if !DriverDescriptor::may_provide(&plugin.id, id)
-                || DriverDescriptor::for_id(id).is_some_and(|known| known.installed)
+                || DriverDescriptor::for_id(id)
+                    .is_some_and(|known| known.installed || known.disabled)
             {
                 continue;
             }

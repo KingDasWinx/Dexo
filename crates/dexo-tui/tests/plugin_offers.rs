@@ -130,3 +130,39 @@ fn the_palette_opens_plugins_where_asked() {
         "{effects:?}"
     );
 }
+
+#[test]
+fn a_disabled_plugins_driver_offers_to_enable_it() {
+    DriverDescriptor::announce(DriverDescriptor {
+        disabled: true,
+        ..DriverDescriptor::plugin_driver("pond", "Pond", true, "pond", false)
+    });
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![ConnectionProfile::new(
+        ConnectionId(uuid::Uuid::new_v4()),
+        None,
+        "pond",
+        "pond",
+        "local",
+        serde_json::json!({"path": "/tmp/pond.db"}),
+        SecretRef::new("ref-pond".to_string()),
+    )]);
+    update(
+        &mut model,
+        Action::GoToScreen(dexo_tui::model::Screen::Connections),
+    );
+    paint(&mut model);
+    press(&mut model, KeyCode::Char('s'));
+    let shown = paint(&mut model);
+    assert!(
+        shown.contains("Pond is a plugin that is disabled."),
+        "{shown}"
+    );
+    let effects = press(&mut model, KeyCode::Enter);
+    assert!(
+        matches!(&effects[..], [Effect::SetPluginEnabled { id, enabled: true }] if id == "pond"),
+        "{effects:?}"
+    );
+    assert!(model.plugins.then_connect.is_some());
+    DriverDescriptor::withdraw("pond");
+}

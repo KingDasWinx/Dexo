@@ -3117,11 +3117,21 @@ fn render_plugin_offer(
     if area.width < 10 || area.height < 5 {
         return;
     }
+    let (state, question, action, title) = if offer.enable {
+        ("disabled", "Enable it?", "Enable", "Enable plugin?")
+    } else {
+        (
+            "not installed",
+            "Install it from Dexo's signed plugin index?",
+            "Install",
+            "Install plugin?",
+        )
+    };
     let lines = [
-        format!("{} is a plugin that is not installed.", offer.driver),
-        "Install it from Dexo's signed plugin index?".to_string(),
+        format!("{} is a plugin that is {state}.", offer.driver),
+        question.to_string(),
         String::new(),
-        footer_line("Install", offer.focus),
+        footer_line(action, offer.focus),
     ];
     let width = lines
         .iter()
@@ -3134,12 +3144,12 @@ fn render_plugin_offer(
         frame,
         model,
         popup,
-        overlay_block(model, "Install plugin?"),
+        overlay_block(model, title),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
     let footer = crate::mouse::line_rect(popup_inner(popup), lines.len() - 1);
-    crate::widgets::form::register_footer(hits, footer, &lines[lines.len() - 1], "Install");
+    crate::widgets::form::register_footer(hits, footer, &lines[lines.len() - 1], action);
 }
 
 fn render_clear_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {

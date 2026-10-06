@@ -83,6 +83,13 @@ impl DriverRegistry {
                 let plugin = descriptor.plugin.clone()?;
                 Some((descriptor, plugin))
             }) {
+                Some((descriptor, plugin)) if descriptor.disabled => AppError::new(
+                    ErrorCategory::Capability,
+                    format!(
+                        "{} is disabled: enable it with `dexo plugin enable {plugin}` or in Plugins (Ctrl+G p)",
+                        descriptor.display_name
+                    ),
+                ),
                 Some((descriptor, plugin)) => AppError::new(
                     ErrorCategory::Capability,
                     format!(

@@ -32,6 +32,9 @@ pub struct DriverDescriptor {
     /// Whether it can connect now: a plugin's driver is known before it is installed,
     /// so the connection form can offer to install it.
     pub installed: bool,
+    /// Its plugin is installed and switched off: enabling it, not installing it, makes
+    /// it connect.
+    pub disabled: bool,
 }
 
 /// Drivers made known while Dexo runs: installed plugins, and the index's drivers that
@@ -53,6 +56,7 @@ impl DriverDescriptor {
             file: false,
             plugin: None,
             installed: true,
+            disabled: false,
         }
     }
 
@@ -70,6 +74,7 @@ impl DriverDescriptor {
             file: false,
             plugin: None,
             installed: true,
+            disabled: false,
         }
     }
 
@@ -87,6 +92,7 @@ impl DriverDescriptor {
             file: true,
             plugin: None,
             installed: true,
+            disabled: false,
         }
     }
 
@@ -123,6 +129,7 @@ impl DriverDescriptor {
             file,
             plugin: Some(Cow::Owned(plugin.into())),
             installed,
+            disabled: false,
         }
     }
 

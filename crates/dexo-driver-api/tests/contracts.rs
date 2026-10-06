@@ -48,6 +48,7 @@ impl ConnectionFactory for FakeFactory {
             file: false,
             plugin: None,
             installed: true,
+            disabled: false,
         }
     }
 

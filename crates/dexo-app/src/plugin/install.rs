@@ -307,6 +307,7 @@ pub fn remove(
     if let Some(registry) = registry {
         unregister(registry, id, "it was removed");
     }
+    let manifest = manifest::read(&target);
     let aside = plugins
         .join(".staging")
         .join(format!("{id}-removed-{}", uuid::Uuid::new_v4().simple()));
@@ -322,6 +323,10 @@ pub fn remove(
         ));
     }
     let _ = std::fs::remove_dir_all(&aside);
+    // A disabled plugin's drivers were known as disabled: they are not installed now.
+    if let Some(manifest) = &manifest {
+        super::announce_drivers(manifest, false);
+    }
     state::change(&plugins, |state| {
         state.plugins.remove(id);
     })
@@ -345,11 +350,10 @@ pub fn set_enabled(
         return Err(not_installed(id));
     }
     if let Some(registry) = registry {
-        if enabled {
-            register(registry, data_dir, id);
-        } else {
+        if !enabled {
             unregister(registry, id, "it was disabled");
         }
+        register(registry, data_dir, id);
     }
     Ok(())
 }
