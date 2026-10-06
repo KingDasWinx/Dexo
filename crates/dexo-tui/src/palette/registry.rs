@@ -182,6 +182,28 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::GoToScreen(Screen::Plugins)),
         },
         CommandSpec {
+            id: "plugins.install",
+            title: "Install Plugin…",
+            keywords: &["plugin", "install", "driver", "duckdb", "theme", "download"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ShowPlugins {
+                view: crate::screens::plugins::PluginsView::Available,
+                refresh: false,
+            }),
+        },
+        CommandSpec {
+            id: "plugins.check",
+            title: "Check Plugin Updates",
+            keywords: &["plugin", "update", "upgrade", "new version"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ShowPlugins {
+                view: crate::screens::plugins::PluginsView::Installed,
+                refresh: true,
+            }),
+        },
+        CommandSpec {
             id: "screen.previous",
             title: "Go to Previous Screen",
             keywords: &["screen", "back", "last", "toggle"],

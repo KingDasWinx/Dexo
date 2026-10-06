@@ -389,3 +389,28 @@ pub fn mouse(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     }
     Vec::new()
 }
+
+/// A plugin offered where its driver was wanted: the connection form, or a saved
+/// connection being opened.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PluginOffer {
+    pub plugin: String,
+    /// The driver as people name it.
+    pub driver: String,
+    pub focus: crate::widgets::form::FooterFocus,
+    /// The connection to open once it is installed.
+    pub then_connect: Option<dexo_app::ConnectionProfile>,
+}
+
+/// The plugin to install for `driver`, and the driver's name, when it is a plugin's
+/// driver that is not installed.
+pub fn missing_driver(driver: &str) -> Option<(String, String)> {
+    let descriptor = dexo_driver_api::DriverDescriptor::for_id(driver.trim())?;
+    if descriptor.installed {
+        return None;
+    }
+    Some((
+        descriptor.plugin?.into_owned(),
+        descriptor.display_name.into_owned(),
+    ))
+}

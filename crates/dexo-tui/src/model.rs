@@ -2033,6 +2033,8 @@ pub struct Model {
     pub history_view: crate::screen::history::HistoryView,
     /// The Plugins screen: what is installed, what the index offers, the change under way.
     pub plugins: crate::screens::plugins::PluginsState,
+    /// A missing driver's plugin, offered where the driver was wanted.
+    pub plugin_offer: Option<crate::screens::plugins::PluginOffer>,
     /// The section of each screen its keys go to -- Alt+1 its list, Alt+2 its detail, as
     /// on the workbench's panes -- in `Screen::ALL`'s order.
     pub sections: [crate::screen::Section; 7],
@@ -2205,6 +2207,7 @@ impl Default for Model {
             agents_view: Default::default(),
             history_view: Default::default(),
             plugins: Default::default(),
+            plugin_offer: None,
             sections: Default::default(),
             detail_scroll: 0,
             screen_button: 0,

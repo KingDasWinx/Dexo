@@ -296,6 +296,9 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if let Some(prompt) = &model.production_prompt {
         render_production_prompt(frame, model, prompt, hits);
     }
+    if let Some(offer) = &model.plugin_offer {
+        render_plugin_offer(frame, model, offer, hits);
+    }
     if let Some(prompt) = &model.close_prompt {
         render_close_prompt(frame, model, prompt, hits);
     }
@@ -3103,6 +3106,42 @@ fn render_related_picker(
 }
 
 /// "Clear the history of pg-dev?", from the palette, over whatever screen asked.
+fn render_plugin_offer(
+    frame: &mut Frame,
+    model: &Model,
+    offer: &crate::screens::plugins::PluginOffer,
+    hits: &mut HitMap,
+) {
+    use crate::widgets::form::footer_line;
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let lines = [
+        format!("{} is a plugin that is not installed.", offer.driver),
+        "Install it from Dexo's signed plugin index?".to_string(),
+        String::new(),
+        footer_line("Install", offer.focus),
+    ];
+    let width = lines
+        .iter()
+        .map(|line| line.chars().count() as u16 + 4)
+        .max()
+        .unwrap_or(0)
+        .max(40);
+    let popup = centered(area, width, lines.len() as u16 + 2);
+    paint_popup(
+        frame,
+        model,
+        popup,
+        overlay_block(model, "Install plugin?"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    let footer = crate::mouse::line_rect(popup_inner(popup), lines.len() - 1);
+    crate::widgets::form::register_footer(hits, footer, &lines[lines.len() - 1], "Install");
+}
+
 fn render_clear_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     use crate::widgets::form::footer_line;
     let editor = &model.editor;

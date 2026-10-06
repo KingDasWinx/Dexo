@@ -597,6 +597,11 @@ pub enum Action {
     HistoryLoaded(Vec<dexo_storage::HistoryRow>),
     /// The Plugins screen's state, read off the disk and the index.
     PluginsLoaded(crate::screens::plugins::PluginsSnapshot),
+    /// The Plugins screen on `view`, the index fetched again when `refresh`.
+    ShowPlugins {
+        view: crate::screens::plugins::PluginsView,
+        refresh: bool,
+    },
     /// The plugin download under way read `done` bytes of `total`.
     PluginProgress {
         done: u64,

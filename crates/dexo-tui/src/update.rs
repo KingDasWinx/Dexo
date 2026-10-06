@@ -2432,6 +2432,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             ));
             Vec::new()
         }
+        Action::ShowPlugins { view, refresh } => {
+            let effects = go_to_screen(model, crate::model::Screen::Plugins);
+            model.plugins.view = view;
+            model.plugins.selected = 0;
+            if refresh {
+                vec![Effect::LoadPlugins { refresh: true }]
+            } else {
+                effects
+            }
+        }
         Action::PluginsLoaded(snapshot) => {
             let state = &mut model.plugins;
             state.loading = false;
@@ -3518,6 +3528,7 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         }
         Some(OverlayKind::Parameters) => mouse_parameters(model, hit),
         Some(OverlayKind::ClearHistory) => mouse_history(model, hit),
+        Some(OverlayKind::PluginOffer) => mouse_plugin_offer(model, hit),
         Some(OverlayKind::Snippets) => mouse_snippets(model, hit),
         Some(OverlayKind::TryIndex) => match hit {
             Some(HitTarget::FormField(0)) => {
@@ -6004,6 +6015,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.quit_prompt.is_some() {
         return handle_quit_prompt_key(model, key);
     }
+    if model.plugin_offer.is_some() {
+        return handle_plugin_offer_key(model, key);
+    }
     if model.connections.delete_target.is_some() {
         return handle_delete_connection_key(model, key);
     }
@@ -7163,6 +7177,17 @@ fn open_temporary_connection(
 }
 
 fn connect_to(model: &mut Model, profile: dexo_app::ConnectionProfile) -> Vec<Effect> {
+    // A driver that is a plugin not installed is offered here; the connection opens
+    // once it is in.
+    if let Some((plugin, driver)) = crate::screens::plugins::missing_driver(&profile.driver) {
+        model.plugin_offer = Some(crate::screens::plugins::PluginOffer {
+            plugin,
+            driver,
+            focus: crate::widgets::form::FooterFocus::Submit,
+            then_connect: Some(profile),
+        });
+        return Vec::new();
+    }
     model.connect_token = model.connect_token.saturating_add(1);
     model.connections.pending_connect = Some(model.connect_token);
     // The dial is spawned, so this toast paints on the very next frame and is the only
@@ -7238,6 +7263,23 @@ fn activate_existing_session(
 
 fn test_connection(model: &mut Model) -> Vec<Effect> {
     if model.connection_form.open {
+        let driver = model
+            .connection_form
+            .fields
+            .iter()
+            .find(|field| field.label == "driver")
+            .map(|field| field.value.as_str().to_string())
+            .unwrap_or_default();
+        if let Some((plugin, driver)) = crate::screens::plugins::missing_driver(&driver) {
+            model.plugin_offer = Some(crate::screens::plugins::PluginOffer {
+                plugin,
+                driver,
+                focus: crate::widgets::form::FooterFocus::Submit,
+                then_connect: None,
+            });
+            return Vec::new();
+        }
+
         let Some((input, password)) = model.connection_form.submit() else {
             return Vec::new();
         };
@@ -7272,6 +7314,22 @@ fn test_connection(model: &mut Model) -> Vec<Effect> {
 }
 
 fn save_connection(model: &mut Model) -> Vec<Effect> {
+    let driver = model
+        .connection_form
+        .fields
+        .iter()
+        .find(|field| field.label == "driver")
+        .map(|field| field.value.as_str().to_string())
+        .unwrap_or_default();
+    if let Some((plugin, driver)) = crate::screens::plugins::missing_driver(&driver) {
+        model.plugin_offer = Some(crate::screens::plugins::PluginOffer {
+            plugin,
+            driver,
+            focus: crate::widgets::form::FooterFocus::Submit,
+            then_connect: None,
+        });
+        return Vec::new();
+    }
     match model.connection_form.submit() {
         Some((input, password)) => {
             // Sessions are found by name: a connection called what an open temporary
@@ -13211,6 +13269,55 @@ fn apply_transfer_cancelled(
         model.transfer.message = Some("Stopped.".into());
     }
     Vec::new()
+}
+
+/// The offer of a missing driver's plugin: Enter installs it, Esc leaves things as
+/// they were.
+fn handle_plugin_offer_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterKey, confirm_key};
+    let Some(offer) = model.plugin_offer.as_mut() else {
+        return Vec::new();
+    };
+    match confirm_key(&mut offer.focus, &key) {
+        FooterKey::Submit => accept_plugin_offer(model),
+        FooterKey::Cancel => {
+            model.plugin_offer = None;
+            Vec::new()
+        }
+        FooterKey::Moved | FooterKey::Pass => Vec::new(),
+    }
+}
+
+fn mouse_plugin_offer(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::FooterSubmit) => accept_plugin_offer(model),
+        Some(HitTarget::FooterCancel) => {
+            model.plugin_offer = None;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Installs the offered plugin; the connection that wanted it opens once it is in.
+fn accept_plugin_offer(model: &mut Model) -> Vec<Effect> {
+    let Some(offer) = model.plugin_offer.take() else {
+        return Vec::new();
+    };
+    model.plugins.busy = Some(crate::screens::plugins::Busy {
+        id: offer.plugin.clone(),
+        verb: "Installing",
+        done: 0,
+        total: None,
+    });
+    model.plugins.then_connect = offer.then_connect;
+    model
+        .messages
+        .info(format!("Installing the {} plugin…", offer.driver));
+    vec![Effect::InstallPlugin {
+        id: offer.plugin,
+        upgrade: false,
+    }]
 }
 
 /// The question Clear History asks, over whatever screen it was asked from.

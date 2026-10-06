@@ -111,6 +111,7 @@ pub enum OverlayKind {
     ProductionPrompt,
     ExplainPrompt,
     QuitPrompt,
+    PluginOffer,
     DeleteConnection,
     Review,
     DdlPreview,
@@ -279,6 +280,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         ),
         (model.explain_prompt.is_some(), OverlayKind::ExplainPrompt),
         (model.quit_prompt.is_some(), OverlayKind::QuitPrompt),
+        (model.plugin_offer.is_some(), OverlayKind::PluginOffer),
         (
             model.connections.delete_target.is_some(),
             OverlayKind::DeleteConnection,
