@@ -63,6 +63,11 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
     }
 }
 
+/// Whether `text` is a version Dexo compares: `1.2.3`, or `1.2.3-rc.1`.
+pub fn is_version(text: &str) -> bool {
+    parse(text).is_some()
+}
+
 /// The numeric core and the prerelease suffix, if any.
 type Parsed<'a> = ((u64, u64, u64), Option<&'a str>);
 

@@ -26,6 +26,8 @@ indexmap = { version = "2.14", features = ["serde"] }
 uuid.workspace = true
 sha2.workspace = true
 csv.workspace = true
+flate2 = "1.1"
+tar = "0.4.46"
 encoding_rs.workspace = true
 tempfile.workspace = true
 image.workspace = true

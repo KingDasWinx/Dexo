@@ -1,6 +1,8 @@
 //! Plugins: packages that add drivers and themes to an installed Dexo.
 
+pub mod archive;
 pub mod host;
+pub mod manifest;
 pub mod proxy;
 pub mod rpc;
 
