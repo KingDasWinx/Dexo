@@ -161,6 +161,8 @@ pub struct PluginsState {
     /// The plugin a removal is asked about.
     pub removing: Option<String>,
     pub from_file: Option<FromFile>,
+    /// A saved connection to open once the install offered for it is done.
+    pub then_connect: Option<dexo_app::ConnectionProfile>,
 }
 
 impl PluginsState {
@@ -200,9 +202,18 @@ impl PluginsState {
 
 /// The screen's keys. None leaves a key to the keymap, and Esc to going back.
 pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
-    let state = &mut model.plugins;
-    if state.search.typing && state.search.key(key) {
-        state.selected = 0;
+    // A question or a path being typed holds the keys.
+    if model.plugins.removing.is_some() {
+        return Some(removal_key(model, key));
+    }
+    if model.plugins.from_file.is_some() {
+        return Some(from_file_key(model, key));
+    }
+    if model.plugins.busy.is_some() && key.code == KeyCode::Esc {
+        return Some(vec![Effect::CancelPluginWork]);
+    }
+    if model.plugins.search.typing && model.plugins.search.key(key) {
+        model.plugins.selected = 0;
         return Some(Vec::new());
     }
     if key
@@ -211,6 +222,34 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     {
         return None;
     }
+    match key.code {
+        KeyCode::Char('i') => return Some(install(model, false)),
+        KeyCode::Char('u') => return Some(install(model, true)),
+        KeyCode::Char('e') => return Some(toggle(model)),
+        KeyCode::Char('a') => {
+            let id = model.plugins.picked()?.id.clone();
+            return Some(crate::update::update(
+                model,
+                crate::action::Action::ApplyPluginTheme { id },
+            ));
+        }
+        KeyCode::Char('x') | KeyCode::Delete => {
+            let id = model
+                .plugins
+                .picked()
+                .filter(|row| row.installed.is_some())
+                .map(|row| row.id.clone());
+            model.plugins.removing = id;
+            return Some(Vec::new());
+        }
+        KeyCode::Char('f') => {
+            model.plugins.from_file = Some(FromFile::default());
+            model.sections[crate::model::Screen::Plugins.index()] = crate::screen::Section::Detail;
+            return Some(Vec::new());
+        }
+        _ => {}
+    }
+    let state = &mut model.plugins;
     let count = state.shown().len();
     match key.code {
         KeyCode::Tab | KeyCode::BackTab => {
@@ -238,6 +277,102 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         _ => return None,
     }
     Some(Vec::new())
+}
+
+fn install(model: &mut Model, upgrade: bool) -> Vec<Effect> {
+    let Some(row) = model.plugins.picked() else {
+        return Vec::new();
+    };
+    if (upgrade && row.update().is_none()) || (!upgrade && row.installed.is_some()) {
+        return Vec::new();
+    }
+    let (id, total) = (row.id.clone(), row.size);
+    model.plugins.busy = Some(Busy {
+        id: id.clone(),
+        verb: if upgrade { "Updating" } else { "Installing" },
+        done: 0,
+        total,
+    });
+    vec![Effect::InstallPlugin { id, upgrade }]
+}
+
+fn toggle(model: &mut Model) -> Vec<Effect> {
+    let Some(row) = model.plugins.picked() else {
+        return Vec::new();
+    };
+    let Some(installed) = &row.installed else {
+        return Vec::new();
+    };
+    vec![Effect::SetPluginEnabled {
+        id: row.id.clone(),
+        enabled: !installed.enabled,
+    }]
+}
+
+fn removal_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Enter => match model.plugins.removing.take() {
+            Some(id) => vec![Effect::RemovePlugin { id }],
+            None => Vec::new(),
+        },
+        KeyCode::Esc => {
+            model.plugins.removing = None;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The path, then the plugin's id typed to trust it. Esc drops a package already read.
+fn from_file_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    let Some(from_file) = model.plugins.from_file.as_mut() else {
+        return Vec::new();
+    };
+    let staged = from_file.staged.clone();
+    match (key.code, staged) {
+        (KeyCode::Esc, staged) => {
+            model.plugins.from_file = None;
+            staged
+                .map(|staged| {
+                    vec![Effect::DropPluginFile {
+                        token: staged.token,
+                    }]
+                })
+                .unwrap_or_default()
+        }
+        (KeyCode::Enter, None) => {
+            let path = from_file.path.as_str().trim().to_string();
+            if path.is_empty() {
+                return Vec::new();
+            }
+            from_file.error = None;
+            vec![Effect::StagePluginFile { path }]
+        }
+        (KeyCode::Enter, Some(staged)) => {
+            if from_file.confirm.as_str().trim() != staged.id {
+                from_file.error = Some(format!("Type {} to install it.", staged.id));
+                return Vec::new();
+            }
+            model.plugins.from_file = None;
+            model.plugins.busy = Some(Busy {
+                id: staged.id,
+                verb: "Installing",
+                done: 0,
+                total: None,
+            });
+            vec![Effect::CommitPluginFile {
+                token: staged.token,
+            }]
+        }
+        (_, None) => {
+            from_file.path.handle_key(key);
+            Vec::new()
+        }
+        (_, Some(_)) => {
+            from_file.confirm.handle_key(key);
+            Vec::new()
+        }
+    }
 }
 
 /// A click: a view, or a row.

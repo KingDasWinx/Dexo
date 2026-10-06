@@ -435,6 +435,12 @@ pub struct WorkbenchRuntime {
     /// draws the screen and reads the keys. Awaited there, each froze the screen for its
     /// round trips: seconds on a server far away.
     reads: tokio::sync::mpsc::UnboundedSender<futures_util::future::BoxFuture<'static, ()>>,
+    /// Set to stop the plugin download under way.
+    plugin_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Packages read for an install from a file, waiting for the person's trust.
+    staged_plugins:
+        Arc<std::sync::Mutex<std::collections::HashMap<u64, dexo_app::plugin::install::Staged>>>,
+    next_staged: u64,
 }
 
 /// The queue `WorkbenchRuntime::reads` sends to: each read, run to its end before the
@@ -478,6 +484,9 @@ impl WorkbenchRuntime {
             transfer: transfer_manager::TransferManager::default(),
             counts: Arc::default(),
             to_keychain: Vec::new(),
+            plugin_cancel: None,
+            staged_plugins: Arc::default(),
+            next_staged: 0,
             reads: read_lane(),
         }
     }
@@ -1014,6 +1023,36 @@ impl WorkbenchRuntime {
             }
             crate::Effect::PersistHistory(request) => self.persist_history(request).await,
             crate::Effect::LoadHistory { connection_id } => self.load_history(connection_id).await,
+            crate::Effect::InstallPlugin { id, upgrade } => self.install_plugin(id, upgrade),
+            crate::Effect::StagePluginFile { path } => self.stage_plugin_file(path),
+            crate::Effect::CommitPluginFile { token } => self.commit_plugin_file(token),
+            crate::Effect::DropPluginFile { token } => {
+                self.staged_plugins
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&token);
+            }
+            crate::Effect::RemovePlugin { id } => self.plugin_work(move |data_dir, registry| {
+                dexo_app::plugin::install::remove(data_dir, &id, Some(registry))
+                    .map(|()| format!("Removed {id}."))
+            }),
+            crate::Effect::SetPluginEnabled { id, enabled } => {
+                self.plugin_work(move |data_dir, registry| {
+                    dexo_app::plugin::install::set_enabled(data_dir, &id, enabled, Some(registry))
+                        .map(|()| {
+                            if enabled {
+                                format!("Enabled {id}.")
+                            } else {
+                                format!("Disabled {id}.")
+                            }
+                        })
+                })
+            }
+            crate::Effect::CancelPluginWork => {
+                if let Some(cancel) = &self.plugin_cancel {
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             crate::Effect::LoadPlugins { refresh } => self.off_the_loop(move || {
                 let Ok(paths) = AppPaths::discover() else {
                     return Vec::new();

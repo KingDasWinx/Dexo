@@ -597,6 +597,19 @@ pub enum Action {
     HistoryLoaded(Vec<dexo_storage::HistoryRow>),
     /// The Plugins screen's state, read off the disk and the index.
     PluginsLoaded(crate::screens::plugins::PluginsSnapshot),
+    /// The plugin download under way read `done` bytes of `total`.
+    PluginProgress {
+        done: u64,
+        total: Option<u64>,
+    },
+    /// An install, update, removal or switch ended: what to say, or why it failed.
+    PluginWorkDone(Result<String, String>),
+    /// A package from a file was read: what the trust prompt shows, or why it was refused.
+    PluginFileStaged(Result<crate::screens::plugins::StagedInfo, String>),
+    /// The theme pack's first theme becomes the one in use.
+    ApplyPluginTheme {
+        id: String,
+    },
     HistoryPick,
     SnippetsLoaded(Vec<dexo_sql::Snippet>),
     SnippetPick,
@@ -1168,6 +1181,32 @@ pub enum Effect {
     LoadPlugins {
         refresh: bool,
     },
+    /// Install plugin `id` from the index, or update it.
+    InstallPlugin {
+        id: String,
+        upgrade: bool,
+    },
+    /// Read a package from a file or folder for the trust prompt.
+    StagePluginFile {
+        path: String,
+    },
+    /// Install the package read under `token`: the person trusted it.
+    CommitPluginFile {
+        token: u64,
+    },
+    /// Forget the package read under `token`.
+    DropPluginFile {
+        token: u64,
+    },
+    RemovePlugin {
+        id: String,
+    },
+    SetPluginEnabled {
+        id: String,
+        enabled: bool,
+    },
+    /// Stop the plugin download under way.
+    CancelPluginWork,
     LoadHistory {
         connection_id: Option<String>,
     },

@@ -2373,6 +2373,65 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             go_to_screen(model, crate::model::Screen::History)
         }
         Action::ClearHistory => confirm_clear_history(model),
+        Action::PluginProgress { done, total } => {
+            if let Some(busy) = model.plugins.busy.as_mut() {
+                busy.done = done;
+                busy.total = total.or(busy.total);
+            }
+            Vec::new()
+        }
+        Action::PluginWorkDone(done) => {
+            model.plugins.busy = None;
+            // A theme pack added, changed or taken away changes the theme picker, and
+            // the theme in use when its pack went.
+            if let Ok(paths) = dexo_storage::AppPaths::discover() {
+                load_user_themes(model, &paths.data_dir);
+            }
+            match done {
+                Ok(message) => {
+                    model.messages.info(message);
+                    match model.plugins.then_connect.take() {
+                        Some(profile) => connect_to(model, profile),
+                        None => Vec::new(),
+                    }
+                }
+                Err(error) => {
+                    model.plugins.then_connect = None;
+                    model.messages.error(error);
+                    Vec::new()
+                }
+            }
+        }
+        Action::PluginFileStaged(staged) => {
+            if let Some(from_file) = model.plugins.from_file.as_mut() {
+                match staged {
+                    Ok(staged) => from_file.staged = Some(staged),
+                    Err(error) => from_file.error = Some(error),
+                }
+            }
+            Vec::new()
+        }
+        Action::ApplyPluginTheme { id } => {
+            if let Ok(paths) = dexo_storage::AppPaths::discover() {
+                load_user_themes(model, &paths.data_dir);
+            }
+            let Some(theme) = model
+                .user_themes
+                .iter()
+                .find(|theme| theme.pack.as_deref() == Some(id.as_str()))
+            else {
+                model.messages.info(format!("{id} has no theme to apply."));
+                return Vec::new();
+            };
+            model.settings.theme = theme.key();
+            let name = theme.name.clone();
+            rebuild_theme(model);
+            persist_settings(model);
+            model.messages.info(format!(
+                "Using {name}; Settings steps through the pack's others."
+            ));
+            Vec::new()
+        }
         Action::PluginsLoaded(snapshot) => {
             let state = &mut model.plugins;
             state.loading = false;

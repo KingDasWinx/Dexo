@@ -269,3 +269,104 @@ fn the_snapshot_lists_installed_plugins_without_the_index() {
     assert_eq!(snapshot.rows[0].provides, ["ocean"]);
     assert!(snapshot.index_error.is_some());
 }
+
+#[test]
+fn update_disable_and_remove_send_their_effects() {
+    let mut model = screen();
+    let effects = press(&mut model, KeyCode::Char('u'));
+    assert!(
+        matches!(&effects[..], [Effect::InstallPlugin { id, upgrade: true }] if id == "duckdb"),
+        "{effects:?}"
+    );
+    assert!(model.plugins.busy.is_some());
+    // While it downloads the other actions wait, and Esc cancels it.
+    press(&mut model, KeyCode::Char('x'));
+    assert!(model.plugins.removing.is_none());
+    assert!(matches!(
+        &press(&mut model, KeyCode::Esc)[..],
+        [Effect::CancelPluginWork]
+    ));
+    update(
+        &mut model,
+        Action::PluginProgress {
+            done: 50,
+            total: Some(100),
+        },
+    );
+    assert_eq!(model.plugins.busy.as_ref().unwrap().done, 50);
+    update(
+        &mut model,
+        Action::PluginWorkDone(Ok("Updated DuckDB to 1.1.0.".into())),
+    );
+    assert!(model.plugins.busy.is_none());
+    let effects = press(&mut model, KeyCode::Char('e'));
+    assert!(
+        matches!(&effects[..], [Effect::SetPluginEnabled { id, enabled: false }] if id == "duckdb"),
+        "{effects:?}"
+    );
+    press(&mut model, KeyCode::Char('x'));
+    assert_eq!(model.plugins.removing.as_deref(), Some("duckdb"));
+    assert!(paint(&mut model, 120, 30).contains("Remove DuckDB and its files?"));
+    let effects = press(&mut model, KeyCode::Enter);
+    assert!(
+        matches!(&effects[..], [Effect::RemovePlugin { id }] if id == "duckdb"),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn install_from_a_file_asks_for_the_id_first() {
+    let mut model = screen();
+    press(&mut model, KeyCode::Char('f'));
+    for ch in "/tmp/lake.tar.gz".chars() {
+        press(&mut model, KeyCode::Char(ch));
+    }
+    let effects = press(&mut model, KeyCode::Enter);
+    assert!(
+        matches!(&effects[..], [Effect::StagePluginFile { path }] if path == "/tmp/lake.tar.gz"),
+        "{effects:?}"
+    );
+    update(
+        &mut model,
+        Action::PluginFileStaged(Ok(StagedInfo {
+            token: 7,
+            id: "lake".into(),
+            trust: "Lake is not from Dexo's signed index.".into(),
+        })),
+    );
+    for ch in "lak".chars() {
+        press(&mut model, KeyCode::Char(ch));
+    }
+    assert!(
+        press(&mut model, KeyCode::Enter).is_empty(),
+        "the id is not typed yet"
+    );
+    assert!(paint(&mut model, 120, 30).contains("Type lake to install it."));
+    press(&mut model, KeyCode::Char('e'));
+    let effects = press(&mut model, KeyCode::Enter);
+    assert!(
+        matches!(&effects[..], [Effect::CommitPluginFile { token: 7 }]),
+        "{effects:?}"
+    );
+    assert!(model.plugins.from_file.is_none() && model.plugins.busy.is_some());
+}
+
+#[test]
+fn esc_on_the_trust_prompt_drops_the_package() {
+    let mut model = screen();
+    press(&mut model, KeyCode::Char('f'));
+    update(
+        &mut model,
+        Action::PluginFileStaged(Ok(StagedInfo {
+            token: 3,
+            id: "lake".into(),
+            trust: "Lake is not from Dexo's signed index.".into(),
+        })),
+    );
+    let effects = press(&mut model, KeyCode::Esc);
+    assert!(
+        matches!(&effects[..], [Effect::DropPluginFile { token: 3 }]),
+        "{effects:?}"
+    );
+    assert!(model.plugins.from_file.is_none());
+}
