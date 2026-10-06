@@ -203,3 +203,46 @@ async fn a_log_line_that_is_not_utf8_or_very_long_does_not_stop_the_log() {
         .unwrap();
     assert!(error.to_string().ends_with("last words"), "{error}");
 }
+
+#[tokio::test]
+async fn a_result_answered_after_it_was_given_up_on_is_closed() {
+    use dexo_app::plugin::rpc::RpcClient;
+    let (host_reader, mut plugin_writer) = std::io::pipe().unwrap();
+    let (plugin_reader, host_writer) = std::io::pipe().unwrap();
+    let (seen, closes) = std::sync::mpsc::channel::<Value>();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(plugin_reader);
+        let mut line = Vec::new();
+        let mut execute = None;
+        while read_line(&mut reader, &mut line).unwrap_or(false) {
+            let request: Request = serde_json::from_slice(&line).unwrap();
+            match request.method.as_str() {
+                "query/execute" => execute = Some(request.id),
+                // The answer crosses the cancel: it goes out after it.
+                "$/cancel_request" => {
+                    let reply = json!({"cursor": "c1", "events": [], "done": false});
+                    let _ = write_line(
+                        &mut plugin_writer,
+                        &Response::ok(execute.take().unwrap(), reply),
+                    );
+                }
+                _ => {
+                    let _ = seen.send(json!({"method": request.method, "params": request.params}));
+                }
+            }
+        }
+    });
+    let rpc = RpcClient::start(host_reader, host_writer);
+    let given_up = rpc
+        .call::<Value>("query/execute", json!({}), Some(Duration::from_millis(50)))
+        .await;
+    assert!(given_up.is_err());
+    let closed = tokio::task::spawn_blocking(move || closes.recv_timeout(Duration::from_secs(5)))
+        .await
+        .unwrap()
+        .expect("the late cursor was never closed");
+    assert_eq!(
+        closed,
+        json!({"method": "query/close", "params": {"cursor": "c1"}})
+    );
+}

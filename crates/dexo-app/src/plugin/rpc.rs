@@ -2,14 +2,14 @@
 //! id. Two threads of its own carry the lines, so no async runtime has to outlive the
 //! plugin -- the CLI's runtimes come and go.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dexo_plugin_protocol::{
-    self as protocol, CancelRequest, Request, Response, RpcError, code, method,
+    self as protocol, CancelRequest, Cursor, Request, Response, RpcError, code, method,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -39,11 +39,30 @@ type Reply = Result<Value, CallError>;
 
 /// What the reading thread and the client share.
 struct Shared {
+    next: AtomicU64,
     pending: Mutex<HashMap<u64, oneshot::Sender<Reply>>>,
     closed: Mutex<Option<Closed>>,
+    out: Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
+    /// The `query/execute` calls given up on: a cursor answered after that is closed,
+    /// or the plugin keeps it until the session ends. An id whose work the plugin
+    /// dropped stays, eight bytes, until the plugin stops.
+    abandoned: Mutex<HashSet<u64>>,
 }
 
 impl Shared {
+    fn send(&self, line: Vec<u8>) -> bool {
+        lock(&self.out)
+            .as_ref()
+            .is_some_and(|out| out.send(line).is_ok())
+    }
+
+    fn notify(&self, method: &str, params: impl Serialize) {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        if let Ok(line) = encode(id, method, params) {
+            self.send(line);
+        }
+    }
+
     /// Ends the conversation: every call waiting fails, and so does every later one.
     /// The first reason given stays.
     fn shut(&self, closed: Closed) {
@@ -56,9 +75,7 @@ impl Shared {
 }
 
 pub struct RpcClient {
-    next: AtomicU64,
     shared: Arc<Shared>,
-    out: Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
 }
 
 impl RpcClient {
@@ -66,11 +83,14 @@ impl RpcClient {
         reader: impl Read + Send + 'static,
         writer: impl Write + Send + 'static,
     ) -> Arc<Self> {
+        let (out, lines) = std::sync::mpsc::channel::<Vec<u8>>();
         let shared = Arc::new(Shared {
+            next: AtomicU64::new(1),
             pending: Mutex::default(),
             closed: Mutex::default(),
+            out: Mutex::new(Some(out)),
+            abandoned: Mutex::default(),
         });
-        let (out, lines) = std::sync::mpsc::channel::<Vec<u8>>();
         std::thread::spawn(move || {
             let mut writer = writer;
             for line in lines {
@@ -85,11 +105,7 @@ impl RpcClient {
         });
         let reading = shared.clone();
         std::thread::spawn(move || read_replies(BufReader::new(reader), &reading));
-        Arc::new(Self {
-            next: AtomicU64::new(1),
-            shared,
-            out: Mutex::new(Some(out)),
-        })
+        Arc::new(Self { shared })
     }
 
     pub async fn call<R: DeserializeOwned>(
@@ -98,7 +114,7 @@ impl RpcClient {
         params: impl Serialize,
         timeout: Option<Duration>,
     ) -> Result<R, CallError> {
-        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
         let line = encode(id, method, params)?;
         let (sender, receiver) = oneshot::channel();
         {
@@ -110,7 +126,7 @@ impl RpcClient {
             }
             lock(&self.shared.pending).insert(id, sender);
         }
-        if !self.send(line) {
+        if !self.shared.send(line) {
             self.close(Closed {
                 why: "it exited".into(),
                 violation: false,
@@ -119,6 +135,7 @@ impl RpcClient {
         let mut waiting = Waiting {
             client: self,
             id,
+            execute: method == method::QUERY_EXECUTE,
             answered: false,
         };
         let reply = match timeout {
@@ -146,27 +163,18 @@ impl RpcClient {
     /// Sends a request whose answer nobody waits for: what a dropped result or session
     /// sends on its way out, outside any runtime.
     pub fn notify(&self, method: &str, params: impl Serialize) {
-        let id = self.next.fetch_add(1, Ordering::Relaxed);
-        if let Ok(line) = encode(id, method, params) {
-            self.send(line);
-        }
+        self.shared.notify(method, params);
     }
 
     /// Ends the conversation. Waiting calls fail with `closed`, and the plugin's stdin
     /// closes, which a plugin takes as the time to exit.
     pub fn close(&self, closed: Closed) {
         self.shared.shut(closed);
-        lock(&self.out).take();
+        lock(&self.shared.out).take();
     }
 
     pub fn closed(&self) -> Option<Closed> {
         lock(&self.shared.closed).clone()
-    }
-
-    fn send(&self, line: Vec<u8>) -> bool {
-        lock(&self.out)
-            .as_ref()
-            .is_some_and(|out| out.send(line).is_ok())
     }
 }
 
@@ -175,13 +183,18 @@ impl RpcClient {
 struct Waiting<'a> {
     client: &'a RpcClient,
     id: u64,
+    execute: bool,
     answered: bool,
 }
 
 impl Drop for Waiting<'_> {
     fn drop(&mut self) {
         if !self.answered {
-            lock(&self.client.shared.pending).remove(&self.id);
+            let shared = &self.client.shared;
+            if self.execute {
+                lock(&shared.abandoned).insert(self.id);
+            }
+            lock(&shared.pending).remove(&self.id);
             self.client
                 .notify(method::CANCEL_REQUEST, CancelRequest { id: self.id });
         }
@@ -219,6 +232,19 @@ fn read_replies(mut reader: impl BufRead, shared: &Shared) {
                             Some(error) => Err(CallError::Remote(error)),
                             None => Ok(response.result.unwrap_or(Value::Null)),
                         });
+                    } else if lock(&shared.abandoned).remove(&response.id)
+                        && let Some(cursor) = response
+                            .result
+                            .as_ref()
+                            .and_then(|result| result.get("cursor"))
+                            .and_then(Value::as_str)
+                    {
+                        shared.notify(
+                            method::QUERY_CLOSE,
+                            Cursor {
+                                cursor: cursor.to_string(),
+                            },
+                        );
                     }
                 }
                 Err(_) => {
