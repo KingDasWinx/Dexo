@@ -2,10 +2,14 @@
 
 pub mod archive;
 pub mod host;
+pub mod install;
 pub mod manifest;
 pub mod proxy;
 pub mod rpc;
+pub mod state;
 
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use dexo_driver_api::DriverDescriptor;
@@ -38,4 +42,86 @@ pub fn register_dev_overrides(registry: &DriverRegistry) {
             )));
         }
     }
+}
+
+/// A registered driver plugin's process, and the drivers it provides.
+type Registered = (Arc<host::PluginHost>, Vec<String>);
+
+/// The driver plugins registered in this process, by plugin id: what removing or
+/// disabling one stops.
+static HOSTS: Mutex<BTreeMap<String, Registered>> = Mutex::new(BTreeMap::new());
+
+pub fn plugins_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("plugins")
+}
+
+/// Registers installed plugin `id`'s drivers, when it is an enabled driver plugin.
+pub fn register(registry: &DriverRegistry, data_dir: &Path, id: &str) {
+    let plugins = plugins_dir(data_dir);
+    if !state::load(&plugins)
+        .plugins
+        .get(id)
+        .is_some_and(|installed| installed.enabled)
+    {
+        return;
+    }
+    let folder = plugins.join(id);
+    let Some(manifest) = manifest::read(&folder) else {
+        return;
+    };
+    let Some(driver) = &manifest.driver else {
+        return;
+    };
+    let Some(executable) = host::dev_override(id).or_else(|| manifest.executable(&folder)) else {
+        return;
+    };
+    let plugin = Arc::new(host::PluginHost::new(
+        driver.display_name.clone(),
+        driver.drivers.clone(),
+        host::process_spawner(executable),
+    ));
+    for descriptor in manifest.descriptors() {
+        registry.insert(Arc::new(proxy::PluginFactory::new(
+            descriptor,
+            plugin.clone(),
+        )));
+    }
+    let replaced = lock(&HOSTS).insert(id.to_string(), (plugin, driver.drivers.clone()));
+    if let Some((old, _)) = replaced {
+        old.stop("it was replaced");
+    }
+}
+
+/// Takes plugin `id`'s drivers out of the registry and stops its process, failing its
+/// open sessions with `why`.
+pub fn unregister(registry: &DriverRegistry, id: &str, why: &str) {
+    let removed = lock(&HOSTS).remove(id);
+    if let Some((plugin, drivers)) = removed {
+        for driver in &drivers {
+            registry.remove(driver);
+        }
+        plugin.stop(why);
+    }
+}
+
+/// What installing a plugin from outside the signed index means, said before it does.
+pub fn trust_text(manifest: &manifest::Manifest) -> String {
+    let authors = if manifest.authors.is_empty() {
+        "an unnamed author".to_string()
+    } else {
+        manifest.authors.join(", ")
+    };
+    let mut text = format!(
+        "{} {} ({}, id {}) by {authors} is not from Dexo's signed index: nothing vouches for it.",
+        manifest.name,
+        manifest.version,
+        manifest.kind.as_str(),
+        manifest.id
+    );
+    if manifest.kind == manifest::Kind::Driver {
+        text.push_str(
+            " It is a driver: this program will receive the passwords of the connections that use it.",
+        );
+    }
+    text
 }
