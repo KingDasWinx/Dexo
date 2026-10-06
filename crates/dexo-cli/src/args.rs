@@ -315,6 +315,9 @@ pub enum SessionsCommand {
 pub enum PluginCommand {
     /// List the installed plugins
     List {
+        /// The index's plugins that are not installed
+        #[arg(long)]
+        available: bool,
         #[arg(long)]
         json: bool,
     },
@@ -324,7 +327,7 @@ pub enum PluginCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Install from a .tar.gz or a plugin's folder; --trust confirms its source
+    /// Install by id from the signed index, or from a .tar.gz, URL or folder with --trust
     Install {
         source: String,
         #[arg(long)]
@@ -344,6 +347,17 @@ pub enum PluginCommand {
     Enable { id: String },
     /// Keep a plugin installed without registering its drivers and themes
     Disable { id: String },
+    /// Update a plugin from the index, or every one with --all
+    Update {
+        id: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
+    /// Check the installed plugins: files, executables, compatibility
+    Doctor {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

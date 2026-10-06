@@ -3,14 +3,16 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use dexo_plugin_protocol::PROTOCOL;
 use sha2::{Digest, Sha256};
 
 use super::host::{self, PluginHost};
+use super::index::{self, IndexSource};
 use super::manifest::{self, Manifest};
 use super::state::{self, Installed, Lock, Origin};
-use super::{archive, plugins_dir, register, unregister};
+use super::{archive, http, plugins_dir, register, unregister};
 use crate::driver_registry::DriverRegistry;
 use crate::error::{AppError, ErrorCategory};
 
@@ -335,4 +337,167 @@ pub(crate) fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
+}
+
+/// The most a plugin package may weigh.
+pub const DOWNLOAD_LIMIT: u64 = 256 * 1024 * 1024;
+
+/// Installs `id` from the signed index: the newest version this Dexo runs, or `version`.
+/// The download is checked against the index's size and sha256 before anything is
+/// unpacked, and the package against the index entry once it is.
+pub fn install_from_index(
+    data_dir: &Path,
+    source: &IndexSource,
+    id: &str,
+    version: Option<&str>,
+    registry: Option<&DriverRegistry>,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+    cancel: &AtomicBool,
+) -> Result<Manifest, AppError> {
+    let fetched = index::load(data_dir, source, false)?;
+    let choice = index::choose(
+        &fetched.index,
+        id,
+        version,
+        env!("CARGO_PKG_VERSION"),
+        index::target(),
+    )
+    .map_err(refused)?;
+    let artifact = choice.artifact;
+    let name = format!("{} {}", choice.plugin.name, choice.version.version);
+    if artifact.size > DOWNLOAD_LIMIT {
+        return Err(refused(format!(
+            "{name} is {} bytes, more than the 256 MB a plugin may be",
+            artifact.size
+        )));
+    }
+    let bytes = http::get(&artifact.url, artifact.size, progress, cancel).map_err(|error| {
+        if error == "cancelled" {
+            AppError::new(
+                ErrorCategory::Cancelled,
+                "the download was cancelled: nothing was installed",
+            )
+        } else {
+            AppError::new(
+                ErrorCategory::Network,
+                format!("{error}: nothing was installed"),
+            )
+        }
+    })?;
+    if bytes.len() as u64 != artifact.size {
+        return Err(refused(format!(
+            "the download of {name} is {} bytes and the index says {}: nothing was installed",
+            bytes.len(),
+            artifact.size
+        )));
+    }
+    if !hex(&Sha256::digest(&bytes)).eq_ignore_ascii_case(&artifact.sha256) {
+        return Err(refused(format!(
+            "the download of {name} does not match the index's checksum: nothing was installed"
+        )));
+    }
+    let staged = stage_bytes(data_dir, &bytes)?;
+    let manifest = &staged.manifest;
+    if manifest.id != choice.plugin.id
+        || manifest.version != choice.version.version
+        || manifest.kind != choice.plugin.kind
+    {
+        return Err(refused(format!(
+            "the package of {name} does not match its index entry: nothing was installed"
+        )));
+    }
+    commit(data_dir, staged, Origin::Official, registry)
+}
+
+/// Updates `id` to the newest version this Dexo runs; `Ok(None)` when it has it.
+pub fn upgrade(
+    data_dir: &Path,
+    source: &IndexSource,
+    id: &str,
+    registry: Option<&DriverRegistry>,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+    cancel: &AtomicBool,
+) -> Result<Option<Manifest>, AppError> {
+    let installed = state::load(&plugins_dir(data_dir))
+        .plugins
+        .get(id)
+        .cloned()
+        .ok_or_else(|| not_installed(id))?;
+    if installed.origin == Origin::Local {
+        return Err(refused(format!(
+            "{id} was installed from a file: install the newer file to update it"
+        )));
+    }
+    let fetched = index::load(data_dir, source, false)?;
+    let newest = index::choose(
+        &fetched.index,
+        id,
+        None,
+        env!("CARGO_PKG_VERSION"),
+        index::target(),
+    )
+    .map_err(refused)?
+    .version
+    .version
+    .clone();
+    if !crate::update::is_newer(&newest, &installed.version) {
+        return Ok(None);
+    }
+    install_from_index(
+        data_dir,
+        source,
+        id,
+        Some(&newest),
+        registry,
+        progress,
+        cancel,
+    )
+    .map(Some)
+}
+
+/// One installed plugin, checked.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Checkup {
+    pub id: String,
+    pub version: String,
+    pub problems: Vec<String>,
+}
+
+/// Each installed plugin checked: its files against the checksums taken when it was
+/// installed, whether this Dexo runs it, and an enabled driver's handshake.
+pub fn doctor(data_dir: &Path) -> Vec<Checkup> {
+    let plugins = plugins_dir(data_dir);
+    state::load(&plugins)
+        .plugins
+        .into_iter()
+        .map(|(id, installed)| {
+            let folder = plugins.join(&id);
+            let mut problems = Vec::new();
+            for (file, sha256) in &installed.files {
+                match std::fs::read(folder.join(file)) {
+                    Ok(bytes) if hex(&Sha256::digest(&bytes)) == *sha256 => {}
+                    Ok(_) => problems.push(format!("{file} was changed since it was installed")),
+                    Err(_) => problems.push(format!("{file} is missing")),
+                }
+            }
+            match manifest::read(&folder) {
+                None => problems.push("its dexo-plugin.toml cannot be read".into()),
+                Some(manifest) => {
+                    if crate::update::is_newer(&manifest.min_dexo, env!("CARGO_PKG_VERSION")) {
+                        problems.push(format!("it needs Dexo {} or newer", manifest.min_dexo));
+                    }
+                    if installed.enabled
+                        && let Err(error) = check_handshake(&manifest, &folder)
+                    {
+                        problems.push(error.to_string());
+                    }
+                }
+            }
+            Checkup {
+                id,
+                version: installed.version,
+                problems,
+            }
+        })
+        .collect()
 }

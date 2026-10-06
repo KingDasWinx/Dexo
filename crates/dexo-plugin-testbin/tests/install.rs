@@ -141,3 +141,63 @@ fn installed_driver_plugins_are_registered_at_start() {
     dexo_app::plugin::register_installed(&fresh, data.path());
     assert!(!fresh.has("testbin"));
 }
+
+#[test]
+fn a_driver_installs_from_the_signed_index() {
+    use std::sync::atomic::AtomicBool;
+
+    use dexo_app::plugin::index::{self, IndexSource};
+    use dexo_test_support::plugins::{HttpServer, TestKey, index_json, pack, version_entry};
+
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let bytes = pack(&driver_folder(
+        work.path(),
+        "testbin",
+        "1.0.0",
+        testbin(),
+        "plain",
+    ));
+    let server = HttpServer::start();
+    let key = TestKey::new();
+    let target = index::target().expect("a platform plugins are built for");
+    server.put("/testbin.tar.gz", bytes.clone());
+    let listed = index_json(&[(
+        "testbin",
+        "driver",
+        vec![version_entry(
+            "1.0.0",
+            "1.0.0",
+            target,
+            &server.url("/testbin.tar.gz"),
+            &bytes,
+            Some("testbin"),
+        )],
+    )]);
+    server.put("/index.json", listed.clone());
+    server.put("/index.json.minisig", key.sign(listed.as_bytes()));
+    let source = IndexSource {
+        url: server.url("/index.json"),
+        keys: vec![key.public()],
+    };
+    let never = AtomicBool::new(false);
+    let manifest = install::install_from_index(
+        data.path(),
+        &source,
+        "testbin",
+        None,
+        None,
+        &mut |_, _| {},
+        &never,
+    )
+    .unwrap();
+    assert_eq!(manifest.version, "1.0.0");
+    let plugins = data.path().join("plugins");
+    assert_eq!(
+        state::load(&plugins).plugins["testbin"].origin,
+        Origin::Official
+    );
+    let checkups = install::doctor(data.path());
+    assert!(checkups[0].problems.is_empty(), "{checkups:?}");
+}

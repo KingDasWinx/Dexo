@@ -125,8 +125,7 @@ pub fn run_dispatch(
 
 fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
     match command {
-        Command::Doctor { json: true } => println!(r#"{{"status":"ok"}}"#),
-        Command::Doctor { json: false } => println!("Dexo: ok"),
+        Command::Doctor { json } => crate::plugin::summary(json)?,
         Command::Connections { command } => run_connections(registry, command)?,
         Command::Plugin { command } => crate::plugin::run(command)?,
         Command::Completion { shell } => clap_complete::generate(

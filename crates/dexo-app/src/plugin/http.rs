@@ -42,10 +42,12 @@ pub fn get(
     if total.is_some_and(|total| total > limit) {
         return Err(format!("{url} is larger than the {limit} bytes expected"));
     }
+    // ureq refuses a body as long as its limit, not only a longer one: the cap is
+    // checked here, one byte past it.
     let mut reader = response
         .into_body()
         .into_with_config()
-        .limit(limit)
+        .limit(limit.saturating_add(1))
         .reader();
     let mut body = Vec::new();
     let mut chunk = vec![0u8; 64 * 1024];
@@ -60,6 +62,9 @@ pub fn get(
             return Ok(body);
         }
         body.extend_from_slice(&chunk[..read]);
+        if body.len() as u64 > limit {
+            return Err(format!("{url} is larger than the {limit} bytes expected"));
+        }
         progress(body.len() as u64, total);
     }
 }
