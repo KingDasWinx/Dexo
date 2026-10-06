@@ -2382,12 +2382,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::PluginWorkDone(done) => {
             model.plugins.busy = None;
-            // A theme pack added, changed or taken away changes the theme picker, and
-            // the theme in use when its pack went.
-            if let Ok(paths) = dexo_storage::AppPaths::discover() {
-                load_user_themes(model, &paths.data_dir);
-            }
-            match done {
+            let effects = match done {
                 Ok(message) => {
                     model.messages.info(message);
                     match model.plugins.then_connect.take() {
@@ -2400,7 +2395,13 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     model.messages.error(error);
                     Vec::new()
                 }
+            };
+            // A theme pack added, changed or taken away changes the theme picker, and
+            // the theme in use when its pack went: said after the outcome, so it shows.
+            if let Ok(paths) = dexo_storage::AppPaths::discover() {
+                load_user_themes(model, &paths.data_dir);
             }
+            effects
         }
         Action::PluginFileStaged(staged) => {
             if let Some(from_file) = model.plugins.from_file.as_mut() {
