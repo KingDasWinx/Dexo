@@ -243,8 +243,11 @@ fn install_source(
 ) -> anyhow::Result<()> {
     let path = Path::new(source);
     let never = AtomicBool::new(false);
-    if path.exists() || source.starts_with("http://") || source.starts_with("https://") {
-        let staged = if path.exists() {
+    // A bare id is the index's plugin, even with a file of that name here: `./name` is
+    // the file.
+    let local = !manifest::valid_id(source) && path.exists();
+    if local || source.starts_with("http://") || source.starts_with("https://") {
+        let staged = if local {
             install::stage(data_dir, path)?
         } else {
             let bytes = dexo_app::plugin::http::get(

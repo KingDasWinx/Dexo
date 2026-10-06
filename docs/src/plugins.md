@@ -48,6 +48,8 @@ dexo plugin install https://example.com/my-themes-1.0.0.tar.gz --trust
 dexo plugin install ./plugins/my-themes --trust     # a folder, for developing a plugin
 ```
 
+A bare name like `duckdb` is always the index's plugin: write `./duckdb` for a file or folder of that name here.
+
 Nothing vouches for a plugin that does not come from the index, so Dexo shows its id, author and kind before it goes on. A driver plugin is a program that **will receive the passwords of the connections that use it**. The command line installs one only with `--trust`; the Plugins screen (`f`) asks you to type the plugin's id. Such plugins are marked **local, not verified** everywhere.
 
 ## Where plugins live

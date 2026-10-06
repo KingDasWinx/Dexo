@@ -290,3 +290,18 @@ fn doctor_finds_a_changed_file_and_a_held_lock_refuses_an_install() {
         .failure()
         .stderr(contains("another Dexo is installing or removing plugins"));
 }
+
+#[test]
+fn a_file_named_like_a_plugin_does_not_hide_it() {
+    let home = tempfile::tempdir().unwrap();
+    let published = publish(home.path(), &[("1.0.0", "1.0.0")]);
+    let here = home.path().join("here");
+    std::fs::create_dir_all(&here).unwrap();
+    std::fs::write(here.join("pack"), "not a package").unwrap();
+    dexo_with(home.path(), &published)
+        .current_dir(&here)
+        .args(["plugin", "install", "pack"])
+        .assert()
+        .success()
+        .stdout(contains("Installed pack 1.0.0 (official, signed)"));
+}
