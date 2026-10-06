@@ -60,7 +60,7 @@ Under Dexo's data folder (`DEXO_DATA_HOME` moves it), in `plugins/`:
 - `index-cache.json` and `index-cache.json.minisig`: the last verified index;
 - one folder per plugin.
 
-An install unpacks into `plugins/.staging/` and moves into place at the end: a failure at any step leaves what was installed before. Two Dexos at once take turns through `plugins/.locks/`: a change to `state.json` waits a moment for the other's, and installing, updating or removing a plugin the other is busy with is refused until it is done.
+An install downloads and unpacks into `plugins/.staging/` and moves into place at the end: a failure at any step leaves what was installed before. Two Dexos at once take turns through `plugins/.locks/`: a change to `state.json` waits a moment for the other's, and installing, updating or removing a plugin the other is busy with is refused until it is done.
 
 ## A driver plugin's process
 

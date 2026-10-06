@@ -1,7 +1,7 @@
 //! Downloads over HTTPS with the system's certificates, on the calling thread: the TUI
 //! calls these on a blocking thread, so the screen never waits on the network.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender};
@@ -40,21 +40,35 @@ enum Got {
     Failed(String),
 }
 
-/// The body at `url`, at most `limit` bytes. `progress` hears the bytes read so far and
-/// the total when the server says it; `cancel` stops the download within a tenth of a
-/// second, and the error is then `"cancelled"`. A server silent for 20 seconds fails it.
+/// The body at `url`, at most `limit` bytes, in memory: for what is small.
 pub fn get(
     url: &str,
     limit: u64,
     progress: &mut dyn FnMut(u64, Option<u64>),
     cancel: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    get_into(url, limit, &mut body, progress, cancel)?;
+    Ok(body)
+}
+
+/// The body at `url`, at most `limit` bytes, written to `sink`; its length. `progress`
+/// hears the bytes written so far and the total when the server says it; `cancel` stops
+/// the download within a tenth of a second, and the error is then `"cancelled"`. A
+/// server silent for 20 seconds fails it.
+pub fn get_into(
+    url: &str,
+    limit: u64,
+    sink: &mut dyn Write,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+    cancel: &AtomicBool,
+) -> Result<u64, String> {
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let reading = url.to_string();
     // A blocked read cannot be interrupted: it is left to its thread, which ends with
     // the agent's timeout when nobody waits for it.
     std::thread::spawn(move || read(&reading, limit, &tx));
-    let mut body = Vec::new();
+    let mut written = 0u64;
     let mut total = None;
     let mut last = Instant::now();
     loop {
@@ -69,13 +83,15 @@ pub fn get(
                 total = length;
             }
             Ok(Got::Bytes(bytes)) => {
-                body.extend_from_slice(&bytes);
-                if body.len() as u64 > limit {
+                written += bytes.len() as u64;
+                if written > limit {
                     return Err(format!("{url} is larger than the {limit} bytes expected"));
                 }
-                progress(body.len() as u64, total);
+                sink.write_all(&bytes)
+                    .map_err(|error| format!("{url} could not be kept: {error}"))?;
+                progress(written, total);
             }
-            Ok(Got::End) => return Ok(body),
+            Ok(Got::End) => return Ok(written),
             Ok(Got::Failed(error)) => return Err(error),
             Err(RecvTimeoutError::Timeout) if last.elapsed() < STALL => continue,
             Err(RecvTimeoutError::Timeout) => {

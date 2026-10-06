@@ -250,14 +250,7 @@ fn install_source(
         let staged = if local {
             install::stage(data_dir, path)?
         } else {
-            let bytes = dexo_app::plugin::http::get(
-                source,
-                install::DOWNLOAD_LIMIT,
-                &mut progress(source),
-                &never,
-            )
-            .map_err(anyhow::Error::msg)?;
-            install::stage_bytes(data_dir, &bytes)?
+            install::stage_url(data_dir, source, &mut progress(source), &never)?
         };
         trust_or_refuse(&staged.manifest, trust)?;
         let manifest = install::commit(data_dir, staged, Origin::Local, None)?;

@@ -170,3 +170,64 @@ fn a_signed_index_older_than_the_one_kept_is_refused() {
         "{error}"
     );
 }
+
+#[test]
+fn a_download_is_written_into_staging_not_held_in_memory() {
+    use dexo_app::plugin::install;
+    use dexo_test_support::plugins::{index_json, pack, theme_folder, version_entry};
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let bytes = pack(&theme_folder(work.path(), "pack", "1.0.0"));
+    let server = HttpServer::start();
+    server.put("/pack-1.0.0.tar.gz", bytes.clone());
+    let index = index_json(&[(
+        "pack",
+        "theme",
+        vec![version_entry(
+            "1.0.0",
+            "1.0.0",
+            "any",
+            &server.url("/pack-1.0.0.tar.gz"),
+            &bytes,
+            None,
+        )],
+    )]);
+    let key = TestKey::new();
+    server.put("/index.json", index.as_str());
+    server.put("/index.json.minisig", key.sign(index.as_bytes()));
+    let source = IndexSource {
+        url: server.url("/index.json"),
+        keys: vec![key.public()],
+    };
+    let staging = data.path().join("plugins/.staging");
+    let mut on_disk = 0u64;
+    install::install_from_index(
+        data.path(),
+        &source,
+        "pack",
+        None,
+        None,
+        &mut |_, _| {
+            let written = std::fs::read_dir(&staging)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|entry| std::fs::metadata(entry.path().join("package.tar.gz")).ok())
+                .map(|metadata| metadata.len())
+                .max()
+                .unwrap_or(0);
+            on_disk = on_disk.max(written);
+        },
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert!(
+        on_disk > 0,
+        "nothing was written to staging while downloading"
+    );
+    assert_eq!(
+        std::fs::read_dir(&staging).unwrap().count(),
+        0,
+        "the download is left in staging"
+    );
+}

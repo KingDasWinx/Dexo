@@ -71,8 +71,9 @@ pub fn stage(data_dir: &Path, source: &Path) -> Result<Staged, AppError> {
         copy_package(source, &dir.0)?;
         return finish_stage(data_dir, dir, None);
     }
-    let unreadable = |error: std::io::Error| refused(format!("{}: {error}", source.display()));
-    let size = std::fs::metadata(source).map_err(unreadable)?.len();
+    let size = std::fs::metadata(source)
+        .map_err(|error| refused(format!("{}: {error}", source.display())))?
+        .len();
     if size > DOWNLOAD_LIMIT {
         return Err(refused(format!(
             "{} is larger than a plugin may be ({} MB)",
@@ -80,14 +81,68 @@ pub fn stage(data_dir: &Path, source: &Path) -> Result<Staged, AppError> {
             DOWNLOAD_LIMIT / (1024 * 1024)
         )));
     }
-    let bytes = std::fs::read(source).map_err(unreadable)?;
-    stage_bytes(data_dir, &bytes)
+    let sha256 = hash_file(source)?;
+    stage_package(data_dir, source, sha256)
 }
 
-pub fn stage_bytes(data_dir: &Path, bytes: &[u8]) -> Result<Staged, AppError> {
+/// Downloads a package from `url` into staging, then stages it: never whole in memory.
+pub fn stage_url(
+    data_dir: &Path,
+    url: &str,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+    cancel: &AtomicBool,
+) -> Result<Staged, AppError> {
+    let (download, _) = download(data_dir, url, DOWNLOAD_LIMIT, progress, cancel)?;
+    let package = download.0.join(PACKAGE);
+    stage_package(data_dir, &package, hash_file(&package)?)
+}
+
+/// What a download is kept as in its staging folder.
+const PACKAGE: &str = "package.tar.gz";
+
+/// `url` written to `.staging/download-*/package.tar.gz`, and its length; the folder
+/// goes when the guard is dropped.
+fn download(
+    data_dir: &Path,
+    url: &str,
+    limit: u64,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+    cancel: &AtomicBool,
+) -> Result<(Staging, u64), AppError> {
+    let dir = staging(&plugins_dir(data_dir), "download")?;
+    let mut file = std::fs::File::create(dir.0.join(PACKAGE))
+        .map_err(|error| storage("the download", error))?;
+    let size = http::get_into(url, limit, &mut file, progress, cancel).map_err(|error| {
+        if error == "cancelled" {
+            AppError::new(
+                ErrorCategory::Cancelled,
+                "the download was cancelled: nothing was installed",
+            )
+        } else {
+            AppError::new(
+                ErrorCategory::Network,
+                format!("{error}: nothing was installed"),
+            )
+        }
+    })?;
+    Ok((dir, size))
+}
+
+fn hash_file(path: &Path) -> Result<String, AppError> {
+    let unreadable = |error: std::io::Error| refused(format!("{}: {error}", path.display()));
+    let mut file = std::fs::File::open(path).map_err(unreadable)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(unreadable)?;
+    Ok(hex(&hasher.finalize()))
+}
+
+/// Unpacks the package at `path`, read as it goes, into staging.
+fn stage_package(data_dir: &Path, path: &Path, sha256: String) -> Result<Staged, AppError> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| refused(format!("{}: {error}", path.display())))?;
     let dir = staging(&plugins_dir(data_dir), "package")?;
-    archive::unpack(bytes, &dir.0).map_err(refused)?;
-    finish_stage(data_dir, dir, Some(hex(&Sha256::digest(bytes))))
+    archive::unpack(std::io::BufReader::new(file), &dir.0).map_err(refused)?;
+    finish_stage(data_dir, dir, Some(sha256))
 }
 
 fn finish_stage(data_dir: &Path, dir: Staging, sha256: Option<String>) -> Result<Staged, AppError> {
@@ -404,32 +459,22 @@ pub fn install_from_index(
             artifact.size
         )));
     }
-    let bytes = http::get(&artifact.url, artifact.size, progress, cancel).map_err(|error| {
-        if error == "cancelled" {
-            AppError::new(
-                ErrorCategory::Cancelled,
-                "the download was cancelled: nothing was installed",
-            )
-        } else {
-            AppError::new(
-                ErrorCategory::Network,
-                format!("{error}: nothing was installed"),
-            )
-        }
-    })?;
-    if bytes.len() as u64 != artifact.size {
+    let (download, size) = download(data_dir, &artifact.url, artifact.size, progress, cancel)?;
+    if size != artifact.size {
         return Err(refused(format!(
-            "the download of {name} is {} bytes and the index says {}: nothing was installed",
-            bytes.len(),
+            "the download of {name} is {size} bytes and the index says {}: nothing was installed",
             artifact.size
         )));
     }
-    if !hex(&Sha256::digest(&bytes)).eq_ignore_ascii_case(&artifact.sha256) {
+    let package = download.0.join(PACKAGE);
+    let sha256 = hash_file(&package)?;
+    if !sha256.eq_ignore_ascii_case(&artifact.sha256) {
         return Err(refused(format!(
             "the download of {name} does not match the index's checksum: nothing was installed"
         )));
     }
-    let staged = stage_bytes(data_dir, &bytes)?;
+    let staged = stage_package(data_dir, &package, sha256)?;
+    drop(download);
     let manifest = &staged.manifest;
     if manifest.id != choice.plugin.id
         || manifest.version != choice.version.version
