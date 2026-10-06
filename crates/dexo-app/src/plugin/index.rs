@@ -340,7 +340,9 @@ pub fn announce_available(index: &Index) {
             continue;
         };
         for id in &driver.drivers {
-            if DriverDescriptor::for_id(id).is_some_and(|known| known.installed) {
+            if !DriverDescriptor::may_provide(&plugin.id, id)
+                || DriverDescriptor::for_id(id).is_some_and(|known| known.installed)
+            {
                 continue;
             }
             DriverDescriptor::announce(DriverDescriptor::plugin_driver(
@@ -384,6 +386,15 @@ mod tests {
                 },
             )]),
         }
+    }
+
+    #[test]
+    fn an_index_plugin_cannot_claim_a_driver_dexo_knows_as_another_plugins() {
+        let mut lookalike = index(vec![version("1.0.0", "1.0.0", 1)]);
+        lookalike.plugins[0].id = "lookalike".into();
+        super::announce_available(&lookalike);
+        let duckdb = dexo_driver_api::DriverDescriptor::for_id("duckdb").unwrap();
+        assert_eq!(duckdb.plugin.as_deref(), Some("duckdb"));
     }
 
     fn index(versions: Vec<IndexVersion>) -> Index {

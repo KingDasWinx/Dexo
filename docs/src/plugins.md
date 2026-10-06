@@ -106,7 +106,7 @@ executable = "bin/dexo-driver-duckdb"   # .exe is added on Windows
 # themes = ["themes/*.toml"]
 ```
 
-An unknown key is an error. A theme file takes the format of [a theme of your own](workbench.md); a plugin's theme is saved in the settings as `plugin:<id>/<name>`.
+An unknown key is an error, and so is a driver id Dexo has as its own (`postgres`, `mysql`, `mariadb`, `sqlite`), `duckdb` from any plugin but `duckdb`, or one another installed plugin brings: a plugin never takes over another driver's connections. A theme file takes the format of [a theme of your own](workbench.md); a plugin's theme is saved in the settings as `plugin:<id>/<name>`.
 
 ## Writing a driver plugin
 

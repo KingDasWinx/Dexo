@@ -143,6 +143,15 @@ impl Manifest {
                 if driver.drivers.is_empty() || !driver.drivers.iter().all(|id| valid_id(id)) {
                     return fail("[driver] drivers must name at least one driver id".into());
                 }
+                if let Some(id) = driver
+                    .drivers
+                    .iter()
+                    .find(|id| !DriverDescriptor::may_provide(&self.id, id))
+                {
+                    return fail(format!(
+                        "[driver] '{id}' is a driver Dexo has as its own or another plugin's"
+                    ));
+                }
                 let executable = &driver.executable;
                 if !executable.starts_with("bin/")
                     || executable.matches('/').count() != 1
@@ -319,6 +328,16 @@ themes = ["themes/*.toml"]
             (
                 THEME.replace("themes/*.toml", "colors/a.toml"),
                 "themes must be files under themes/",
+            ),
+            // Dexo's own drivers, and one Dexo knows as another plugin's, are not a
+            // plugin's to bring: it would receive their connections' passwords.
+            (
+                DRIVER.replace("drivers = [\"duckdb\"]", "drivers = [\"postgres\"]"),
+                "'postgres' is a driver Dexo has as its own or another plugin's",
+            ),
+            (
+                DRIVER.replace("id = \"duckdb\"", "id = \"lookalike\""),
+                "'duckdb' is a driver Dexo has as its own or another plugin's",
             ),
         ];
         for (text, expected) in cases {

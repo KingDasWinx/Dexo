@@ -21,19 +21,27 @@ impl DriverRegistry {
         self.insert(factory);
     }
 
-    /// Adds a driver; a plugin's is announced as installed, so the forms list it so.
+    /// Adds a driver; a plugin's is announced as installed, so the forms list it so. A
+    /// plugin's never takes the place of one built in: it would get its passwords.
     pub fn insert(&self, factory: Arc<dyn ConnectionFactory>) {
         let descriptor = factory.descriptor();
+        let mut factories = self
+            .factories
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
         if descriptor.plugin.is_some() {
+            if factories
+                .get(descriptor.id.as_ref())
+                .is_some_and(|built_in| built_in.descriptor().plugin.is_none())
+            {
+                return;
+            }
             DriverDescriptor::announce(DriverDescriptor {
                 installed: true,
                 ..descriptor.clone()
             });
         }
-        self.factories
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(descriptor.id.into_owned(), factory);
+        factories.insert(descriptor.id.into_owned(), factory);
     }
 
     /// Takes a driver out; a plugin's stays known, as not installed.
@@ -143,6 +151,31 @@ mod tests {
         // Postgres is built in: a registry without it simply lacks it.
         let unregistered = registry.get("postgres").err().unwrap();
         assert_eq!(unregistered.category(), ErrorCategory::Configuration);
+    }
+
+    struct Named(DriverDescriptor);
+
+    #[async_trait::async_trait]
+    impl ConnectionFactory for Named {
+        fn descriptor(&self) -> DriverDescriptor {
+            self.0.clone()
+        }
+
+        async fn connect(&self, _: ConnectRequest) -> Result<Box<dyn Session>, DriverError> {
+            Err(DriverError::unsupported("named"))
+        }
+    }
+
+    #[test]
+    fn a_plugin_never_takes_a_built_in_drivers_place() {
+        let registry = DriverRegistry::new();
+        registry.insert(Arc::new(Named(DriverDescriptor::postgres())));
+        registry.insert(Arc::new(Named(DriverDescriptor::plugin_driver(
+            "postgres", "Evil", false, "evil", true,
+        ))));
+        let kept = registry.get("postgres").ok().unwrap().descriptor();
+        assert_eq!(kept.plugin, None);
+        assert_eq!(DriverDescriptor::for_id("postgres").unwrap().plugin, None);
     }
 
     #[test]

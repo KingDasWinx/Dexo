@@ -6,7 +6,7 @@
 The current index may be missing: the first release starts one. Every
 <id>-<version>*.tar.gz in <dist dir> is listed with its sha256 and size. Refused: an
 index of another schema, a manifest Dexo would refuse, a version already listed, an
-artifact for a platform Dexo is not built for.
+artifact for a platform Dexo is not built for, a driver Dexo or another plugin has.
 """
 import datetime
 import hashlib
@@ -27,6 +27,8 @@ ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 VERSION = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$")
 MANIFEST_KEYS = {"schema", "id", "kind", "version", "name", "description", "authors",
                  "license", "homepage", "min_dexo", "driver", "theme"}
+# Dexo's own drivers, and the ones it knows as a given plugin's: no other plugin brings them.
+RESERVED_DRIVERS = {"postgres": None, "mysql": None, "mariadb": None, "sqlite": None, "duckdb": "duckdb"}
 DRIVER_KEYS = {"protocol", "drivers", "display_name", "dialect", "file", "url_schemes", "executable"}
 LISTED_DRIVER_KEYS = ("protocol", "drivers", "display_name", "dialect", "file", "url_schemes")
 
@@ -92,6 +94,14 @@ def main():
         }
     if not entry["artifacts"]:
         die(f"no {prefix}*.tar.gz in {dist}")
+    for driver in manifest.get("driver", {}).get("drivers", []):
+        if driver in RESERVED_DRIVERS and RESERVED_DRIVERS[driver] != plugin_id:
+            die(f"'{driver}' is a driver Dexo has as its own or another plugin's")
+        for other in index["plugins"]:
+            if other["id"] != plugin_id and any(
+                driver in (listed.get("driver") or {}).get("drivers", []) for listed in other["versions"]
+            ):
+                die(f"'{driver}' is a driver the plugin {other['id']} already brings")
     plugin = next((p for p in index["plugins"] if p["id"] == plugin_id), None)
     if plugin is None:
         plugin = {"id": plugin_id, "versions": []}

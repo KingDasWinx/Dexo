@@ -126,9 +126,14 @@ impl DriverDescriptor {
         }
     }
 
-    /// Makes `descriptor` known, in place of a built-in or an earlier announcement with
-    /// its id.
+    /// Makes `descriptor` known, in place of an earlier announcement with its id; a
+    /// plugin's in place of a built-in one only when it is that plugin's to bring.
     pub fn announce(descriptor: Self) {
+        if let Some(plugin) = &descriptor.plugin
+            && !Self::may_provide(plugin, &descriptor.id)
+        {
+            return;
+        }
         let mut announced = ANNOUNCED.write().unwrap_or_else(PoisonError::into_inner);
         announced.retain(|known| known.id != descriptor.id);
         announced.push(descriptor);
@@ -141,6 +146,25 @@ impl DriverDescriptor {
             .retain(|known| known.id != id);
     }
 
+    /// The drivers Dexo is built knowing, in the order the form lists them.
+    fn built_in() -> [Self; 5] {
+        [
+            Self::postgres(),
+            Self::mysql(),
+            Self::mariadb(),
+            Self::sqlite(),
+            Self::duckdb(),
+        ]
+    }
+
+    /// Whether plugin `plugin` may bring driver `id`: not one Dexo has as its own, nor
+    /// one it knows as another plugin's. The plugin would receive its passwords.
+    pub fn may_provide(plugin: &str, id: &str) -> bool {
+        Self::built_in()
+            .iter()
+            .all(|known| known.id != id || known.plugin.as_deref() == Some(plugin))
+    }
+
     /// Every driver Dexo knows: the built-in ones in the order the form lists them, each
     /// as announced when it was, then the other announced ones by name.
     pub fn known() -> Vec<Self> {
@@ -148,22 +172,16 @@ impl DriverDescriptor {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let mut known: Vec<Self> = [
-            Self::postgres(),
-            Self::mysql(),
-            Self::mariadb(),
-            Self::sqlite(),
-            Self::duckdb(),
-        ]
-        .into_iter()
-        .map(|builtin| {
-            announced
-                .iter()
-                .find(|found| found.id == builtin.id)
-                .cloned()
-                .unwrap_or(builtin)
-        })
-        .collect();
+        let mut known: Vec<Self> = Self::built_in()
+            .into_iter()
+            .map(|builtin| {
+                announced
+                    .iter()
+                    .find(|found| found.id == builtin.id)
+                    .cloned()
+                    .unwrap_or(builtin)
+            })
+            .collect();
         let mut rest: Vec<Self> = announced
             .into_iter()
             .filter(|found| !known.iter().any(|builtin| builtin.id == found.id))

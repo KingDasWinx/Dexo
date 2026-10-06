@@ -234,7 +234,7 @@ fn the_trust_prompt_asks_for_the_plugin_id() {
         staged: Some(StagedInfo {
             token: 1,
             id: "lake".into(),
-            trust: "Lake 1.0.0 (driver, id lake) by someone is not from Dexo's signed index: nothing vouches for it. It is a driver: this program will receive the passwords of the connections that use it.".into(),
+            trust: "Lake 1.0.0 (driver, id lake) by someone is not from Dexo's signed index: nothing vouches for it. It brings the driver lake: this program will receive the passwords of the connections that use it.".into(),
         }),
         ..Default::default()
     });

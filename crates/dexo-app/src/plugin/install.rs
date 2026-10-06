@@ -69,7 +69,7 @@ pub fn stage(data_dir: &Path, source: &Path) -> Result<Staged, AppError> {
     if source.is_dir() {
         let dir = staging(&plugins_dir(data_dir), "local")?;
         copy_package(source, &dir.0)?;
-        return finish_stage(dir, None);
+        return finish_stage(data_dir, dir, None);
     }
     let bytes =
         std::fs::read(source).map_err(|error| refused(format!("{}: {error}", source.display())))?;
@@ -79,10 +79,10 @@ pub fn stage(data_dir: &Path, source: &Path) -> Result<Staged, AppError> {
 pub fn stage_bytes(data_dir: &Path, bytes: &[u8]) -> Result<Staged, AppError> {
     let dir = staging(&plugins_dir(data_dir), "package")?;
     archive::unpack(bytes, &dir.0).map_err(refused)?;
-    finish_stage(dir, Some(hex(&Sha256::digest(bytes))))
+    finish_stage(data_dir, dir, Some(hex(&Sha256::digest(bytes))))
 }
 
-fn finish_stage(dir: Staging, sha256: Option<String>) -> Result<Staged, AppError> {
+fn finish_stage(data_dir: &Path, dir: Staging, sha256: Option<String>) -> Result<Staged, AppError> {
     let text = std::fs::read_to_string(dir.0.join("dexo-plugin.toml"))
         .map_err(|_| refused("the package has no dexo-plugin.toml"))?;
     let manifest = manifest::parse(&text).map_err(refused)?;
@@ -102,11 +102,32 @@ fn finish_stage(dir: Staging, sha256: Option<String>) -> Result<Staged, AppError
             manifest.name, driver.protocol
         )));
     }
+    if let Some((other, driver)) = brought_elsewhere(data_dir, &manifest) {
+        return Err(refused(format!(
+            "the plugin {other} already brings the driver '{driver}'"
+        )));
+    }
     Ok(Staged {
         manifest,
         sha256,
         dir,
     })
+}
+
+/// A driver `manifest` brings that another installed plugin brings already, and that
+/// plugin: two would take each other's connections.
+fn brought_elsewhere(data_dir: &Path, manifest: &Manifest) -> Option<(String, String)> {
+    let mine = &manifest.driver.as_ref()?.drivers;
+    let plugins = plugins_dir(data_dir);
+    state::load(&plugins)
+        .plugins
+        .into_keys()
+        .filter(|other| *other != manifest.id)
+        .find_map(|other| {
+            let theirs = manifest::read(&plugins.join(&other))?.driver?.drivers;
+            let driver = mine.iter().find(|driver| theirs.contains(driver))?.clone();
+            Some((other, driver))
+        })
 }
 
 /// Copies a plugin's folder by the rules a package's files follow: no links, nothing a

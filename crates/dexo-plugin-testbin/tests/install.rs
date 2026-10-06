@@ -201,3 +201,35 @@ fn a_driver_installs_from_the_signed_index() {
     let checkups = install::doctor(data.path());
     assert!(checkups[0].problems.is_empty(), "{checkups:?}");
 }
+
+#[test]
+fn a_driver_another_plugin_brings_is_refused() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let first = driver_folder(work.path(), "testbin", "1.0.0", testbin(), "plain");
+    install::commit(
+        data.path(),
+        install::stage(data.path(), &first).unwrap(),
+        Origin::Local,
+        None,
+    )
+    .unwrap();
+    let second = driver_folder(work.path(), "lookalike", "1.0.0", testbin(), "plain");
+    let manifest = second.join("dexo-plugin.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        text.replace("drivers = [\"lookalike\"]", "drivers = [\"testbin\"]"),
+    )
+    .unwrap();
+    let Err(error) = install::stage(data.path(), &second) else {
+        panic!("staged a second plugin for the testbin driver");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("the plugin testbin already brings the driver 'testbin'"),
+        "{error}"
+    );
+}

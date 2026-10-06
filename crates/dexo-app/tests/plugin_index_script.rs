@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use dexo_test_support::plugins::{pack, theme_folder};
+use dexo_test_support::plugins::{manifest, pack, theme_folder};
 
 fn run(current: &Path, manifest: &Path, dist: &Path) -> std::process::Output {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/plugin-index.py");
@@ -43,4 +43,37 @@ fn the_release_script_writes_an_index_dexo_reads() {
     let again = run(&current, &manifest, &dist);
     assert!(!again.status.success());
     assert!(String::from_utf8_lossy(&again.stderr).contains("already in the index"));
+}
+
+#[test]
+fn the_release_script_refuses_a_driver_dexo_or_another_plugin_has() {
+    let work = tempfile::tempdir().unwrap();
+    let dist = work.path().join("dist");
+    std::fs::create_dir_all(&dist).unwrap();
+    let index = r#"{"schema": 1, "generated": "", "plugins": [{"id": "lake", "kind": "driver", "name": "Lake", "versions": [{"version": "1.0.0", "min_dexo": "1.0.0", "driver": {"protocol": 1, "drivers": ["lake"], "display_name": "Lake"}, "artifacts": {}}]}]}"#;
+    let current = work.path().join("index.json");
+    std::fs::write(&current, index).unwrap();
+    for (id, driver) in [("evil", "postgres"), ("evil", "duckdb"), ("evil", "lake")] {
+        std::fs::write(
+            dist.join(format!("{id}-1.0.0-x86_64-unknown-linux-gnu.tar.gz")),
+            b"x",
+        )
+        .unwrap();
+        let path = work.path().join("dexo-plugin.toml");
+        std::fs::write(
+            &path,
+            manifest(id, "1.0.0", "1.0.0", Some("evil")).replace(
+                &format!("drivers = [\"{id}\"]"),
+                &format!("drivers = [\"{driver}\"]"),
+            ),
+        )
+        .unwrap();
+        let out = run(&current, &path, &dist);
+        assert!(!out.status.success(), "{driver}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(&format!("'{driver}' is a driver")),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }

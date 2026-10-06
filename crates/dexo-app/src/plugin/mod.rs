@@ -121,10 +121,15 @@ pub fn trust_text(manifest: &manifest::Manifest) -> String {
         manifest.kind.as_str(),
         manifest.id
     );
-    if manifest.kind == manifest::Kind::Driver {
-        text.push_str(
-            " It is a driver: this program will receive the passwords of the connections that use it.",
-        );
+    if let Some(driver) = &manifest.driver {
+        let (noun, drivers) = match driver.drivers.as_slice() {
+            [one] => ("driver", one.clone()),
+            many => ("drivers", many.join(", ")),
+        };
+        text.push_str(&format!(
+            " It brings the {noun} {drivers}: this program will receive the passwords of the connections that use {}.",
+            if driver.drivers.len() == 1 { "it" } else { "them" }
+        ));
     }
     text
 }
@@ -152,4 +157,33 @@ pub fn theme_dirs(data_dir: &Path) -> Vec<(String, PathBuf)> {
             (id, themes)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_trust_prompt_names_the_drivers_a_plugin_brings() {
+        let manifest = super::manifest::parse(
+            r#"
+schema = 1
+id = "lake"
+kind = "driver"
+version = "1.0.0"
+name = "Lake"
+min_dexo = "1.0.0"
+
+[driver]
+protocol = 1
+drivers = ["lake", "lakehouse"]
+display_name = "Lake"
+executable = "bin/lake"
+"#,
+        )
+        .unwrap();
+        let text = super::trust_text(&manifest);
+        assert!(
+            text.contains("It brings the drivers lake, lakehouse: this program will receive the passwords of the connections that use them."),
+            "{text}"
+        );
+    }
 }

@@ -9,8 +9,8 @@ expression: shown
 │                                                ││>                                                                   │
 │> ↑ DuckDB  driver  1.0.0                       ││                                                                    │
 │  ○ Mine    theme   0.1.0  local                ││Lake 1.0.0 (driver, id lake) by someone is not from Dexo's signed   │
-│                                                ││index: nothing vouches for it. It is a driver: this program will    │
-│                                                ││receive the passwords of the connections that use it.               │
+│                                                ││index: nothing vouches for it. It brings the driver lake: this      │
+│                                                ││program will receive the passwords of the connections that use it.  │
 │                                                ││                                                                    │
 │                                                ││Type lake to install it:                                            │
 │                                                ││>                                                                   │
