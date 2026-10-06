@@ -12,6 +12,7 @@ async-trait.workspace = true
 dexo-driver-api = { path = "../dexo-driver-api" }
 flate2 = "1.1"
 futures-util = "0.3"
+minisign = "0.7"
 serde_json.workspace = true
 sha2.workspace = true
 tar = "0.4.46"

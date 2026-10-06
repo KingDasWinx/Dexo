@@ -2,7 +2,10 @@
 
 pub mod archive;
 pub mod host;
+pub mod http;
+pub mod index;
 pub mod install;
+pub mod keys;
 pub mod manifest;
 pub mod proxy;
 pub mod rpc;

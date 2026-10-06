@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 dexo-driver-api = { path = "../dexo-driver-api" }
 dexo-plugin-protocol = { path = "../dexo-plugin-protocol" }
 dexo-runtime = { path = "../dexo-runtime" }
@@ -23,6 +24,9 @@ tokio-util.workspace = true
 toml.workspace = true
 toml_edit = "0.25.13"
 indexmap = { version = "2.14", features = ["serde"] }
+minisign-verify = "0.2"
+rustls = "0.23.43"
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
 uuid.workspace = true
 sha2.workspace = true
 csv.workspace = true
