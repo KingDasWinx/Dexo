@@ -89,7 +89,10 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             "Install from file".to_string(),
             from_file_lines(model, from_file, text_width),
         ),
-        (None, Some(_), Some(row)) => (format!("Remove {}?", row.name), removal_lines(row)),
+        (None, Some(_), Some(row)) => (
+            format!("Remove {}?", row.name),
+            removal_lines(row, text_width),
+        ),
         (None, _, Some(row)) => (
             row.name.clone(),
             detail_lines(model, row, detail.width.saturating_sub(2)),
@@ -243,16 +246,19 @@ fn detail_lines(model: &Model, row: &PluginRow, width: u16) -> Vec<Line<'static>
     widgets::field_lines(model, &fields, width)
 }
 
-fn removal_lines(row: &PluginRow) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::raw(format!("Remove {} and its files?", row.name))];
+fn removal_lines(row: &PluginRow, width: usize) -> Vec<Line<'static>> {
+    let mut text = vec![format!("Remove {} and its files?", row.name)];
     if row.kind == Kind::Driver {
-        lines.push(Line::raw(
-            "Connections that use its driver stay saved, and say it is not installed.",
-        ));
+        text.push(
+            "Connections that use its driver stay saved, and say it is not installed.".into(),
+        );
     }
-    lines.push(Line::default());
-    lines.push(Line::raw("Enter removes it, Esc keeps it."));
-    lines
+    text.push(String::new());
+    text.push("Enter removes it, Esc keeps it.".into());
+    text.iter()
+        .flat_map(|line| crate::model::wrap_words(line, width.max(20)))
+        .map(Line::raw)
+        .collect()
 }
 
 fn from_file_lines(model: &Model, from_file: &FromFile, width: usize) -> Vec<Line<'static>> {

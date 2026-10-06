@@ -378,3 +378,14 @@ fn a_small_download_is_said_in_kilobytes() {
     let shown = paint(&mut model, 120, 30);
     assert!(shown.contains("download   5 KB"), "{shown}");
 }
+
+#[test]
+fn the_removal_question_wraps_in_a_narrow_pane() {
+    let mut model = screen();
+    press(&mut model, KeyCode::Char('x'));
+    let shown = paint(&mut model, 70, 24);
+    assert!(
+        shown.contains("say it is not ") && shown.contains("│installed."),
+        "{shown}"
+    );
+}
