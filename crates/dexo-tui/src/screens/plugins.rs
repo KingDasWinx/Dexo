@@ -212,6 +212,7 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     if model.plugins.busy.is_some() && key.code == KeyCode::Esc {
         return Some(vec![Effect::CancelPluginWork]);
     }
+
     if model.plugins.search.typing && model.plugins.search.key(key) {
         model.plugins.selected = 0;
         return Some(Vec::new());
@@ -279,6 +280,19 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     Some(Vec::new())
 }
 
+/// Why a plugin job waits: one runs at a time, or a second would take the first's
+/// progress and its outcome.
+pub const WAIT: &str = "Wait for the plugin's work to finish; Esc cancels a download.";
+
+/// Whether a plugin job runs, said when it does.
+pub fn still_running(model: &mut Model) -> bool {
+    if model.plugins.busy.is_none() {
+        return false;
+    }
+    model.messages.warn(WAIT.into());
+    true
+}
+
 fn install(model: &mut Model, upgrade: bool) -> Vec<Effect> {
     let Some(row) = model.plugins.picked() else {
         return Vec::new();
@@ -303,16 +317,28 @@ fn toggle(model: &mut Model) -> Vec<Effect> {
     let Some(installed) = &row.installed else {
         return Vec::new();
     };
-    vec![Effect::SetPluginEnabled {
-        id: row.id.clone(),
-        enabled: !installed.enabled,
-    }]
+    let (id, enabled) = (row.id.clone(), !installed.enabled);
+    model.plugins.busy = Some(Busy {
+        id: id.clone(),
+        verb: if enabled { "Enabling" } else { "Disabling" },
+        done: 0,
+        total: None,
+    });
+    vec![Effect::SetPluginEnabled { id, enabled }]
 }
 
 fn removal_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Enter => match model.plugins.removing.take() {
-            Some(id) => vec![Effect::RemovePlugin { id }],
+            Some(id) => {
+                model.plugins.busy = Some(Busy {
+                    id: id.clone(),
+                    verb: "Removing",
+                    done: 0,
+                    total: None,
+                });
+                vec![Effect::RemovePlugin { id }]
+            }
             None => Vec::new(),
         },
         KeyCode::Esc => {

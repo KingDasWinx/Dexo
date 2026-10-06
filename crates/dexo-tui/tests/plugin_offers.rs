@@ -166,3 +166,26 @@ fn a_disabled_plugins_driver_offers_to_enable_it() {
     assert!(model.plugins.then_connect.is_some());
     DriverDescriptor::withdraw("pond");
 }
+
+#[test]
+fn an_offer_accepted_while_a_plugin_job_runs_waits() {
+    DriverDescriptor::announce(DriverDescriptor::plugin_driver(
+        "brook", "Brook", true, "brook", false,
+    ));
+    let mut model = Model::default();
+    model.apply_size(120, 36);
+    model.plugins.busy = Some(dexo_tui::screens::plugins::Busy {
+        id: "duckdb".into(),
+        verb: "Installing",
+        done: 0,
+        total: None,
+    });
+    update(&mut model, Action::OpenConnectionForm);
+    model.connection_form.set_value("driver", "brook");
+    update(&mut model, Action::TestConnection);
+    assert!(model.plugin_offer.is_some());
+    let effects = press(&mut model, KeyCode::Enter);
+    assert!(effects.is_empty(), "{effects:?}");
+    assert_eq!(model.plugins.busy.as_ref().unwrap().id, "duckdb");
+    DriverDescriptor::withdraw("brook");
+}

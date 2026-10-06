@@ -316,6 +316,7 @@ fn footer(model: &Model) -> Vec<String> {
                 crate::screens::transfer::size_of(total)
             )
         }
+        _ if busy.done == 0 => format!("{} {}…", busy.verb, busy.id),
         _ => format!(
             "{} {}… {}",
             busy.verb,
@@ -329,7 +330,7 @@ fn footer(model: &Model) -> Vec<String> {
 /// What acts on the whole screen: the index fetched again, a package from a file.
 pub fn list_buttons(model: &Model) -> Vec<Button> {
     let idle = model.plugins.busy.is_none();
-    let wait = "Wait for the download to finish, or Esc to cancel it.";
+    let wait = crate::screens::plugins::WAIT;
     vec![
         Button::new(KeyCode::Char('r'), "Refresh").enabled_if(idle, wait),
         Button::new(KeyCode::Char('f'), "Install from file…").enabled_if(idle, wait),
@@ -346,7 +347,7 @@ pub fn buttons(model: &Model) -> Vec<Button> {
         return Vec::new();
     };
     let idle = state.busy.is_none();
-    let wait = "Wait for the download to finish, or Esc to cancel it.";
+    let wait = crate::screens::plugins::WAIT;
     let Some(installed) = &row.installed else {
         return vec![Button::new(KeyCode::Char('i'), "Install").enabled_if(idle, wait)];
     };
@@ -377,7 +378,11 @@ pub fn hints(model: &Model) -> String {
     if state.removing.is_some() {
         return "Enter removes  Esc keeps it".into();
     }
-    if state.busy.is_some() {
+    if state
+        .busy
+        .as_ref()
+        .is_some_and(|busy| matches!(busy.verb, "Installing" | "Updating"))
+    {
         return "Esc cancels the download".into();
     }
     "Up/Down pick  Tab view  / search  t type  Esc back".into()

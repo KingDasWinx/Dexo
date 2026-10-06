@@ -304,6 +304,10 @@ fn update_disable_and_remove_send_their_effects() {
         matches!(&effects[..], [Effect::SetPluginEnabled { id, enabled: false }] if id == "duckdb"),
         "{effects:?}"
     );
+    update(
+        &mut model,
+        Action::PluginWorkDone(Ok("Disabled duckdb.".into())),
+    );
     press(&mut model, KeyCode::Char('x'));
     assert_eq!(model.plugins.removing.as_deref(), Some("duckdb"));
     assert!(paint(&mut model, 120, 30).contains("Remove DuckDB and its files?"));
@@ -387,5 +391,59 @@ fn the_removal_question_wraps_in_a_narrow_pane() {
     assert!(
         shown.contains("say it is not ") && shown.contains("│installed."),
         "{shown}"
+    );
+}
+
+#[test]
+fn while_one_plugin_job_runs_no_other_starts() {
+    let mut model = screen();
+    press(&mut model, KeyCode::Char('u'));
+    for key in ['e', 'i', 'f'] {
+        assert!(
+            press(&mut model, KeyCode::Char(key)).is_empty(),
+            "{key} started work"
+        );
+    }
+    assert!(model.plugins.from_file.is_none());
+    assert!(
+        model.messages.last().is_some_and(|last| last
+            .message
+            .contains("Wait for the plugin's work to finish")),
+        "{:?}",
+        model.messages.last()
+    );
+    // Disabling is a job of its own too.
+    update(&mut model, Action::PluginWorkDone(Ok("Updated.".into())));
+    let effects = press(&mut model, KeyCode::Char('e'));
+    assert!(
+        matches!(&effects[..], [Effect::SetPluginEnabled { .. }]),
+        "{effects:?}"
+    );
+    assert!(press(&mut model, KeyCode::Char('u')).is_empty());
+}
+
+#[test]
+fn a_package_read_after_its_prompt_closed_is_dropped() {
+    let mut model = screen();
+    press(&mut model, KeyCode::Char('f'));
+    let staged = |token| {
+        Action::PluginFileStaged(Ok(StagedInfo {
+            token,
+            id: "lake".into(),
+            trust: "Lake is not from Dexo's signed index.".into(),
+        }))
+    };
+    // Enter twice: the first package read is dropped for the second.
+    assert!(update(&mut model, staged(1)).is_empty());
+    let effects = update(&mut model, staged(2));
+    assert!(
+        matches!(&effects[..], [Effect::DropPluginFile { token: 1 }]),
+        "{effects:?}"
+    );
+    press(&mut model, KeyCode::Esc);
+    let effects = update(&mut model, staged(3));
+    assert!(
+        matches!(&effects[..], [Effect::DropPluginFile { token: 3 }]),
+        "{effects:?}"
     );
 }

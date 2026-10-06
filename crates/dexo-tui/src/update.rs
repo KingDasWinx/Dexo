@@ -2404,13 +2404,27 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             effects
         }
         Action::PluginFileStaged(staged) => {
-            if let Some(from_file) = model.plugins.from_file.as_mut() {
-                match staged {
-                    Ok(staged) => from_file.staged = Some(staged),
-                    Err(error) => from_file.error = Some(error),
+            // A package nobody waits for any more -- its prompt closed, or a newer one
+            // read in its place -- is dropped, its staging folder with it.
+            let Some(from_file) = model.plugins.from_file.as_mut() else {
+                return match staged {
+                    Ok(staged) => vec![Effect::DropPluginFile {
+                        token: staged.token,
+                    }],
+                    Err(_) => Vec::new(),
+                };
+            };
+            match staged {
+                Ok(staged) => from_file
+                    .staged
+                    .replace(staged)
+                    .map(|older| vec![Effect::DropPluginFile { token: older.token }])
+                    .unwrap_or_default(),
+                Err(error) => {
+                    from_file.error = Some(error);
+                    Vec::new()
                 }
             }
-            Vec::new()
         }
         Action::ApplyPluginTheme { id } => {
             if let Ok(paths) = dexo_storage::AppPaths::discover() {
@@ -13292,6 +13306,9 @@ fn accept_plugin_offer(model: &mut Model) -> Vec<Effect> {
     let Some(offer) = model.plugin_offer.take() else {
         return Vec::new();
     };
+    if crate::screens::plugins::still_running(model) {
+        return Vec::new();
+    }
     let verb = if offer.enable {
         "Enabling"
     } else {
