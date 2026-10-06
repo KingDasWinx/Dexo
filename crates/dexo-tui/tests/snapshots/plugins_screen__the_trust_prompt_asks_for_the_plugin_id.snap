@@ -1,0 +1,34 @@
+---
+source: crates/dexo-tui/tests/plugins_screen.rs
+expression: shown
+---
+ Workbench  Connections  Agents  Server  History [Plugins 1]  default  no connection  —                                 
+[1 Installed]  2 Available  / search                        [t Type: all]                                               
+┌  Installed (2)─────────────────────────────────┐┌▸ Install from file─────────────────────────────────────────────────┐
+│ [r Refresh]  [f Install from file…]            ││A plugin's .tar.gz, or its folder:                                  │
+│                                                ││>                                                                   │
+│> ↑ DuckDB  driver  1.0.0                       ││                                                                    │
+│  ○ Mine    theme   0.1.0  local                ││Lake 1.0.0 (driver, id lake) by someone is not from Dexo's signed   │
+│                                                ││index: nothing vouches for it. It is a driver: this program will    │
+│                                                ││receive the passwords of the connections that use it.               │
+│                                                ││                                                                    │
+│                                                ││Type lake to install it:                                            │
+│                                                ││>                                                                   │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+└────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────┘
+Plugins  Enter goes on  Esc cancels                                                                           Ctrl+P  F1

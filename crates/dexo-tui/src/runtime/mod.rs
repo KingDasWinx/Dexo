@@ -25,6 +25,7 @@ pub mod diagnostic_manager;
 pub mod document_io;
 pub mod explain_manager;
 pub mod native_tool_manager;
+pub mod plugin_manager;
 pub mod project_manager;
 pub mod query_runner;
 pub mod recovery_manager;
@@ -1013,6 +1014,16 @@ impl WorkbenchRuntime {
             }
             crate::Effect::PersistHistory(request) => self.persist_history(request).await,
             crate::Effect::LoadHistory { connection_id } => self.load_history(connection_id).await,
+            crate::Effect::LoadPlugins { refresh } => self.off_the_loop(move || {
+                let Ok(paths) = AppPaths::discover() else {
+                    return Vec::new();
+                };
+                vec![Action::PluginsLoaded(plugin_manager::snapshot(
+                    &paths.data_dir,
+                    &dexo_app::plugin::index::IndexSource::from_env(),
+                    refresh,
+                ))]
+            }),
             crate::Effect::ClearHistory { connection_id } => {
                 self.clear_history(connection_id).await
             }

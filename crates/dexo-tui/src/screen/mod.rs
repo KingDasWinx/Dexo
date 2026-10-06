@@ -6,6 +6,7 @@ pub mod agents;
 pub mod compare;
 pub mod connections;
 pub mod history;
+pub mod plugins;
 pub mod server;
 pub mod widgets;
 
@@ -26,6 +27,7 @@ pub fn buttons(model: &Model) -> Vec<Button> {
     match model.shown_screen() {
         Screen::Connections if !model.connection_form.open => connections::buttons(model),
         Screen::History => history::buttons(model),
+        Screen::Plugins => plugins::buttons(model),
         Screen::Agents if model.agents_view == agents::AgentsView::Setup => {
             agents::setup_buttons(model)
         }
@@ -47,6 +49,7 @@ pub fn screen_buttons(model: &Model) -> Vec<Button> {
     match model.shown_screen() {
         Screen::Connections if !model.connection_form.open => connections::list_buttons(),
         Screen::History => history::list_buttons(model),
+        Screen::Plugins => plugins::list_buttons(model),
         Screen::Agents => agents::list_buttons(model),
         Screen::Server => server::list_buttons(model),
         Screen::Compare => compare::toolbar_buttons(model),
@@ -80,6 +83,7 @@ pub fn screen_safe(command: &str) -> bool {
             "recovery.",
             "diagnostics.",
             "config.",
+            "plugins.",
         ]
         .iter()
         .any(|prefix| command.starts_with(prefix))
@@ -127,6 +131,11 @@ pub fn held(model: &Model) -> Option<(Section, &'static str)> {
         Screen::Server if model.admin.terminate.is_some() || model.admin.cancel.is_some() => {
             Some((Section::Detail, question))
         }
+        Screen::Plugins if model.plugins.removing.is_some() => Some((Section::Detail, question)),
+        Screen::Plugins if model.plugins.from_file.is_some() => Some((
+            Section::Detail,
+            "Type the path, Enter reads it, Esc cancels.",
+        )),
         Screen::History if model.history_view == HistoryView::Saved => {
             if model.saved_queries.deleting.is_some() {
                 Some((Section::Detail, question))
@@ -152,6 +161,7 @@ pub fn search(model: &Model) -> Option<&widgets::Search> {
             Some(&model.mcp_audit.search)
         }
         Screen::Server => Some(&model.admin.search),
+        Screen::Plugins => Some(&model.plugins.search),
         Screen::Compare if !model.schema_diff.source_prompt => Some(&model.schema_diff.search),
         _ => None,
     }
@@ -184,6 +194,7 @@ pub fn takes_text(model: &Model) -> bool {
         }
         Screen::Server => model.admin.terminate.is_some(),
         Screen::History => model.saved_queries.renaming.is_some(),
+        Screen::Plugins => model.plugins.from_file.is_some(),
         Screen::Workbench => false,
     }
 }
@@ -200,6 +211,7 @@ pub fn stop_typing(model: &mut Model) {
         Screen::Agents => model.mcp_audit.search.typing = false,
         Screen::Server => model.admin.search.typing = false,
         Screen::Compare => model.schema_diff.search.typing = false,
+        Screen::Plugins => model.plugins.search.typing = false,
         _ => {}
     }
 }
@@ -273,6 +285,7 @@ pub struct StripItem {
 pub fn waiting(model: &Model, screen: Screen) -> usize {
     match screen {
         Screen::Agents => model.mcp_audit.announced.len(),
+        Screen::Plugins => model.plugins.updates(),
         _ => 0,
     }
 }
@@ -332,6 +345,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         Screen::Compare => compare::render(frame, area, model, hits),
         Screen::History => history::render(frame, area, model, hits),
         Screen::Server => server::render(frame, area, model, hits),
+        Screen::Plugins => plugins::render(frame, area, model, hits),
         Screen::Workbench => {}
     }
 }
@@ -345,6 +359,7 @@ pub fn hints(model: &Model, hits: &HitMap) -> String {
         Screen::Compare => compare::hints(model),
         Screen::History => history::hints(model),
         Screen::Server => server::hints(model),
+        Screen::Plugins => plugins::hints(model),
         _ => "Esc back".into(),
     };
     let free = held(model).is_none() && !detail_is_form(model);

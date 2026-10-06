@@ -2373,6 +2373,13 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             go_to_screen(model, crate::model::Screen::History)
         }
         Action::ClearHistory => confirm_clear_history(model),
+        Action::PluginsLoaded(snapshot) => {
+            let state = &mut model.plugins;
+            state.loading = false;
+            state.snapshot = snapshot;
+            state.selected = state.selected.min(state.shown().len().saturating_sub(1));
+            Vec::new()
+        }
         Action::HistoryLoaded(entries) => {
             model.editor.history = entries;
             model.editor.clamp_history();
@@ -4381,6 +4388,7 @@ fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec
         crate::model::Screen::Connections => mouse_connections(model, hit, doubled),
         crate::model::Screen::Compare => mouse_schema_diff(model, hit),
         crate::model::Screen::History => mouse_history_screen(model, hit, doubled),
+        crate::model::Screen::Plugins => crate::screens::plugins::mouse(model, hit),
         _ => Vec::new(),
     }
 }
@@ -5227,6 +5235,7 @@ fn screen_own_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             crate::model::Screen::Server => server_key(model, key),
             crate::model::Screen::Connections => connections_key(model, key),
             crate::model::Screen::History => history_screen_key(model, key),
+            crate::model::Screen::Plugins => crate::screens::plugins::handle_key(model, key),
             crate::model::Screen::Compare => {
                 if key
                     .modifiers
@@ -5884,6 +5893,10 @@ fn enter_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> 
                 });
             }
             effects
+        }
+        crate::model::Screen::Plugins => {
+            model.plugins.loading = true;
+            vec![Effect::LoadPlugins { refresh: false }]
         }
         crate::model::Screen::Workbench | crate::model::Screen::Compare => Vec::new(),
     }

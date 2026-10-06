@@ -166,6 +166,22 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::GoToScreen(Screen::History)),
         },
         CommandSpec {
+            id: "screen.plugins",
+            title: "Go to Plugins",
+            keywords: &[
+                "screen",
+                "plugins",
+                "extensions",
+                "drivers",
+                "themes",
+                "duckdb",
+                "install",
+            ],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::GoToScreen(Screen::Plugins)),
+        },
+        CommandSpec {
             id: "screen.previous",
             title: "Go to Previous Screen",
             keywords: &["screen", "back", "last", "toggle"],

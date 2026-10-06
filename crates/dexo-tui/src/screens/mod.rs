@@ -15,6 +15,7 @@ pub mod mcp_audit;
 pub mod mcp_profiles;
 pub mod mcp_setup;
 pub mod object_inspector;
+pub mod plugins;
 pub mod production_prompt;
 pub mod projects;
 pub mod recovery;

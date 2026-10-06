@@ -595,6 +595,8 @@ pub enum Action {
     SearchHistory,
     ClearHistory,
     HistoryLoaded(Vec<dexo_storage::HistoryRow>),
+    /// The Plugins screen's state, read off the disk and the index.
+    PluginsLoaded(crate::screens::plugins::PluginsSnapshot),
     HistoryPick,
     SnippetsLoaded(Vec<dexo_sql::Snippet>),
     SnippetPick,
@@ -1162,6 +1164,10 @@ pub enum Effect {
     LoadSnippets,
     CheckpointRecovery(RecoveryCheckpointRequest),
     PersistHistory(PersistHistoryRequest),
+    /// The Plugins screen's state; the index the cache within the day unless `refresh`.
+    LoadPlugins {
+        refresh: bool,
+    },
     LoadHistory {
         connection_id: Option<String>,
     },

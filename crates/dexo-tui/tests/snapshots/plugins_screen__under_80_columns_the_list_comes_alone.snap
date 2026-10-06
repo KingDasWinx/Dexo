@@ -1,0 +1,28 @@
+---
+source: crates/dexo-tui/tests/plugins_screen.rs
+expression: shown
+---
+[Plugins 1]  default  no connection  —                                
+[1 Installed]  2 Available  / search        [t Type: all]             
+┌▸ Installed (2)─────────────────────────────────────────────────────┐
+│ [r Refresh]  [f Install from file…]                                │
+│                                                                    │
+│> ↑ DuckDB  driver  1.0.0                                           │
+│  ○ Mine    theme   0.1.0  local                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+Plugins  Enter details  Up/Down pick  Tab view  / search    Ctrl+P  F1
