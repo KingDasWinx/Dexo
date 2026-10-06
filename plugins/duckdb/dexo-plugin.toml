@@ -1,0 +1,19 @@
+schema = 1
+id = "duckdb"
+kind = "driver"
+version = "1.0.0"
+name = "DuckDB"
+description = "Open DuckDB files, CSV, Parquet and JSON"
+authors = ["KingDasWinx"]
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/KingDasWinx/Dexo"
+min_dexo = "1.5.0"
+
+[driver]
+protocol = 1
+drivers = ["duckdb"]
+display_name = "DuckDB"
+dialect = "duckdb"
+file = true
+url_schemes = ["duckdb"]
+executable = "bin/dexo-driver-duckdb"

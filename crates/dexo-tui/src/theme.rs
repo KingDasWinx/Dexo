@@ -980,6 +980,25 @@ mod tests {
     use crate::capabilities::{ColorDepth, TerminalCapabilities};
 
     #[test]
+    fn the_extra_themes_pack_is_six_themes_that_parse() {
+        let pack =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/extra-themes");
+        let manifest = dexo_app::plugin::manifest::parse(
+            &std::fs::read_to_string(pack.join("dexo-plugin.toml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest.id, "extra-themes");
+        let mut count = 0;
+        for entry in std::fs::read_dir(pack.join("themes")).unwrap() {
+            let path = entry.unwrap().path();
+            super::parse_theme(&std::fs::read_to_string(&path).unwrap())
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            count += 1;
+        }
+        assert_eq!(count, 6);
+    }
+
+    #[test]
     fn an_enabled_theme_pack_adds_its_themes() {
         use dexo_app::plugin::{install, state::Origin};
         let dir = tempfile::tempdir().unwrap();
