@@ -293,18 +293,28 @@ fn update(data_dir: &Path, id: Option<&str>, all: bool) -> anyhow::Result<()> {
     };
     fresh_index(data_dir)?;
     let never = AtomicBool::new(false);
+    // Each plugin on its own: one that fails leaves the others to be updated.
+    let mut failed = Vec::new();
     for id in ids {
-        match install::upgrade(
+        let upgraded = install::upgrade(
             data_dir,
             &IndexSource::from_env(),
             &id,
             None,
             &mut progress(&id),
             &never,
-        )? {
-            Some(manifest) => println!("Updated {id} to {}.", manifest.version),
-            None => println!("{id} is up to date."),
+        );
+        match upgraded {
+            Ok(Some(manifest)) => println!("Updated {id} to {}.", manifest.version),
+            Ok(None) => println!("{id} is up to date."),
+            Err(error) => {
+                eprintln!("{id}: {error}");
+                failed.push(id);
+            }
         }
+    }
+    if !failed.is_empty() {
+        bail!("not updated: {}", failed.join(", "));
     }
     Ok(())
 }

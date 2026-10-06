@@ -305,3 +305,53 @@ fn a_file_named_like_a_plugin_does_not_hide_it() {
         .success()
         .stdout(contains("Installed pack 1.0.0 (official, signed)"));
 }
+
+#[test]
+fn update_all_goes_on_past_a_failure_and_says_so() {
+    let home = tempfile::tempdir().unwrap();
+    let server = HttpServer::start();
+    let key = TestKey::new();
+    let mut plugins = Vec::new();
+    for id in ["apack", "bpack"] {
+        let mut versions = Vec::new();
+        for version in ["1.0.0", "1.1.0"] {
+            let bytes = pack(&theme_folder(home.path(), id, version));
+            let path = format!("/{id}-{version}.tar.gz");
+            server.put(&path, bytes.clone());
+            versions.push(version_entry(
+                version,
+                "1.0.0",
+                "any",
+                &server.url(&path),
+                &bytes,
+                None,
+            ));
+        }
+        plugins.push((id, "theme", versions));
+    }
+    let published = Published { server, key };
+    // Only 1.0.0 at first, to install.
+    let first: Vec<_> = plugins
+        .iter()
+        .map(|(id, kind, versions)| (*id, *kind, vec![versions[0].clone()]))
+        .collect();
+    published.sign(&index_json(&first));
+    for id in ["apack", "bpack"] {
+        dexo_with(home.path(), &published)
+            .args(["plugin", "install", id])
+            .assert()
+            .success();
+    }
+    published.sign(&index_json(&plugins));
+    // apack's 1.1.0 download is broken: bpack is updated all the same.
+    let broken = published.server.bytes("/apack-1.1.0.tar.gz");
+    published
+        .server
+        .put("/apack-1.1.0.tar.gz", broken[..broken.len() - 10].to_vec());
+    dexo_with(home.path(), &published)
+        .args(["plugin", "update", "--all"])
+        .assert()
+        .failure()
+        .stdout(contains("Updated bpack to 1.1.0"))
+        .stderr(contains("apack"));
+}
