@@ -236,15 +236,19 @@ fn normalize_driver(driver: &str) -> Result<String, AppError> {
         "mysql" => Ok("mysql".into()),
         "mariadb" => Ok("mariadb".into()),
         "sqlite" | "sqlite3" => Ok("sqlite".into()),
-        "duckdb" => Ok("duckdb".into()),
         "" => Err(AppError::new(
             ErrorCategory::Configuration,
             "driver is required",
         )),
-        other => Err(AppError::new(
-            ErrorCategory::Configuration,
-            format!("unknown driver '{other}'"),
-        )),
+        // DuckDB, and any other a plugin brings or the index offers.
+        other => dexo_driver_api::DriverDescriptor::for_id(other)
+            .map(|descriptor| descriptor.id.into_owned())
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCategory::Configuration,
+                    format!("unknown driver '{other}'"),
+                )
+            }),
     }
 }
 
@@ -400,6 +404,25 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_driver_a_plugin_brings_is_a_driver() {
+        dexo_driver_api::DriverDescriptor::announce(
+            dexo_driver_api::DriverDescriptor::plugin_driver(
+                "service-pond",
+                "Pond",
+                true,
+                "service-pond",
+                true,
+            ),
+        );
+        assert_eq!(
+            super::normalize_driver("service-pond").unwrap(),
+            "service-pond"
+        );
+        assert!(super::normalize_driver("oracle").is_err());
+        dexo_driver_api::DriverDescriptor::withdraw("service-pond");
     }
 
     #[test]
