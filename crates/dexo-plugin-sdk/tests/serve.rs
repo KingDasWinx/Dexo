@@ -20,7 +20,11 @@ struct Wire {
 
 impl Wire {
     fn start() -> Self {
-        let (from, to) = dexo_plugin_sdk::serve_in_process(vec![Arc::new(SqliteFactory)]).unwrap();
+        Self::with(Arc::new(SqliteFactory))
+    }
+
+    fn with(factory: Arc<dyn dexo_driver_api::ConnectionFactory>) -> Self {
+        let (from, to) = dexo_plugin_sdk::serve_in_process(vec![factory]).unwrap();
         Self {
             to,
             from: BufReader::new(from),
@@ -249,4 +253,47 @@ fn a_session_answers_every_family_it_declares() {
     assert_eq!(rolled["state"], "idle");
     let missing = wire.call("teleport/now", on(Value::Null));
     assert_eq!(missing.error.unwrap().code, code::METHOD_NOT_FOUND);
+}
+
+struct Panics;
+
+#[async_trait::async_trait]
+impl dexo_driver_api::ConnectionFactory for Panics {
+    fn descriptor(&self) -> dexo_driver_api::DriverDescriptor {
+        dexo_driver_api::DriverDescriptor::plugin_driver("panics", "Panics", true, "panics", true)
+    }
+
+    async fn connect(
+        &self,
+        _: ConnectRequest,
+    ) -> Result<Box<dyn dexo_driver_api::Session>, dexo_driver_api::DriverError> {
+        panic!("the driver fell over");
+    }
+}
+
+#[test]
+fn a_driver_that_panics_answers_an_internal_error() {
+    let (done, answered) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut wire = Wire::with(Arc::new(Panics));
+        let request = ConnectRequest::new(
+            "x",
+            None,
+            String::new(),
+            SecretString::from(String::new()),
+            false,
+        );
+        let params = serde_json::to_value(SessionOpenParams::new("panics", &request)).unwrap();
+        let _ = done.send(wire.call("session/open", params));
+    });
+    let response = answered
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("session/open was never answered");
+    let error = response.error.expect("an error");
+    assert_eq!(error.code, code::INTERNAL);
+    assert!(
+        error.message.contains("the driver fell over"),
+        "{}",
+        error.message
+    );
 }

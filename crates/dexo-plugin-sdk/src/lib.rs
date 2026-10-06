@@ -17,8 +17,8 @@ use dexo_plugin_protocol::{
     QueryExecute, QueryPage, Request, Response, RpcError, SessionOpenParams, SessionOpenResult,
     code, method,
 };
-use futures_util::StreamExt;
 use futures_util::future::{AbortHandle, Abortable};
+use futures_util::{FutureExt, StreamExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -106,9 +106,27 @@ pub async fn serve_io(
         lock(&server.in_flight).insert(id, abort);
         let server = server.clone();
         tokio::spawn(async move {
-            let work = Abortable::new(server.handle(request), registration);
-            if let Ok(response) = work.await {
-                let _ = server.out.send(response);
+            // A driver that panics answers an error: Dexo would wait for its answer.
+            let work = Abortable::new(
+                std::panic::AssertUnwindSafe(server.handle(request)).catch_unwind(),
+                registration,
+            );
+            match work.await {
+                Ok(Ok(response)) => {
+                    let _ = server.out.send(response);
+                }
+                Ok(Err(panic)) => {
+                    let said = panic
+                        .downcast_ref::<&str>()
+                        .map(|said| said.to_string())
+                        .or_else(|| panic.downcast_ref::<String>().cloned())
+                        .unwrap_or_default();
+                    let _ = server.out.send(Response::err(
+                        id,
+                        RpcError::new(code::INTERNAL, format!("the driver panicked: {said}")),
+                    ));
+                }
+                Err(_aborted) => {}
             }
             lock(&server.in_flight).remove(&id);
         });

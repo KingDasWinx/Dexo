@@ -2146,6 +2146,7 @@ dependencies = [
 name = "dexo-plugin-sdk"
 version = "1.4.2"
 dependencies = [
+ "async-trait",
  "dexo-driver-api",
  "dexo-driver-sqlite",
  "dexo-plugin-protocol",
