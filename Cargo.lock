@@ -1931,7 +1931,6 @@ dependencies = [
  "dexo-app",
  "dexo-cli",
  "dexo-driver-api",
- "dexo-driver-duckdb",
  "dexo-driver-mysql",
  "dexo-driver-postgres",
  "dexo-driver-sqlite",
@@ -2027,11 +2026,13 @@ dependencies = [
 
 [[package]]
 name = "dexo-driver-duckdb"
-version = "1.4.2"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "dexo-app",
  "dexo-driver-api",
+ "dexo-plugin-sdk",
  "dexo-sql",
  "duckdb",
  "futures-util",

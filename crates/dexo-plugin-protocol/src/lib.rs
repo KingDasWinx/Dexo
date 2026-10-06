@@ -51,6 +51,9 @@ pub mod method {
     pub const TX_SAVEPOINT: &str = "tx/savepoint";
     pub const TX_ROLLBACK_TO: &str = "tx/rollback_to";
     pub const TX_RELEASE_SAVEPOINT: &str = "tx/release_savepoint";
+    /// The host stopped waiting for request `id`: the plugin drops its work, as a driver
+    /// drops a future nobody polls. Not answered.
+    pub const CANCEL_REQUEST: &str = "$/cancel_request";
 }
 
 /// JSON-RPC's error codes, then the protocol's own.

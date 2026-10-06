@@ -314,7 +314,7 @@ pub fn process_spawner(executable: std::path::PathBuf) -> Spawner {
             .stderr(std::process::Stdio::piped())
             .env_clear()
             .envs(plugin_env(std::env::vars_os()));
-        let mut child = command.spawn()?;
+        let mut child = spawn(&mut command)?;
         crate::process::register(child.id());
         let missing = || std::io::Error::other("the plugin's pipes were not opened");
         Ok(Spawned {
@@ -327,6 +327,22 @@ pub fn process_spawner(executable: std::path::PathBuf) -> Spawner {
             child: Some(child),
         })
     })
+}
+
+/// Starts `command`, again when the executable is busy: a plugin just unpacked is still
+/// open for writing in any process another thread forked meanwhile, and Linux refuses to
+/// run it until those close it, a moment later.
+fn spawn(command: &mut std::process::Command) -> std::io::Result<Child> {
+    let mut tries = 0;
+    loop {
+        match command.spawn() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 10 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            spawned => return spawned,
+        }
+    }
 }
 
 /// The variables a plugin gets: where programs and home are, the temporary directory,

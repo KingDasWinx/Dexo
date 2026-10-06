@@ -13,10 +13,12 @@ use dexo_driver_api::{
     ConnectionFactory, DbValue, QueryEvent, QueryId, QueryStream, RowBatch, Session,
 };
 use dexo_plugin_protocol::{
-    self as protocol, Cursor, InitializeParams, InitializeResult, OnSession, QueryExecute,
-    QueryPage, Request, Response, RpcError, SessionOpenParams, SessionOpenResult, code, method,
+    self as protocol, CancelRequest, Cursor, InitializeParams, InitializeResult, OnSession,
+    QueryExecute, QueryPage, Request, Response, RpcError, SessionOpenParams, SessionOpenResult,
+    code, method,
 };
 use futures_util::StreamExt;
+use futures_util::future::{AbortHandle, Abortable};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -77,12 +79,38 @@ pub async fn serve_io(
         cursors: Mutex::default(),
         next: AtomicU64::new(1),
         out,
+        in_flight: Mutex::default(),
     });
     while let Some(line) = lines.recv().await {
+        let request: Request = match serde_json::from_slice(&line) {
+            Ok(request) => request,
+            Err(error) => {
+                let _ = server.out.send(Response::err(
+                    0,
+                    RpcError::new(code::PARSE_ERROR, error.to_string()),
+                ));
+                continue;
+            }
+        };
+        // Taken here, in order: the request it names was registered before it.
+        if request.method == method::CANCEL_REQUEST {
+            if let Ok(cancel) = parse::<CancelRequest>(request.params)
+                && let Some(work) = lock(&server.in_flight).remove(&cancel.id)
+            {
+                work.abort();
+            }
+            continue;
+        }
+        let id = request.id;
+        let (abort, registration) = AbortHandle::new_pair();
+        lock(&server.in_flight).insert(id, abort);
         let server = server.clone();
         tokio::spawn(async move {
-            let response = server.handle(&line).await;
-            let _ = server.out.send(response);
+            let work = Abortable::new(server.handle(request), registration);
+            if let Ok(response) = work.await {
+                let _ = server.out.send(response);
+            }
+            lock(&server.in_flight).remove(&id);
         });
     }
     server.close_all().await;
@@ -123,16 +151,12 @@ pub(crate) struct Server {
     cursors: Mutex<Cursors>,
     next: AtomicU64,
     out: std::sync::mpsc::Sender<Response>,
+    /// The requests being answered, by id: what `$/cancel_request` drops.
+    in_flight: Mutex<HashMap<u64, AbortHandle>>,
 }
 
 impl Server {
-    async fn handle(&self, line: &[u8]) -> Response {
-        let request: Request = match serde_json::from_slice(line) {
-            Ok(request) => request,
-            Err(error) => {
-                return Response::err(0, RpcError::new(code::PARSE_ERROR, error.to_string()));
-            }
-        };
+    async fn handle(&self, request: Request) -> Response {
         let id = request.id;
         match self.dispatch(request).await {
             Ok(result) => Response::ok(id, result),
@@ -317,12 +341,13 @@ pub(crate) fn reply(result: impl Serialize) -> Result<Value, RpcError> {
     serde_json::to_value(result).map_err(|error| RpcError::new(code::INTERNAL, error.to_string()))
 }
 
-/// Events up to a page's worth -- [`protocol::PAGE_ROWS`] rows or about
-/// [`protocol::PAGE_BYTES`] of values -- a batch larger than that split across pages.
-/// The stream is read only here, so the driver works only as fast as the host reads.
+/// Events up to a page's worth -- [`protocol::PAGE_ROWS`] rows, as many other events, or
+/// about [`protocol::PAGE_BYTES`] of values -- a batch larger than that split across pages.
+/// The stream is read only here, so the driver works only as fast as the host reads: a
+/// script of writes, which has no rows, comes a page of statements at a time too.
 async fn next_page(open: &mut Open) -> QueryPage {
     let mut events = Vec::new();
-    let (mut rows, mut bytes) = (0usize, 0usize);
+    let (mut rows, mut others, mut bytes) = (0usize, 0usize, 0usize);
     let page = |events, done, error| QueryPage {
         cursor: None,
         events,
@@ -331,7 +356,10 @@ async fn next_page(open: &mut Open) -> QueryPage {
         transaction: None,
     };
     loop {
-        if rows >= protocol::PAGE_ROWS || bytes >= protocol::PAGE_BYTES {
+        if rows >= protocol::PAGE_ROWS
+            || others >= protocol::PAGE_ROWS
+            || bytes >= protocol::PAGE_BYTES
+        {
             return page(events, false, None);
         }
         let event = match open.pending.pop_front() {
@@ -343,6 +371,7 @@ async fn next_page(open: &mut Open) -> QueryPage {
             },
         };
         let QueryEvent::Rows(batch) = event else {
+            others += 1;
             events.push(event);
             continue;
         };

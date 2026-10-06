@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use dexo_plugin_protocol::{self as protocol, Request, Response, RpcError, code};
+use dexo_plugin_protocol::{
+    self as protocol, CancelRequest, Request, Response, RpcError, code, method,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -114,16 +116,19 @@ impl RpcClient {
                 violation: false,
             });
         }
+        let mut waiting = Waiting {
+            client: self,
+            id,
+            answered: false,
+        };
         let reply = match timeout {
             None => receiver.await,
             Some(limit) => match tokio::time::timeout(limit, receiver).await {
                 Ok(reply) => reply,
-                Err(_) => {
-                    lock(&self.shared.pending).remove(&id);
-                    return Err(CallError::TimedOut);
-                }
+                Err(_) => return Err(CallError::TimedOut),
             },
         };
+        waiting.answered = true;
         let value = reply.map_err(|_| {
             CallError::Closed(Closed {
                 why: "it exited".into(),
@@ -162,6 +167,24 @@ impl RpcClient {
         lock(&self.out)
             .as_ref()
             .is_some_and(|out| out.send(line).is_ok())
+    }
+}
+
+/// A call being waited for. Given up on -- timed out, or its future dropped -- it tells
+/// the plugin, which drops the work: a built-in driver's work stops with its future.
+struct Waiting<'a> {
+    client: &'a RpcClient,
+    id: u64,
+    answered: bool,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        if !self.answered {
+            lock(&self.client.shared.pending).remove(&self.id);
+            self.client
+                .notify(method::CANCEL_REQUEST, CancelRequest { id: self.id });
+        }
     }
 }
 

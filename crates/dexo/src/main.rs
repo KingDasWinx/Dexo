@@ -18,8 +18,7 @@ fn main() -> anyhow::Result<()> {
     registry.register(Arc::new(MysqlFactory));
     registry.register(Arc::new(MariadbFactory));
     registry.register(Arc::new(SqliteFactory));
-    #[cfg(feature = "duckdb")]
-    registry.register(Arc::new(dexo_driver_duckdb::DuckdbFactory));
+    dexo_app::plugin::register_dev_overrides(&registry);
     let tui_registry = registry.clone();
     run_dispatch(Args::parse(), registry, Workbench(tui_registry))
 }

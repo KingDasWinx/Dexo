@@ -211,3 +211,9 @@ pub struct TxResult {
 /// Bytes as one base64 string.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Bytes(#[serde(with = "dexo_driver_api::base64_bytes")] pub Vec<u8>);
+
+/// The request a `$/cancel_request` drops.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CancelRequest {
+    pub id: u64,
+}
