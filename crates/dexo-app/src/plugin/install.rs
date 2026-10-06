@@ -63,7 +63,8 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Unpacks a package -- a `.tar.gz` file or a plugin's folder -- into staging.
+/// Unpacks a package -- a `.tar.gz` file or a plugin's folder -- into staging; refused
+/// when this Dexo cannot run it.
 pub fn stage(data_dir: &Path, source: &Path) -> Result<Staged, AppError> {
     if source.is_dir() {
         let dir = staging(&plugins_dir(data_dir), "local")?;
@@ -86,6 +87,21 @@ fn finish_stage(dir: Staging, sha256: Option<String>) -> Result<Staged, AppError
         .map_err(|_| refused("the package has no dexo-plugin.toml"))?;
     let manifest = manifest::parse(&text).map_err(refused)?;
     archive::check_kind(&dir.0, &manifest).map_err(refused)?;
+    let dexo = env!("CARGO_PKG_VERSION");
+    if crate::update::is_newer(&manifest.min_dexo, dexo) {
+        return Err(refused(format!(
+            "{} {} needs Dexo {} or newer; this is {dexo}",
+            manifest.name, manifest.version, manifest.min_dexo
+        )));
+    }
+    if let Some(driver) = &manifest.driver
+        && driver.protocol != PROTOCOL
+    {
+        return Err(refused(format!(
+            "{} speaks plugin protocol {}, and this Dexo speaks {PROTOCOL}",
+            manifest.name, driver.protocol
+        )));
+    }
     Ok(Staged {
         manifest,
         sha256,
@@ -179,8 +195,7 @@ pub(crate) fn check_handshake(manifest: &Manifest, dir: &Path) -> Result<(), App
     })
 }
 
-/// Puts a staged plugin in place: refused when this Dexo cannot run it, a driver's
-/// handshake checked first, the old version moved aside only once the new one is ready,
+/// Puts a staged plugin in place: a driver's handshake checked first, the old version moved aside only once the new one is ready,
 /// the state written last.
 pub fn commit(
     data_dir: &Path,
@@ -190,21 +205,6 @@ pub fn commit(
 ) -> Result<Manifest, AppError> {
     let plugins = plugins_dir(data_dir);
     let manifest = staged.manifest.clone();
-    let dexo = env!("CARGO_PKG_VERSION");
-    if crate::update::is_newer(&manifest.min_dexo, dexo) {
-        return Err(refused(format!(
-            "{} {} needs Dexo {} or newer; this is {dexo}",
-            manifest.name, manifest.version, manifest.min_dexo
-        )));
-    }
-    if let Some(driver) = &manifest.driver
-        && driver.protocol != PROTOCOL
-    {
-        return Err(refused(format!(
-            "{} speaks plugin protocol {}, and this Dexo speaks {PROTOCOL}",
-            manifest.name, driver.protocol
-        )));
-    }
     let _lock = Lock::acquire(&plugins, &manifest.id)?;
     check_handshake(&manifest, staged.path())?;
     let files = hash_files(staged.path())?;

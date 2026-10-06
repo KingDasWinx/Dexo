@@ -104,13 +104,10 @@ fn a_plugin_for_a_newer_dexo_is_refused() {
         text.replace("min_dexo = \"1.0.0\"", "min_dexo = \"99.0.0\""),
     )
     .unwrap();
-    let error = install::commit(
-        data.path(),
-        install::stage(data.path(), &folder).unwrap(),
-        Origin::Local,
-        None,
-    )
-    .unwrap_err();
+    // Refused as it is unpacked: before anyone is asked to trust it.
+    let Err(error) = install::stage(data.path(), &folder) else {
+        panic!("staged a plugin this Dexo cannot run");
+    };
     assert!(
         error.to_string().contains("needs Dexo 99.0.0 or newer"),
         "{error}"
