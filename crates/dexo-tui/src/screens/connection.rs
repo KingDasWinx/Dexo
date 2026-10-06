@@ -369,10 +369,10 @@ impl ConnectionForm {
             let kept = old_port.trim().is_empty()
                 || DriverDescriptor::for_id(&current)
                     .is_some_and(|old| old.default_port.to_string() == old_port.trim());
-            set_field(&mut self.fields, "driver", next);
+            set_field(&mut self.fields, "driver", &next);
             self.sync_descriptor_fields();
             if kept
-                && let Some(new) = DriverDescriptor::for_id(next)
+                && let Some(new) = DriverDescriptor::for_id(&next)
                 && !new.file
             {
                 set_field(&mut self.fields, "port", &new.default_port.to_string());
@@ -577,9 +577,16 @@ impl ConnectionForm {
         let marker = if index == self.focus { ">" } else { " " };
         let label = format!("{}:", shown_label(&field.label));
         let value = if field.label == "driver" {
-            let name = DriverDescriptor::for_id(field.value.as_str())
-                .map(|item| item.display_name)
-                .unwrap_or(field.value.as_str());
+            let name = DriverDescriptor::for_id(field.value.as_str()).map_or_else(
+                || field.value.as_str().to_string(),
+                |item| {
+                    if item.installed {
+                        item.display_name.into_owned()
+                    } else {
+                        format!("{} · not installed", item.display_name)
+                    }
+                },
+            );
             format!("< {name} >")
         } else if is_choice(&field.label) {
             format!("< {} >", choice_label(&field.label, field.value.as_str()))
@@ -820,41 +827,32 @@ fn choice_label(label: &str, value: &str) -> String {
     }
 }
 
-/// The drivers this build has: DuckDB's engine is large, and built in only with the
-/// `duckdb` feature.
-fn drivers() -> Vec<&'static str> {
-    let mut drivers = vec![
-        DriverDescriptor::postgres().id,
-        DriverDescriptor::mysql().id,
-        DriverDescriptor::mariadb().id,
-        DriverDescriptor::sqlite().id,
-    ];
-    if cfg!(feature = "duckdb") {
-        drivers.push(DriverDescriptor::duckdb().id);
-    }
-    drivers
-}
-
-/// A driver this build lists, or one Dexo knows that it left out -- a DuckDB connection
-/// edited in a build without DuckDB keeps its driver and its path, where it used to
-/// turn into a Postgres form asking for a host.
-fn normalize_driver(driver: &str) -> &'static str {
-    let id = driver.trim();
-    drivers()
+/// The drivers the form steps through: every one Dexo knows, a plugin's whether or not
+/// it is installed -- trying one that is not offers to install it.
+fn drivers() -> Vec<String> {
+    DriverDescriptor::known()
         .into_iter()
-        .find(|known| *known == id)
-        .or_else(|| DriverDescriptor::for_id(id).map(|descriptor| descriptor.id))
-        .unwrap_or(DriverDescriptor::postgres().id)
+        .map(|descriptor| descriptor.id.into_owned())
+        .collect()
 }
 
-fn next_driver(current: &str, delta: i32) -> &'static str {
+/// A driver Dexo knows -- a DuckDB connection without the plugin keeps its driver and
+/// its path -- or Postgres for an id it does not.
+fn normalize_driver(driver: &str) -> String {
+    DriverDescriptor::for_id(driver.trim()).map_or_else(
+        || DriverDescriptor::postgres().id.into_owned(),
+        |descriptor| descriptor.id.into_owned(),
+    )
+}
+
+fn next_driver(current: &str, delta: i32) -> String {
     let known = drivers();
     let index = known
         .iter()
-        .position(|id| *id == current.trim())
+        .position(|id| id == current.trim())
         .unwrap_or(0);
     let next = (index as i32 + delta).rem_euclid(known.len() as i32) as usize;
-    known[next]
+    known[next].clone()
 }
 
 fn populate_advanced_fields(fields: &mut [FormField], profile: &ConnectionProfile) {
@@ -938,10 +936,10 @@ pub const HEADING: &str = "  ── ";
 /// port, database, user and password, and has no transport or TLS to set.
 fn blank_fields(driver: &str) -> Vec<FormField> {
     let driver = normalize_driver(driver);
-    let descriptor = DriverDescriptor::for_id(driver);
+    let descriptor = DriverDescriptor::for_id(&driver);
     let driver_field = FormField {
         label: "driver".into(),
-        value: driver.into(),
+        value: driver.as_str().into(),
         secret: false,
     };
     let environment = FormField {
@@ -1318,12 +1316,10 @@ mod tests {
         assert!(dump.contains("< SQLite >"));
         assert!(dump.contains("path:"));
         assert!(!dump.contains("host:") && !dump.contains("password:"));
-        if cfg!(feature = "duckdb") {
-            form.cycle_choice(1);
-            let dump = form.lines().join("\n");
-            assert!(dump.contains("< DuckDB >"));
-            assert!(dump.contains("path:") && !dump.contains("password:"));
-        }
+        form.cycle_choice(1);
+        let dump = form.lines().join("\n");
+        assert!(dump.contains("< DuckDB · not installed >"), "{dump}");
+        assert!(dump.contains("path:") && !dump.contains("password:"));
         form.cycle_choice(1);
         assert_eq!(
             form.fields
@@ -1357,8 +1353,9 @@ mod tests {
         assert!(password.is_empty());
     }
 
-    /// A DuckDB connection edited in a build without DuckDB stays a DuckDB file: it used
-    /// to become a Postgres form asking for a host, whose Submit said "path is required".
+    /// A DuckDB connection edited without the DuckDB plugin stays a DuckDB file, said
+    /// not installed: it used to become a Postgres form asking for a host, whose Submit
+    /// said "path is required".
     #[test]
     fn a_connection_to_a_driver_left_out_of_the_build_keeps_its_form() {
         let profile = dexo_app::ConnectionProfile::new(
@@ -1372,7 +1369,7 @@ mod tests {
         );
         let mut form = ConnectionForm::open_edit(&profile);
         let dump = form.lines().join("\n");
-        assert!(dump.contains("< DuckDB >"), "{dump}");
+        assert!(dump.contains("< DuckDB · not installed >"), "{dump}");
         assert!(dump.contains("/data/warehouse.duckdb") && !dump.contains("host:"));
         let (input, _) = form.submit().expect("submits");
         assert_eq!(input.driver, "duckdb");

@@ -36,8 +36,8 @@ struct FakeFactory;
 impl ConnectionFactory for FakeFactory {
     fn descriptor(&self) -> dexo_driver_api::DriverDescriptor {
         dexo_driver_api::DriverDescriptor {
-            id: "fake",
-            display_name: "Fake",
+            id: "fake".into(),
+            display_name: "Fake".into(),
             default_port: 1,
             options: dexo_driver_api::ConnectionOptions {
                 tls: false,
@@ -46,6 +46,8 @@ impl ConnectionFactory for FakeFactory {
                 proxy: false,
             },
             file: false,
+            plugin: None,
+            installed: true,
         }
     }
 

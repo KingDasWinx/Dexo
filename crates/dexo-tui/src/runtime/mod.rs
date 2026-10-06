@@ -3133,8 +3133,8 @@ mod dial_tests {
     impl ConnectionFactory for Refuses {
         fn descriptor(&self) -> dexo_driver_api::DriverDescriptor {
             dexo_driver_api::DriverDescriptor {
-                id: "postgres",
-                display_name: "Refuses",
+                id: "postgres".into(),
+                display_name: "Refuses".into(),
                 default_port: 5432,
                 options: dexo_driver_api::ConnectionOptions {
                     tls: false,
@@ -3143,6 +3143,8 @@ mod dial_tests {
                     proxy: false,
                 },
                 file: false,
+                plugin: None,
+                installed: true,
             }
         }
 

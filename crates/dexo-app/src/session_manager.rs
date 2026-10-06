@@ -120,8 +120,8 @@ mod tests {
     impl ConnectionFactory for DisconnectAfterExecute {
         fn descriptor(&self) -> dexo_driver_api::DriverDescriptor {
             dexo_driver_api::DriverDescriptor {
-                id: "fake",
-                display_name: "Fake",
+                id: "fake".into(),
+                display_name: "Fake".into(),
                 default_port: 1,
                 options: dexo_driver_api::ConnectionOptions {
                     tls: false,
@@ -130,6 +130,8 @@ mod tests {
                     proxy: false,
                 },
                 file: false,
+                plugin: None,
+                installed: true,
             }
         }
 
