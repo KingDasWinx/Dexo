@@ -2266,6 +2266,7 @@ dependencies = [
  "dexo-secrets",
  "dexo-sql",
  "dexo-storage",
+ "dexo-test-support",
  "dexo-transport",
  "futures-util",
  "image",

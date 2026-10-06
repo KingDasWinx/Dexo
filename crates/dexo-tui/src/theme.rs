@@ -663,21 +663,46 @@ on-selection = "#c0caf5"
 /// The key that names Dexo's own theme, composed from the mode and the accent.
 pub const DEXO_THEME: &str = "dexo";
 
-/// A theme file of the user's, `<data dir>/themes/<name>.toml`; it is chosen as
-/// `file:<name>`.
+/// A theme file of the user's, `<data dir>/themes/<name>.toml`, chosen as
+/// `file:<name>`; or a theme plugin's, chosen as `plugin:<id>/<name>`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UserTheme {
     pub name: String,
     pub theme: Theme,
+    /// The theme plugin it came from; none for the user's own file.
+    pub pack: Option<String>,
 }
 
-/// The user's theme files that parse, by name, and a line for each that does not --
-/// naming the file and the line in it.
+impl UserTheme {
+    /// What Settings saves for it: `file:<name>`, or `plugin:<pack>/<name>`.
+    pub fn key(&self) -> String {
+        match &self.pack {
+            Some(pack) => format!("plugin:{pack}/{}", self.name),
+            None => format!("file:{}", self.name),
+        }
+    }
+}
+
+/// The user's theme files, then the enabled theme plugins' themes, each that parses by
+/// name, and a line for each that does not -- naming the file and the line in it.
 pub fn user_themes(data_dir: &Path) -> (Vec<UserTheme>, Vec<String>) {
     let mut themes = Vec::new();
     let mut errors = Vec::new();
-    let Ok(entries) = std::fs::read_dir(data_dir.join("themes")) else {
-        return (themes, errors);
+    read_themes(&data_dir.join("themes"), None, &mut themes, &mut errors);
+    for (pack, dir) in dexo_app::plugin::theme_dirs(data_dir) {
+        read_themes(&dir, Some(&pack), &mut themes, &mut errors);
+    }
+    (themes, errors)
+}
+
+fn read_themes(
+    dir: &Path,
+    pack: Option<&str>,
+    themes: &mut Vec<UserTheme>,
+    errors: &mut Vec<String>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
     let mut paths: Vec<std::path::PathBuf> = entries
         .filter_map(Result::ok)
@@ -698,14 +723,17 @@ pub fn user_themes(data_dir: &Path) -> (Vec<UserTheme>, Vec<String>) {
             continue;
         };
         match parse_theme(&src) {
-            Ok(theme) => themes.push(UserTheme { name, theme }),
+            Ok(theme) => themes.push(UserTheme {
+                name,
+                theme,
+                pack: pack.map(str::to_string),
+            }),
             Err(error) => errors.push(match error.line {
                 Some(line) => format!("{} line {line}: {error}", path.display()),
                 None => format!("{}: {error}", path.display()),
             }),
         }
     }
-    (themes, errors)
 }
 
 /// The theme `key` names -- Dexo's own (from `mode` and `accent`), a preset, or a
@@ -716,10 +744,7 @@ pub fn resolve(key: &str, mode: Mode, accent: &str, user: &[UserTheme]) -> Theme
     {
         return theme;
     }
-    if let Some(theme) = key
-        .strip_prefix("file:")
-        .and_then(|name| user.iter().find(|theme| theme.name == name))
-    {
+    if let Some(theme) = user.iter().find(|theme| theme.key() == key) {
         return theme.theme.clone();
     }
     theme_for(mode, accent)
@@ -734,10 +759,13 @@ pub fn choices(user: &[UserTheme]) -> Vec<(String, String)> {
                 .iter()
                 .map(|(key, label, _)| (key.to_string(), label.to_string())),
         )
-        .chain(
-            user.iter()
-                .map(|theme| (format!("file:{}", theme.name), theme.name.clone())),
-        )
+        .chain(user.iter().map(|theme| {
+            let label = match &theme.pack {
+                Some(pack) => format!("{} · {pack}", theme.name),
+                None => theme.name.clone(),
+            };
+            (theme.key(), label)
+        }))
         .collect()
 }
 
@@ -950,6 +978,43 @@ mod tests {
         preview_lines, theme_for,
     };
     use crate::capabilities::{ColorDepth, TerminalCapabilities};
+
+    #[test]
+    fn an_enabled_theme_pack_adds_its_themes() {
+        use dexo_app::plugin::{install, state::Origin};
+        let dir = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let pack = dexo_test_support::plugins::theme_folder(work.path(), "extra-themes", "1.0.0");
+        install::commit(
+            dir.path(),
+            install::stage(dir.path(), &pack).unwrap(),
+            Origin::Local,
+            None,
+        )
+        .unwrap();
+        let (themes, problems) = super::user_themes(dir.path());
+        assert!(problems.is_empty(), "{problems:?}");
+        let ocean = themes
+            .iter()
+            .find(|theme| theme.key() == "plugin:extra-themes/ocean")
+            .expect("the pack's theme");
+        assert_eq!(ocean.pack.as_deref(), Some("extra-themes"));
+        assert!(super::choices(&themes).contains(&(
+            "plugin:extra-themes/ocean".to_string(),
+            "ocean · extra-themes".to_string()
+        )));
+        assert_eq!(
+            super::resolve("plugin:extra-themes/ocean", Mode::Dark, "", &themes),
+            ocean.theme
+        );
+        install::set_enabled(dir.path(), "extra-themes", false, None).unwrap();
+        assert!(
+            super::user_themes(dir.path())
+                .0
+                .iter()
+                .all(|theme| theme.pack.is_none())
+        );
+    }
 
     #[test]
     fn invalid_role_color_names_field_and_keeps_file() {

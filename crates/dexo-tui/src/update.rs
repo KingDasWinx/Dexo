@@ -12489,10 +12489,11 @@ fn load_user_themes(model: &mut Model, data_dir: &std::path::Path) {
         .any(|(key, _)| *key == model.settings.theme)
     {
         if model.settings.theme != crate::theme::DEXO_THEME {
-            model.messages.warn(format!(
-                "There is no theme {}; Dexo's own is used.",
-                model.settings.theme.trim_start_matches("file:")
-            ));
+            let name = model.settings.theme.trim_start_matches("file:");
+            let name = name.trim_start_matches("plugin:");
+            model
+                .messages
+                .warn(format!("There is no theme {name}; Dexo's own is used."));
         }
         model.settings.theme = crate::theme::DEXO_THEME.into();
     }

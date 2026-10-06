@@ -136,3 +136,17 @@ pub fn register_installed(registry: &DriverRegistry, data_dir: &Path) {
     }
     register_dev_overrides(registry);
 }
+
+/// The themes folders of the enabled theme plugins, with their plugin's id.
+pub fn theme_dirs(data_dir: &Path) -> Vec<(String, PathBuf)> {
+    let plugins = plugins_dir(data_dir);
+    state::load(&plugins)
+        .plugins
+        .into_iter()
+        .filter(|(_, installed)| installed.enabled && installed.kind == manifest::Kind::Theme)
+        .map(|(id, _)| {
+            let themes = plugins.join(&id).join("themes");
+            (id, themes)
+        })
+        .collect()
+}
