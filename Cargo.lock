@@ -2125,6 +2125,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dexo-plugin-sdk"
+version = "1.4.2"
+dependencies = [
+ "dexo-driver-api",
+ "dexo-driver-sqlite",
+ "dexo-plugin-protocol",
+ "futures-util",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "dexo-runtime"
 version = "1.4.2"
 dependencies = [
