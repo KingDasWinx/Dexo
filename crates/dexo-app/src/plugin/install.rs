@@ -71,8 +71,16 @@ pub fn stage(data_dir: &Path, source: &Path) -> Result<Staged, AppError> {
         copy_package(source, &dir.0)?;
         return finish_stage(data_dir, dir, None);
     }
-    let bytes =
-        std::fs::read(source).map_err(|error| refused(format!("{}: {error}", source.display())))?;
+    let unreadable = |error: std::io::Error| refused(format!("{}: {error}", source.display()));
+    let size = std::fs::metadata(source).map_err(unreadable)?.len();
+    if size > DOWNLOAD_LIMIT {
+        return Err(refused(format!(
+            "{} is larger than a plugin may be ({} MB)",
+            source.display(),
+            DOWNLOAD_LIMIT / (1024 * 1024)
+        )));
+    }
+    let bytes = std::fs::read(source).map_err(unreadable)?;
     stage_bytes(data_dir, &bytes)
 }
 

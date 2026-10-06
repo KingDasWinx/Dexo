@@ -7,13 +7,43 @@ use std::path::{Component, Path};
 use super::manifest::{Kind, Manifest};
 
 /// More than this unpacked is a compression bomb, not a plugin.
-const MAX_UNPACKED: u64 = 1024 * 1024 * 1024;
+const MAX_UNPACKED: u64 = 512 * 1024 * 1024;
 
 /// Unpacks a `.tar.gz` into `into`. Refused: a symlink, a hard link, an absolute path, a
 /// `..`, and any file a plugin does not ship.
 pub fn unpack(package: impl Read, into: &Path) -> Result<(), String> {
+    unpack_within(package, into, MAX_UNPACKED)
+}
+
+/// A stream that fails past `left` bytes: what `tar` reads whole into memory -- a long
+/// name, an extended header -- is capped with the rest.
+struct Capped<R> {
+    inner: R,
+    left: u64,
+    limit: u64,
+}
+
+impl<R: Read> Read for Capped<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        if read as u64 > self.left {
+            return Err(std::io::Error::other(format!(
+                "the package unpacks to more than {} MB",
+                self.limit / (1024 * 1024)
+            )));
+        }
+        self.left -= read as u64;
+        Ok(read)
+    }
+}
+
+fn unpack_within(package: impl Read, into: &Path, limit: u64) -> Result<(), String> {
     let unreadable = |error: std::io::Error| format!("the package cannot be read: {error}");
-    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(package));
+    let mut archive = tar::Archive::new(Capped {
+        inner: flate2::read::GzDecoder::new(package),
+        left: limit,
+        limit,
+    });
     let mut total = 0u64;
     for entry in archive.entries().map_err(unreadable)? {
         let mut entry = entry.map_err(unreadable)?;
@@ -55,8 +85,11 @@ pub fn unpack(package: impl Read, into: &Path) -> Result<(), String> {
             ));
         }
         total += entry.header().size().unwrap_or(0);
-        if total > MAX_UNPACKED {
-            return Err("the package unpacks to more than 1 GB".into());
+        if total > limit {
+            return Err(format!(
+                "the package unpacks to more than {} MB",
+                limit / (1024 * 1024)
+            ));
         }
         let target = into.join(&name);
         if let Some(parent) = target.parent() {
@@ -186,6 +219,25 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o111, 0o111);
         }
+    }
+
+    #[test]
+    fn a_package_that_unpacks_past_the_cap_stops_at_it() {
+        // A long name is read whole into memory: the stream is capped, not only the files.
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        let mut header = tar::Header::new_gnu();
+        header.as_old_mut().name[..13].copy_from_slice(b"././@LongLink");
+        header.set_entry_type(tar::EntryType::GNULongName);
+        header.set_size(64 * 1024);
+        header.set_cksum();
+        builder.append(&header, &vec![b'a'; 64 * 1024][..]).unwrap();
+        let bytes = builder.into_inner().unwrap().finish().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let error = super::unpack_within(&bytes[..], dir.path(), 16 * 1024).unwrap_err();
+        assert!(error.contains("unpacks to more than"), "{error}");
     }
 
     #[test]

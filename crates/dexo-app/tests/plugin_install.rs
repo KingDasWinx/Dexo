@@ -162,3 +162,18 @@ fn a_package_with_a_file_a_plugin_does_not_ship_is_refused() {
     let error = install::stage(data.path(), &folder).err().unwrap();
     assert!(error.to_string().contains("install.sh"), "{error}");
 }
+
+#[test]
+fn a_local_package_larger_than_a_download_may_be_is_refused_unread() {
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let huge = work.path().join("huge.tar.gz");
+    std::fs::File::create(&huge)
+        .unwrap()
+        .set_len(install::DOWNLOAD_LIMIT + 1)
+        .unwrap();
+    let Err(error) = install::stage(data.path(), &huge) else {
+        panic!("staged a package past the limit");
+    };
+    assert!(error.to_string().contains("is larger than"), "{error}");
+}
