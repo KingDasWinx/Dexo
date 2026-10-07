@@ -1327,7 +1327,7 @@ pub(crate) fn show_input(
 
 /// [`show_input`] for a value drawn as the stretch of it around the cursor
 /// ([`TextInput::window`]), so a value wider than `line` scrolls with the cursor.
-fn show_windowed_input(
+pub(crate) fn show_windowed_input(
     frame: &mut Frame,
     line: Rect,
     before: &str,
@@ -1344,16 +1344,6 @@ fn show_windowed_input(
     if x < usize::from(line.width) {
         frame.set_cursor_position(ratatui::layout::Position::new(line.x + x as u16, line.y));
     }
-}
-
-/// The focused field of a form, drawn `> label: value` on `line`.
-pub(crate) fn show_form_field(
-    frame: &mut Frame,
-    line: Rect,
-    field: &crate::screens::schema_editor::FormField,
-) {
-    let before = format!("> {}: ", field.label);
-    show_input(frame, line, &before, &field.value, field.secret);
 }
 
 /// Reverses `columns` cells of `line` from its column `from`, as far as the line goes.

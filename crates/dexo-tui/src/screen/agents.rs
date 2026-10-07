@@ -756,11 +756,16 @@ pub fn profile_buttons(model: &Model) -> Vec<Button> {
 
 fn profiles(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     let screen = &model.mcp_profiles;
+    // A form has the whole view until it is done.
+    if let Some(form) = &screen.grant_form {
+        grant_form(frame, area, model, form, hits);
+        return;
+    }
+    if let Some(checklist) = &screen.checklist {
+        checklist_form(frame, area, model, checklist, hits);
+        return;
+    }
     if screen.profiles.is_empty() {
-        if let Some(form) = &screen.grant_form {
-            grant_form(frame, area, model, form, hits);
-            return;
-        }
         let mut lines: Vec<String> = McpProfilesScreen::EMPTY
             .iter()
             .map(|line| line.trim().to_string())
@@ -774,10 +779,6 @@ fn profiles(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
     let (list, detail) = super::list_and_detail(model, hits, area, screen.profiles.len());
     profiles_list(frame, list, model, hits);
-    if let Some(form) = &screen.grant_form {
-        grant_form(frame, detail, model, form, hits);
-        return;
-    }
     let width = detail.width.saturating_sub(2);
     let mut footer = Vec::new();
     if let Some(confirm) = &screen.confirm {
@@ -788,10 +789,7 @@ fn profiles(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             usize::from(width).max(8),
         ));
     }
-    let text = match &screen.checklist {
-        Some(checklist) => checklist_lines(model, checklist),
-        None => widgets::field_lines(model, &profile_fields(screen), width),
-    };
+    let text = widgets::field_lines(model, &profile_fields(screen), width);
     let drawn = super::detail_pane(
         frame,
         detail,
@@ -805,21 +803,6 @@ fn profiles(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     );
     hits.set_scroll_limit(crate::mouse::ScrollArea::McpProfiles, drawn.max_scroll);
     hits.set_page(crate::mouse::ScrollArea::McpProfiles, drawn.page);
-    // A click on a connection checks it.
-    if let Some(checklist) = &screen.checklist {
-        let top = screen.detail_scroll.min(drawn.max_scroll);
-        for index in 0..checklist.items.len() {
-            let Some(line) = (index + 1).checked_sub(top) else {
-                continue;
-            };
-            if line < usize::from(drawn.body.height) {
-                hits.register(
-                    HitTarget::FormField(index),
-                    crate::mouse::line_rect(drawn.body, line),
-                );
-            }
-        }
-    }
     if let Some(confirm) = &screen.confirm {
         register_buttons(hits, drawn.footer, &footer, confirm.submit_label());
     }
@@ -932,24 +915,70 @@ fn profile_fields(screen: &McpProfilesScreen) -> Vec<FieldRow> {
     rows
 }
 
-/// The connections the profile may use, checked, with the focus marked.
-fn checklist_lines(
+/// The connections the picked profile may use, as a form: checked in a grid, saved
+/// with the button.
+fn checklist_form(
+    frame: &mut Frame,
+    area: Rect,
     model: &Model,
     checklist: &crate::screens::mcp_profiles::Checklist,
-) -> Vec<Line<'static>> {
-    let muted = model.theme.style(Role::Muted, model.capabilities);
-    let mut lines = vec![Line::styled(" Connections the agent may use", muted)];
-    for (index, (name, on)) in checklist.items.iter().enumerate() {
-        let marker = if index == checklist.row { ">" } else { " " };
-        lines.push(Line::raw(format!(
-            "{marker}[{}] {name}",
-            if *on { "x" } else { " " }
-        )));
+    hits: &mut HitMap,
+) {
+    use crate::screens::mcp_profiles::ChecklistFocus;
+    use crate::widgets::panel::{self, Button, Lines};
+    let area = panel::area(area);
+    let mut lines = Lines::new(panel::value_width(area));
+    let on_grid = checklist.focus == ChecklistFocus::Grid;
+    lines.section(model, "MAY USE");
+    lines.grid(
+        model,
+        0,
+        "Connections",
+        &checklist.items,
+        on_grid.then_some(checklist.row),
+    );
+    lines.error(model, checklist.error.as_deref());
+    lines.section(model, "RESULT");
+    let checked = checklist.checked();
+    if checked.is_empty() {
+        lines.note(
+            "check the connections it may use",
+            panel::fg(model, Role::Muted),
+        );
+    } else {
+        lines.note(
+            format!("{} may use {}", checklist.profile, checked.join(", ")),
+            panel::fg(model, Role::Foreground),
+        );
     }
-    lines
+    panel::draw(
+        frame,
+        area,
+        model,
+        hits,
+        &format!("CONNECTIONS · {}", checklist.profile),
+        lines,
+        &[
+            Button {
+                label: "Cancel",
+                focused: checklist.focus == ChecklistFocus::Cancel,
+                tone: Role::Focus,
+                primary: false,
+                target: HitTarget::FooterCancel,
+            },
+            Button {
+                label: "Save",
+                focused: checklist.focus == ChecklistFocus::Save,
+                tone: Role::Focus,
+                primary: true,
+                target: HitTarget::FooterSubmit,
+            },
+        ],
+        checklist.hints(),
+    );
 }
 
-/// New grant, in the pane the profile's details were in.
+/// New grant, over the whole view: the form every form follows (`docs/design.md`).
 fn grant_form(
     frame: &mut Frame,
     area: Rect,
@@ -957,41 +986,191 @@ fn grant_form(
     form: &crate::screens::mcp_profiles::GrantForm,
     hits: &mut HitMap,
 ) {
-    let lines = form.lines();
-    let block = crate::render::pane_block(model, "New grant", true);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    hits.register(HitTarget::ScreenDetail, area);
-    frame.render_widget(ratatui::widgets::Paragraph::new(lines.join("\n")), inner);
-    // The rows drawn are the fields that are shown, from the second line.
-    let shown: Vec<usize> = (0..form.fields.len())
-        .filter(|index| *index != crate::screens::mcp_profiles::GRANT_ASK_SECS || form.ask)
+    use crate::screens::mcp_profiles::{GrantForm, GrantRow};
+    use crate::widgets::panel::{self, Button, Lines};
+    let area = panel::area(area);
+    let mut lines = Lines::new(panel::value_width(area));
+    let focused = |row: GrantRow| form.focus == row;
+    let invalid = |row: GrantRow| form.error.as_ref().is_some_and(|(at, _)| *at == row);
+    let at = |row: GrantRow| form.index_of(row);
+    let style = |role: Role| panel::fg(model, role);
+    let say = |text: String| Span::styled(text, style(Role::Foreground));
+    let environment = |name: &str| {
+        crate::accessibility::environment_role(name)
+            .map(|role| Span::styled(format!("  {name}"), panel::bold(model, role)))
+            .unwrap_or_else(|| Span::raw(""))
+    };
+
+    lines.section(model, "WHO");
+    let open = |row: GrantRow, rows: Vec<Vec<Span<'static>>>| {
+        form.open
+            .filter(|_| focused(row))
+            .map(|highlight| (rows, highlight))
+    };
+    let profiles: Vec<Vec<Span<'static>>> = form
+        .profiles
+        .iter()
+        .map(|profile| vec![say(profile.name.clone())])
         .collect();
-    for (index, line) in lines.iter().enumerate().take(usize::from(inner.height)) {
-        let rect = crate::mouse::line_rect(inner, index);
-        if let Some(field) = index.checked_sub(1).and_then(|row| shown.get(row)).copied() {
-            if field == form.focus
-                && !form.is_choice(field)
-                && field != crate::screens::mcp_profiles::GRANT_ASK
-            {
-                crate::render::show_form_field(frame, rect, &form.fields[field]);
-            }
-            hits.register(HitTarget::FormField(field), rect);
-            if form.is_choice(field) {
-                for (needle, step) in [("< ", -1), (" >", 1)] {
-                    crate::mouse::register_label(
-                        hits,
-                        rect,
-                        line,
-                        needle,
-                        HitTarget::FormChoice { index: field, step },
-                    );
-                }
-            }
-        } else if line.contains("[Cancel]") {
-            crate::widgets::form::register_footer(hits, rect, line, "Create");
-        }
+    lines.dropdown(
+        model,
+        at(GrantRow::Profile),
+        "Profile",
+        vec![say(form.profile_name())],
+        focused(GrantRow::Profile),
+        invalid(GrantRow::Profile),
+        open(GrantRow::Profile, profiles),
+    );
+    let connections = form.connections();
+    let value = match form.connection_choice() {
+        Some(choice) => vec![say(choice.name.clone()), environment(&choice.environment)],
+        None => vec![Span::styled(
+            "no connection an agent can use",
+            style(Role::Muted),
+        )],
+    };
+    let rows = connections
+        .iter()
+        .map(|choice| {
+            vec![
+                say(format!("{:<20}", choice.name)),
+                environment(&choice.environment),
+            ]
+        })
+        .collect();
+    lines.dropdown(
+        model,
+        at(GrantRow::Connection),
+        "Connection",
+        value,
+        focused(GrantRow::Connection),
+        invalid(GrantRow::Connection),
+        open(GrantRow::Connection, rows),
+    );
+
+    lines.section(model, "WHAT");
+    lines.segmented(
+        model,
+        at(GrantRow::Capability),
+        "Capability",
+        &GrantForm::capabilities(),
+        form.capability,
+        focused(GrantRow::Capability),
+        form.capability_about(),
+    );
+    lines.grid(
+        model,
+        at(GrantRow::Tools),
+        "Tools",
+        &form.tool_items(),
+        focused(GrantRow::Tools).then_some(form.tool),
+    );
+    lines.text(
+        model,
+        at(GrantRow::Objects),
+        "Objects",
+        &form.objects,
+        "",
+        &form.objects_hint(),
+        focused(GrantRow::Objects),
+        invalid(GrantRow::Objects),
+    );
+
+    lines.section(model, "HOW LONG");
+    lines.segmented(
+        model,
+        at(GrantRow::Expires),
+        "Expires",
+        &GrantForm::expires_options(),
+        form.expires,
+        focused(GrantRow::Expires),
+        "",
+    );
+    lines.toggle(
+        model,
+        at(GrantRow::Ask),
+        "Ask each write",
+        form.ask,
+        &form.how(),
+        focused(GrantRow::Ask),
+    );
+    if form.ask {
+        lines.text(
+            model,
+            at(GrantRow::AskSecs),
+            "Wait up to",
+            &form.ask_secs,
+            " s",
+            "1 to 3600 seconds",
+            focused(GrantRow::AskSecs),
+            invalid(GrantRow::AskSecs),
+        );
     }
+
+    let target = form
+        .connection_choice()
+        .map(|choice| choice.name)
+        .unwrap_or_default();
+    lines.section(model, "CONFIRM");
+    lines.confirm(
+        model,
+        at(GrantRow::Confirm),
+        &target,
+        &form.confirm,
+        focused(GrantRow::Confirm),
+        invalid(GrantRow::Confirm),
+    );
+    lines.error(
+        model,
+        form.error.as_ref().map(|(_, message)| message.as_str()),
+    );
+
+    lines.section(model, "RESULT");
+    let (allows, lasts) = form.result();
+    match allows {
+        Some(allows) => lines.note(allows, style(Role::Foreground)),
+        None => lines.note("pick the tools it may use", style(Role::Muted)),
+    }
+    lines.note(lasts, style(Role::Muted));
+    let production = form.connection_choice().is_some_and(|choice| {
+        crate::accessibility::environment_role(&choice.environment) == Some(Role::Production)
+    });
+    if production {
+        lines.note(
+            "! writes to a production connection",
+            panel::bold(model, Role::Warning),
+        );
+    }
+
+    panel::draw(
+        frame,
+        area,
+        model,
+        hits,
+        "NEW GRANT",
+        lines,
+        &[
+            Button {
+                label: "Cancel",
+                focused: focused(GrantRow::Cancel),
+                tone: Role::Focus,
+                primary: false,
+                target: HitTarget::FooterCancel,
+            },
+            Button {
+                label: "Create grant",
+                focused: focused(GrantRow::Create),
+                tone: if production {
+                    Role::Warning
+                } else {
+                    Role::Focus
+                },
+                primary: true,
+                target: HitTarget::FooterSubmit,
+            },
+        ],
+        form.hints(),
+    );
 }
 
 /// The buttons of a question at the bottom of a pane.
@@ -1033,14 +1212,15 @@ pub fn hints(model: &Model) -> String {
         AgentsView::Activity => {
             format!("Up/Down pick  / search  p profile  o outcome  {views}  Esc back")
         }
-        AgentsView::Profiles if model.mcp_profiles.grant_form.is_some() => {
-            "Tab next  Left/Right change  Enter create  Esc cancel".into()
+        // A form says its keys under its buttons.
+        AgentsView::Profiles
+            if model.mcp_profiles.grant_form.is_some()
+                || model.mcp_profiles.checklist.is_some() =>
+        {
+            String::new()
         }
         AgentsView::Profiles if model.mcp_profiles.confirm.is_some() => {
             "Left/Right pick  Enter answer  Esc cancel".into()
-        }
-        AgentsView::Profiles if model.mcp_profiles.checklist.is_some() => {
-            "Up/Down move  Space check  Enter save  Esc keep them".into()
         }
         AgentsView::Profiles => {
             format!("Up/Down pick  R revoke all  PgUp/PgDn read  {views}  Esc back")

@@ -898,6 +898,19 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if model.shown_screen() != crate::model::Screen::Workbench
                 && crate::mouse::top_overlay(model).is_none()
             {
+                // New grant takes a paste in its text boxes, not on a choice, where a
+                // space would flip it.
+                if model.shown_screen() == crate::model::Screen::Agents
+                    && let Some(form) = model.mcp_profiles.grant_form.as_mut()
+                {
+                    match form.focused_input() {
+                        Some(input) => input.insert_text(&text),
+                        None => model
+                            .messages
+                            .info("Paste into Objects, Wait up to or the confirmation.".into()),
+                    }
+                    return Vec::new();
+                }
                 if !crate::screen::takes_text(model) {
                     model.messages.info(
                         "Nothing here takes text: / starts a search, and a form takes it in its fields."
@@ -2074,10 +2087,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::McpGrantFailed { message } => {
             match model.mcp_profiles.grant_form.as_mut() {
-                Some(form) => {
-                    form.focus_for_error(&message);
-                    form.error = Some(message);
-                }
+                Some(form) => form.fail(message),
                 None => model.messages.error(message),
             }
             Vec::new()
@@ -4222,68 +4232,62 @@ fn review_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// New MCP Grant's keys: Tab and the arrows walk the fields and the buttons, Left and
-/// Right step between the buttons, Space flips "ask before each write", Enter creates
-/// unless Cancel has the focus, Esc closes.
+/// New grant's keys: the form's own (`docs/design.md`); Enter creates only on Create.
 fn grant_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    use crate::widgets::form::FooterFocus;
+    use crate::screens::mcp_profiles::FormKey;
     let Some(form) = model.mcp_profiles.grant_form.as_mut() else {
         return Vec::new();
     };
-    let footer = form.footer_focus();
-    match key.code {
-        KeyCode::Esc => close_grant_form(model),
-        KeyCode::Enter if footer == FooterFocus::Cancel => close_grant_form(model),
-        KeyCode::Enter => return submit_grant_form(model),
-        KeyCode::Down | KeyCode::Tab => form.focus_next(),
-        KeyCode::Up | KeyCode::BackTab => form.focus_prev(),
-        KeyCode::Left | KeyCode::Right if footer != FooterFocus::Input => form.toggle_button(),
-        _ if footer == FooterFocus::Input => form.edit(key),
-        _ => {}
+    match form.key(key) {
+        FormKey::Stay => Vec::new(),
+        FormKey::Submit => submit_grant_form(model),
+        FormKey::Cancel => {
+            close_grant_form(model);
+            Vec::new()
+        }
     }
-    Vec::new()
 }
 
 fn submit_grant_form(model: &mut Model) -> Vec<Effect> {
     let Some(form) = model.mcp_profiles.grant_form.as_mut() else {
         return Vec::new();
     };
-    let profile = form.profile_name();
-    if profile.is_empty() {
-        form.error =
-            Some("there is no profile to grant to: create one with dexo mcp profile create".into());
-        return Vec::new();
-    }
     match form.request() {
         Ok(request) => {
             form.error = None;
-            vec![Effect::CreateMcpGrant { profile, request }]
+            vec![Effect::CreateMcpGrant {
+                profile: form.profile_name(),
+                request,
+            }]
         }
         Err(error) => {
-            form.focus_for_error(&error);
-            form.error = Some(error);
+            form.fail(error);
             Vec::new()
         }
     }
 }
 
 fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
-    if model.mcp_profiles.grant_form.is_some() {
+    if let Some(form) = model.mcp_profiles.grant_form.as_mut() {
+        let row = |form: &crate::screens::mcp_profiles::GrantForm, index: usize| {
+            form.rows().get(index).copied()
+        };
         return match hit {
+            // A click on a row focuses it; on a dropdown, it opens it too.
             Some(HitTarget::FormField(index)) => {
-                if let Some(form) = model.mcp_profiles.grant_form.as_mut() {
-                    form.focus = index;
-                    // A click on the checkbox flips it, as Space does.
-                    if index == crate::screens::mcp_profiles::GRANT_ASK {
-                        form.toggle_ask();
+                if let Some(row) = row(form, index) {
+                    let again = form.focus == row && form.open.is_some();
+                    form.focus = row;
+                    form.open = None;
+                    if !again {
+                        form.open_dropdown();
                     }
                 }
                 Vec::new()
             }
-            Some(HitTarget::FormChoice { index, step }) => {
-                if let Some(form) = model.mcp_profiles.grant_form.as_mut() {
-                    form.focus = index;
-                    form.step(isize::from(step));
+            Some(HitTarget::FormOption { field, option }) => {
+                if let Some(row) = row(form, field) {
+                    form.pick(row, option);
                 }
                 Vec::new()
             }
@@ -4292,14 +4296,29 @@ fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> 
                 close_grant_form(model);
                 Vec::new()
             }
-            _ => Vec::new(),
+            _ => {
+                form.open = None;
+                Vec::new()
+            }
         };
     }
-    if let Some(checklist) = model.mcp_profiles.checklist.as_mut() {
-        if let Some(HitTarget::FormField(index)) = hit {
-            checklist.toggle(index);
-        }
-        return Vec::new();
+    if model.mcp_profiles.checklist.is_some() {
+        return match hit {
+            Some(HitTarget::FormOption { option, .. }) => {
+                if let Some(checklist) = model.mcp_profiles.checklist.as_mut() {
+                    checklist.focus = crate::screens::mcp_profiles::ChecklistFocus::Grid;
+                    checklist.error = None;
+                    checklist.toggle(option);
+                }
+                Vec::new()
+            }
+            Some(HitTarget::FooterSubmit) => save_mcp_checklist(model),
+            Some(HitTarget::FooterCancel) => {
+                model.mcp_profiles.checklist = None;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
     }
     if model.mcp_profiles.confirm.is_some() {
         return match hit {
@@ -4334,11 +4353,30 @@ fn open_grant_form(model: &mut Model) {
         .map(|profile| crate::screens::mcp_profiles::ProfileChoice {
             name: profile.name.clone(),
             connections: profile.connections.clone(),
+            sees: profile
+                .scopes
+                .iter()
+                .filter_map(|scope| scope.strip_prefix("allow ").map(str::to_string))
+                .collect(),
         })
         .collect();
-    screen.grant_form = Some(crate::screens::mcp_profiles::GrantForm::new(
-        choices,
-        screen.selected,
+    let selected = screen.selected;
+    // The connections agents can use, with the environment each is marked with.
+    let saved = mcp_connections(model)
+        .into_iter()
+        .map(|name| crate::screens::mcp_profiles::ConnectionChoice {
+            environment: model
+                .connections
+                .profiles
+                .iter()
+                .find(|row| row.profile.name == name)
+                .map(|row| row.profile.environment.clone())
+                .unwrap_or_default(),
+            name,
+        })
+        .collect();
+    model.mcp_profiles.grant_form = Some(crate::screens::mcp_profiles::GrantForm::new(
+        choices, saved, selected,
     ));
 }
 
@@ -5785,33 +5823,39 @@ fn prepare_mcp_setup(model: &mut Model) {
 
 /// The connections checklist: Space checks, Enter saves, Esc keeps them as they were.
 fn mcp_checklist_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::screens::mcp_profiles::FormKey;
+    let Some(checklist) = model.mcp_profiles.checklist.as_mut() else {
+        return Vec::new();
+    };
+    match checklist.key(key) {
+        FormKey::Stay => Vec::new(),
+        FormKey::Submit => save_mcp_checklist(model),
+        FormKey::Cancel => {
+            model.mcp_profiles.checklist = None;
+            Vec::new()
+        }
+    }
+}
+
+/// Saves the checked connections to the profile the form was opened on, whatever the
+/// list moved to since.
+fn save_mcp_checklist(model: &mut Model) -> Vec<Effect> {
     let screen = &mut model.mcp_profiles;
     let Some(checklist) = screen.checklist.as_mut() else {
         return Vec::new();
     };
-    match key.code {
-        KeyCode::Esc => screen.checklist = None,
-        KeyCode::Up | KeyCode::BackTab => checklist.step(-1),
-        KeyCode::Down | KeyCode::Tab => checklist.step(1),
-        KeyCode::Char(' ') => checklist.toggle(checklist.row),
-        KeyCode::Enter => {
-            let connections = checklist.checked();
-            if connections.is_empty() {
-                screen.status = "Check at least one connection for the agent to use.".into();
-                return Vec::new();
-            }
-            // Saved to the profile it was opened on, whatever the list moved to since.
-            let name = checklist.profile.clone();
-            screen.checklist = None;
-            return vec![Effect::SaveMcpProfileAccess {
-                name,
-                connections: Some(connections),
-                reads: None,
-            }];
-        }
-        _ => {}
+    let connections = checklist.checked();
+    if connections.is_empty() {
+        checklist.error = Some("check at least one connection for the agent to use".into());
+        return Vec::new();
     }
-    Vec::new()
+    let name = checklist.profile.clone();
+    screen.checklist = None;
+    vec![Effect::SaveMcpProfileAccess {
+        name,
+        connections: Some(connections),
+        reads: None,
+    }]
 }
 
 /// The Setup form's keys: Up and Down walk it, Left, Right and Space change a row, Enter
@@ -15946,41 +15990,43 @@ mod tests {
                 profiles: vec![crate::screens::mcp_profiles::McpProfileSummary {
                     name: "assistant".into(),
                     enabled: true,
+                    connections: vec!["local".into()],
                     ..Default::default()
                 }],
             },
         );
         update(&mut model, key(KeyCode::Char('g')));
         assert!(model.mcp_profiles.grant_form.is_some());
+        let tab = |model: &mut Model| update(model, key(KeyCode::Tab));
         let typed = |model: &mut Model, text: &str| {
             for ch in text.chars() {
                 update(model, key(KeyCode::Char(ch)));
             }
-            update(model, key(KeyCode::Down));
         };
-        // profile, then connection (free text: the profile lists none), then capability.
-        update(&mut model, key(KeyCode::Down));
-        typed(&mut model, "local");
-        update(&mut model, key(KeyCode::Down));
-        typed(&mut model, "data_insert");
+        // Profile, connection and capability are already what this grant is.
+        tab(&mut model);
+        tab(&mut model);
+        tab(&mut model);
+        // The first tool, then the objects.
+        update(&mut model, key(KeyCode::Char(' ')));
+        tab(&mut model);
         typed(&mut model, "db.public.items");
-        update(&mut model, key(KeyCode::Down));
+        tab(&mut model);
+        tab(&mut model);
         // "ask before each write", then its timeout, then the confirmation.
         update(&mut model, key(KeyCode::Char(' ')));
-        update(&mut model, key(KeyCode::Down));
+        tab(&mut model);
         for _ in 0..3 {
             update(&mut model, key(KeyCode::Backspace));
         }
         typed(&mut model, "90");
+        tab(&mut model);
         typed(&mut model, "local");
-        let lines = model
-            .mcp_profiles
-            .grant_form
-            .as_ref()
-            .unwrap()
-            .lines()
-            .join("\n");
-        assert!(lines.contains("[x] each write waits for you"), "{lines}");
+        // Enter on a field moves on; it creates only on Create.
+        assert!(update(&mut model, key(KeyCode::Enter)).is_empty());
+        tab(&mut model);
+        let form = model.mcp_profiles.grant_form.as_ref().unwrap();
+        assert!(form.ask && form.how().contains("each write waits for you"));
         let effects = update(&mut model, key(KeyCode::Enter));
         let expected = dexo_app::mcp::GrantRequest {
             connection: "local".into(),
@@ -16006,7 +16052,9 @@ mod tests {
             },
         );
         let form = model.mcp_profiles.grant_form.as_ref().expect("stays open");
-        assert!(form.lines().join("\n").contains("not allowed"));
+        assert!(form.error.as_ref().is_some_and(|(row, message)| *row
+            == crate::screens::mcp_profiles::GrantRow::Connection
+            && message.contains("not allowed")));
         update(&mut model, key(KeyCode::Esc));
         assert!(
             model.mcp_profiles.grant_form.is_none() && model.screen == crate::model::Screen::Agents

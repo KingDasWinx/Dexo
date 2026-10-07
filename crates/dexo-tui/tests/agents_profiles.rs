@@ -84,7 +84,7 @@ fn the_profiles_buttons_are_over_its_fields() {
 }
 
 #[test]
-fn c_checks_the_connections_and_enter_saves_them() {
+fn c_checks_the_connections_and_save_saves_them() {
     let mut model = profiles();
     press(&mut model, KeyCode::Char('c'));
     let frame = paint(&mut model);
@@ -94,8 +94,14 @@ fn c_checks_the_connections_and_enter_saves_them() {
         !frame.contains("shop"),
         "MCP serves Postgres and MySQL: {frame}"
     );
-    // my-dev is listed first, by name.
+    // my-dev is listed first, by name. Enter on the grid checks, as Space does; it saves
+    // only on Save.
     press(&mut model, KeyCode::Char(' '));
+    assert!(press(&mut model, KeyCode::Enter).is_empty());
+    press(&mut model, KeyCode::Enter);
+    press(&mut model, KeyCode::Tab);
+    press(&mut model, KeyCode::Tab);
+    assert!(paint(&mut model).contains("[ > Save ]"));
     let effects = press(&mut model, KeyCode::Enter);
     assert!(
         effects.iter().any(|effect| matches!(
@@ -112,19 +118,26 @@ fn c_checks_the_connections_and_enter_saves_them() {
 fn esc_keeps_the_connections_and_none_checked_is_refused() {
     let mut model = profiles();
     press(&mut model, KeyCode::Char('c'));
-    press(&mut model, KeyCode::Down);
+    // pg-dev is beside my-dev in the grid.
+    press(&mut model, KeyCode::Right);
     press(&mut model, KeyCode::Char(' '));
+    press(&mut model, KeyCode::Tab);
+    press(&mut model, KeyCode::Tab);
     let effects = press(&mut model, KeyCode::Enter);
     assert!(effects.is_empty(), "{effects:?}");
+    let checklist = model
+        .mcp_profiles
+        .checklist
+        .as_ref()
+        .expect("it stays, saying why");
     assert!(
-        model.mcp_profiles.checklist.is_some(),
-        "it stays, saying why"
+        checklist
+            .error
+            .as_ref()
+            .is_some_and(|error| error.contains("at least one")),
+        "{checklist:?}"
     );
-    assert!(
-        model.mcp_profiles.status.contains("at least one"),
-        "{}",
-        model.mcp_profiles.status
-    );
+    assert!(paint(&mut model).contains("× check at least one connection"));
     press(&mut model, KeyCode::Esc);
     assert!(model.mcp_profiles.checklist.is_none());
     assert_eq!(model.agents_view, AgentsView::Profiles);
@@ -183,6 +196,8 @@ fn the_checklist_saves_to_the_profile_it_was_opened_on() {
             }],
         },
     );
+    press(&mut model, KeyCode::Tab);
+    press(&mut model, KeyCode::Tab);
     let effects = press(&mut model, KeyCode::Enter);
     assert!(
         effects.iter().any(|effect| matches!(

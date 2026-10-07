@@ -2,7 +2,9 @@
 
 Every form in the TUI is built the same way: creating or editing a connection, a grant, a profile, a setting. This page is that pattern, the inputs it is made of, and the code for each one.
 
-It came from New Grant, drawn four ways and compared in a real terminal. The patterns it borrows are from projects people use daily: lazydb's profile form (the label column, side-by-side choices, the button row) and sqlit's connection form (boxed inputs, dropdowns). The reference implementation runs:
+It came from New Grant, drawn four ways and compared in a real terminal. The patterns it borrows are from projects people use daily: lazydb's profile form (the label column, side-by-side choices, the button row) and sqlit's connection form (boxed inputs, dropdowns).
+
+The inputs are built in `crates/dexo-tui/src/widgets/panel.rs`: a form is a `panel::Lines`, filled row by row, then drawn with `panel::draw`. New grant and a profile's connections, on Agents → Profiles, are made with it. The four looks it was chosen from still run:
 
 ```sh
 cargo run -p dexo-tui --example grant_styles    # F4 is this pattern
@@ -240,7 +242,7 @@ Colour is never the only signal: the focused row also has `›`, the focused but
 
 ## Code
 
-These are the building blocks from the reference example, written against the theme. `Ui` holds the theme and the terminal's capabilities; in the TUI, `model.theme.style(role, model.capabilities)` is the same thing as `ui.fg(role)`.
+These are the building blocks, as the reference example has them; `widgets/panel.rs` has them against the model. `Ui` holds the theme and the terminal's capabilities; in the TUI, `model.theme.style(role, model.capabilities)` is the same thing as `ui.fg(role)`.
 
 ### Colours
 

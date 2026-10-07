@@ -124,7 +124,7 @@ pub fn held(model: &Model) -> Option<(Section, &'static str)> {
             }
             AgentsView::Profiles if model.mcp_profiles.checklist.is_some() => Some((
                 Section::Detail,
-                "Space checks, Enter saves, Esc keeps them as they were.",
+                "The connections form has the keys: Esc closes it.",
             )),
             _ => None,
         },

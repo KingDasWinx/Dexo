@@ -80,17 +80,18 @@ fn fields() -> Vec<Field> {
                 let mut form = dexo_tui::screens::mcp_profiles::GrantForm::new(
                     vec![dexo_tui::screens::mcp_profiles::ProfileChoice {
                         name: "assistant".into(),
-                        connections: Vec::new(),
+                        ..Default::default()
                     }],
+                    Vec::new(),
                     0,
                 );
                 // A text row: the profile row is a choice.
-                form.focus = dexo_tui::screens::mcp_profiles::GRANT_TOOLS;
+                form.focus = dexo_tui::screens::mcp_profiles::GrantRow::Objects;
                 m.mcp_profiles.grant_form = Some(form);
             },
             text: |m| {
                 let form = m.mcp_profiles.grant_form.as_ref().unwrap();
-                form.fields[form.focus].value.as_str().to_string()
+                form.objects.as_str().to_string()
             },
             masked: false,
         },

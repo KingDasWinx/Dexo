@@ -61,6 +61,12 @@ pub enum HitTarget {
         index: usize,
         step: i8,
     },
+    /// One of a form field's options: a choice side by side, a box of a grid, a row of an
+    /// open dropdown, or a toggle (option 0).
+    FormOption {
+        field: usize,
+        option: usize,
+    },
     FooterSubmit,
     FooterCancel,
     Button(HitButton),

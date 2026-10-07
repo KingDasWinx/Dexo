@@ -2,8 +2,8 @@
 //! that let one write for a while. A profile's rules are made with `dexo mcp`; this
 //! screen enables, disables and deletes profiles, makes grants and takes them back.
 
-use crate::screens::schema_editor::FormField;
 use crate::widgets::form::{FooterFocus, footer_line};
+use crate::widgets::text_input::TextInput;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct McpProfileSummary {
@@ -67,78 +67,121 @@ impl GrantLine {
     }
 }
 
-/// The grant form's rows, in the order they are walked.
-pub const GRANT_PROFILE: usize = 0;
-pub const GRANT_CONNECTION: usize = 1;
-pub const GRANT_CAPABILITY: usize = 2;
-pub const GRANT_TOOLS: usize = 3;
-pub const GRANT_SELECTOR: usize = 4;
-pub const GRANT_EXPIRES: usize = 5;
-pub const GRANT_ASK: usize = 6;
-pub const GRANT_ASK_SECS: usize = 7;
-pub const GRANT_CONFIRM: usize = 8;
-
-const CAPABILITIES: [(&str, &str); 3] = [
+/// What a grant can allow, what that means, and the tools each allows.
+const CAPABILITIES: [(&str, &str, &[&str]); 3] = [
     (
         "data_write",
-        "data_insert data_update data_delete data_execute_sql",
+        "change rows",
+        &[
+            "data_insert",
+            "data_update",
+            "data_delete",
+            "data_execute_sql",
+        ],
     ),
-    ("ddl", "schema_apply_ddl"),
-    ("admin", "admin_cancel_query admin_terminate_session"),
+    ("ddl", "change tables and schemas", &["schema_apply_ddl"]),
+    (
+        "admin",
+        "cancel queries, end sessions",
+        &["admin_cancel_query", "admin_terminate_session"],
+    ),
 ];
 
-/// The profiles a grant can be for, with the connections each may use.
-#[derive(Clone, Debug, PartialEq)]
+/// How long a grant lasts: what `--expires` takes, and how it reads.
+const EXPIRES: [(&str, &str); 5] = [
+    ("15m", "15 minutes"),
+    ("1h", "1 hour"),
+    ("2h", "2 hours"),
+    ("8h", "8 hours"),
+    ("24h", "24 hours"),
+];
+
+/// The profiles a grant can be for, with the connections each may use and the objects
+/// it sees.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProfileChoice {
     pub name: String,
     pub connections: Vec<String>,
+    /// The selectors it allows: a grant narrows one of them.
+    pub sees: Vec<String>,
 }
 
-/// New MCP Grant: what `dexo mcp grant create` asks, "ask before each write" included, so
-/// the TUI can make the grant Approvals then decides on.
+/// A saved connection a grant can be for, with its environment.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConnectionChoice {
+    pub name: String,
+    pub environment: String,
+}
+
+/// New grant's rows, in the order the focus walks them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GrantRow {
+    Profile,
+    Connection,
+    Capability,
+    Tools,
+    Objects,
+    Expires,
+    Ask,
+    AskSecs,
+    Confirm,
+    Cancel,
+    Create,
+}
+
+/// What a key did to New grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FormKey {
+    Stay,
+    Submit,
+    Cancel,
+}
+
+/// New grant: what `dexo mcp grant create` asks, "ask before each write" included, in
+/// the form every form follows (`docs/design.md`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct GrantForm {
     pub profiles: Vec<ProfileChoice>,
+    /// The saved connections agents can use: the choices when a profile lists none.
+    pub saved: Vec<ConnectionChoice>,
     pub profile: usize,
-    /// The text fields, indexed by the row constants; the choices and the checkbox keep
-    /// their value elsewhere and leave their slot empty.
-    pub fields: Vec<FormField>,
     pub connection: usize,
     pub capability: usize,
-    /// A field, then Create, then Cancel.
-    pub focus: usize,
+    pub tools: Vec<bool>,
+    pub objects: TextInput,
+    pub expires: usize,
     pub ask: bool,
-    pub error: Option<String>,
+    pub ask_secs: TextInput,
+    pub confirm: TextInput,
+    pub focus: GrantRow,
+    /// The tool the grid's cursor is on.
+    pub tool: usize,
+    /// The highlighted row of the dropdown that is open.
+    pub open: Option<usize>,
+    pub error: Option<(GrantRow, String)>,
 }
 
 impl GrantForm {
-    pub fn new(profiles: Vec<ProfileChoice>, profile: usize) -> Self {
-        let field = |label: &str, value: &str| FormField {
-            label: label.into(),
-            value: value.into(),
-            secret: false,
-        };
+    pub fn new(profiles: Vec<ProfileChoice>, saved: Vec<ConnectionChoice>, profile: usize) -> Self {
         let mut form = Self {
             profiles,
+            saved,
             profile: 0,
-            fields: vec![
-                field("profile", ""),
-                field("connection", ""),
-                field("capability", ""),
-                field("tools", ""),
-                field("selector", ""),
-                field("expires", "15m"),
-                field("ask before each write", ""),
-                field("approval timeout", "120"),
-                field("confirm", ""),
-            ],
             connection: 0,
             capability: 0,
-            focus: 0,
+            tools: Vec::new(),
+            objects: TextInput::default(),
+            expires: 0,
             ask: false,
+            ask_secs: TextInput::new("120"),
+            confirm: TextInput::default(),
+            focus: GrantRow::Profile,
+            tool: 0,
+            open: None,
             error: None,
         };
         form.set_profile(profile);
+        form.set_capability(0);
         form
     }
 
@@ -147,11 +190,11 @@ impl GrantForm {
         self.connection = 0;
     }
 
-    /// The connections the profile may use, or none listed when it may use any.
-    fn connections(&self) -> &[String] {
-        self.profiles
-            .get(self.profile)
-            .map_or(&[], |profile| profile.connections.as_slice())
+    /// A new capability starts with none of its tools: each is picked on purpose.
+    fn set_capability(&mut self, index: usize) {
+        self.capability = index;
+        self.tools = vec![false; CAPABILITIES[index].2.len()];
+        self.tool = 0;
     }
 
     pub fn profile_name(&self) -> String {
@@ -161,174 +204,401 @@ impl GrantForm {
             .unwrap_or_default()
     }
 
-    fn slots(&self) -> usize {
-        self.fields.len() + 2
-    }
-
-    /// Whether a row is drawn: the approval timeout means nothing unless the grant asks.
-    fn shown(&self, index: usize) -> bool {
-        index != GRANT_ASK_SECS || self.ask
-    }
-
-    pub fn focus_next(&mut self) {
-        loop {
-            self.focus = (self.focus + 1) % self.slots();
-            if self.focus >= self.fields.len() || self.shown(self.focus) {
-                return;
-            }
+    /// The connections the profile may use, or every saved one when it lists none.
+    pub fn connections(&self) -> Vec<ConnectionChoice> {
+        let listed = self
+            .profiles
+            .get(self.profile)
+            .map(|profile| profile.connections.as_slice())
+            .unwrap_or_default();
+        if listed.is_empty() {
+            return self.saved.clone();
         }
+        listed
+            .iter()
+            .map(|name| ConnectionChoice {
+                name: name.clone(),
+                environment: self
+                    .saved
+                    .iter()
+                    .find(|saved| &saved.name == name)
+                    .map(|saved| saved.environment.clone())
+                    .unwrap_or_default(),
+            })
+            .collect()
     }
 
-    pub fn focus_prev(&mut self) {
-        loop {
-            self.focus = (self.focus + self.slots() - 1) % self.slots();
-            if self.focus >= self.fields.len() || self.shown(self.focus) {
-                return;
-            }
+    pub fn connection_choice(&self) -> Option<ConnectionChoice> {
+        self.connections().get(self.connection).cloned()
+    }
+
+    /// The rows walked, in order: the approval timeout only while the grant asks.
+    pub fn rows(&self) -> Vec<GrantRow> {
+        use GrantRow::*;
+        let mut rows = vec![
+            Profile, Connection, Capability, Tools, Objects, Expires, Ask,
+        ];
+        if self.ask {
+            rows.push(AskSecs);
         }
+        rows.extend([Confirm, Cancel, Create]);
+        rows
     }
 
-    /// Left and Right step between the two buttons once one of them has the focus.
-    pub fn toggle_button(&mut self) {
-        self.focus = match self.footer_focus() {
-            FooterFocus::Submit => self.fields.len() + 1,
-            FooterFocus::Cancel => self.fields.len(),
-            FooterFocus::Input => self.focus,
-        };
+    /// Where `row` is among the rows walked: what a click on it is told by.
+    pub fn index_of(&self, row: GrantRow) -> usize {
+        self.rows().iter().position(|at| *at == row).unwrap_or(0)
     }
 
-    pub fn footer_focus(&self) -> FooterFocus {
-        match self.focus.checked_sub(self.fields.len()) {
-            None => FooterFocus::Input,
-            Some(0) => FooterFocus::Submit,
-            Some(_) => FooterFocus::Cancel,
-        }
-    }
-
-    /// Whether the focused row is picked with Left and Right.
-    pub fn on_choice(&self) -> bool {
-        self.is_choice(self.focus)
-    }
-
-    pub fn is_choice(&self, index: usize) -> bool {
-        match index {
-            GRANT_PROFILE | GRANT_CAPABILITY => true,
-            GRANT_CONNECTION => !self.connections().is_empty(),
-            _ => false,
-        }
-    }
-
-    /// Puts the focus on the field a refusal is about, so the fix is where the cursor is.
-    pub fn focus_for_error(&mut self, message: &str) {
-        let lower = message.to_lowercase();
-        let field = [
-            ("capability", GRANT_CAPABILITY),
-            ("a time", GRANT_EXPIRES),
-            ("lasts from", GRANT_EXPIRES),
-            ("tool", GRANT_TOOLS),
-            ("confirm", GRANT_CONFIRM),
-            ("selector", GRANT_SELECTOR),
-            ("profile allows", GRANT_SELECTOR),
-            ("narrow the profile", GRANT_SELECTOR),
-            ("connection", GRANT_CONNECTION),
-            ("approval timeout", GRANT_ASK_SECS),
-        ]
-        .into_iter()
-        .find(|(word, _)| lower.contains(word))
-        .map(|(_, field)| field);
-        if let Some(field) = field.filter(|field| self.shown(*field)) {
-            self.focus = field;
-        }
-    }
-
-    /// Steps the focused choice.
-    pub fn step(&mut self, delta: isize) {
-        let wrap = |at: usize, len: usize| (at as isize + delta).rem_euclid(len as isize) as usize;
-        self.error = None;
-        match self.focus {
-            GRANT_PROFILE if !self.profiles.is_empty() => {
-                self.set_profile(wrap(self.profile, self.profiles.len()));
-            }
-            GRANT_CAPABILITY => self.capability = wrap(self.capability, CAPABILITIES.len()),
-            GRANT_CONNECTION if !self.connections().is_empty() => {
-                self.connection = wrap(self.connection, self.connections().len());
-            }
-            _ => {}
-        }
-    }
-
-    /// A key for the focused row: an edit for a field, Left and Right for a choice, and
-    /// on the ask row Space flips it and `y`/`n` set it.
-    pub fn edit(&mut self, key: crossterm::event::KeyEvent) {
-        use crossterm::event::{KeyCode, KeyModifiers};
-        if self.is_choice(self.focus) {
-            match key.code {
-                KeyCode::Left => self.step(-1),
-                KeyCode::Right | KeyCode::Char(' ') => self.step(1),
-                _ => {}
-            }
-            return;
-        }
-        if self.focus != GRANT_ASK {
-            if let Some(field) = self.fields.get_mut(self.focus) {
-                field.value.handle_key(key);
-            }
-            // What was wrong is for the next Create to say again.
-            self.error = None;
-            return;
-        }
-        if !(key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) {
-            return;
-        }
-        match key.code {
-            KeyCode::Char(' ') => self.toggle_ask(),
-            KeyCode::Char('y' | 'Y') => self.set_ask(true),
-            KeyCode::Char('n' | 'N') => self.set_ask(false),
-            _ => {}
-        }
-    }
-
-    pub fn toggle_ask(&mut self) {
-        self.set_ask(!self.ask);
-    }
-
-    fn set_ask(&mut self, ask: bool) {
-        self.ask = ask;
-        self.error = None;
-    }
-
-    fn capability_name(&self) -> &'static str {
+    pub fn capability_name(&self) -> &'static str {
         CAPABILITIES[self.capability].0
     }
 
-    fn connection_name(&self) -> String {
-        match self.connections().get(self.connection) {
-            Some(name) => name.clone(),
-            None => self.fields[GRANT_CONNECTION].value.trim().to_string(),
+    pub fn capabilities() -> Vec<&'static str> {
+        CAPABILITIES.iter().map(|(name, ..)| *name).collect()
+    }
+
+    pub fn capability_about(&self) -> &'static str {
+        CAPABILITIES[self.capability].1
+    }
+
+    /// The capability's tools, each with whether it is picked.
+    pub fn tool_items(&self) -> Vec<(String, bool)> {
+        CAPABILITIES[self.capability]
+            .2
+            .iter()
+            .zip(&self.tools)
+            .map(|(tool, on)| (tool.to_string(), *on))
+            .collect()
+    }
+
+    fn chosen_tools(&self) -> Vec<String> {
+        self.tool_items()
+            .into_iter()
+            .filter(|(_, on)| *on)
+            .map(|(tool, _)| tool)
+            .collect()
+    }
+
+    pub fn expires_options() -> Vec<&'static str> {
+        EXPIRES.iter().map(|(short, _)| *short).collect()
+    }
+
+    /// What the objects field expects: what the profile sees, when it says.
+    pub fn objects_hint(&self) -> String {
+        match self.profiles.get(self.profile) {
+            Some(profile) if !profile.sees.is_empty() => {
+                format!("within {}", profile.sees.join(", "))
+            }
+            // A grant only narrows what the profile sees: with nothing, it is refused.
+            Some(profile) => format!("{} sees nothing yet: dexo mcp allow first", profile.name),
+            None => "db.schema.table · a lone * for any part".into(),
         }
     }
 
-    /// The request the CLI would make with the same answers.
-    pub fn request(&self) -> Result<dexo_app::mcp::GrantRequest, String> {
-        let value = |index: usize| self.fields[index].value.trim().to_string();
-        let tools: Vec<String> = value(GRANT_TOOLS)
-            .split([',', ' '])
-            .filter(|tool| !tool.is_empty())
-            .map(str::to_string)
-            .collect();
-        if tools.is_empty() {
-            return Err(format!(
-                "tools: name what the grant allows, from {}",
-                CAPABILITIES[self.capability].1
-            ));
+    /// How each write goes, in words.
+    pub fn how(&self) -> String {
+        if self.ask {
+            format!("each write waits for you, up to {} s", self.ask_secs.trim())
+        } else {
+            "one write, then it is spent".into()
         }
+    }
+
+    /// What the grant will do, in a sentence, then how long it lasts.
+    pub fn result(&self) -> (Option<String>, String) {
+        let tools = self.chosen_tools();
+        let allows = if tools.is_empty() {
+            None
+        } else {
+            let objects = match self.objects.trim() {
+                "" => "…".to_string(),
+                objects => objects.to_string(),
+            };
+            let connection = self
+                .connection_choice()
+                .map(|choice| choice.name)
+                .unwrap_or_else(|| "…".into());
+            Some(format!("{} on {objects} in {connection}", tools.join(", ")))
+        };
+        (
+            allows,
+            format!("{} · ends in {}", self.how(), EXPIRES[self.expires].1),
+        )
+    }
+
+    fn step(&mut self, row: GrantRow, delta: isize) {
+        let wrap =
+            |at: usize, len: usize| (at as isize + delta).rem_euclid(len.max(1) as isize) as usize;
+        match row {
+            GrantRow::Profile => self.set_profile(wrap(self.profile, self.profiles.len())),
+            GrantRow::Connection => {
+                self.connection = wrap(self.connection, self.connections().len());
+            }
+            GrantRow::Capability => self.set_capability(wrap(self.capability, CAPABILITIES.len())),
+            GrantRow::Expires => self.expires = wrap(self.expires, EXPIRES.len()),
+            _ => {}
+        }
+    }
+
+    /// Picks option `option` of `row`: a dropdown's row, a choice, a tool (flipped), or
+    /// the toggle.
+    pub fn pick(&mut self, row: GrantRow, option: usize) {
+        self.error = None;
+        self.focus = row;
+        match row {
+            GrantRow::Profile => {
+                self.set_profile(option);
+                self.open = None;
+            }
+            GrantRow::Connection => {
+                self.connection = option.min(self.connections().len().saturating_sub(1));
+                self.open = None;
+            }
+            GrantRow::Capability => self.set_capability(option.min(CAPABILITIES.len() - 1)),
+            GrantRow::Expires => self.expires = option.min(EXPIRES.len() - 1),
+            GrantRow::Tools => {
+                self.tool = option;
+                if let Some(on) = self.tools.get_mut(option) {
+                    *on = !*on;
+                }
+            }
+            GrantRow::Ask => self.ask = !self.ask,
+            _ => {}
+        }
+    }
+
+    /// Opens the focused dropdown, on its value.
+    pub fn open_dropdown(&mut self) {
+        self.open = match self.focus {
+            GrantRow::Profile => Some(self.profile),
+            GrantRow::Connection if !self.connections().is_empty() => Some(self.connection),
+            _ => None,
+        };
+    }
+
+    /// A key on the form. Enter creates only on Create; on a row it opens, toggles or
+    /// moves on.
+    pub fn key(&mut self, key: crossterm::event::KeyEvent) -> FormKey {
+        use crossterm::event::KeyCode;
+        let rows = self.rows();
+        let at = rows.iter().position(|row| *row == self.focus).unwrap_or(0);
+        let next = rows[(at + 1) % rows.len()];
+        let previous = rows[(at + rows.len() - 1) % rows.len()];
+        if let Some(highlight) = self.open {
+            let last = match self.focus {
+                GrantRow::Profile => self.profiles.len(),
+                _ => self.connections().len(),
+            }
+            .saturating_sub(1);
+            match key.code {
+                KeyCode::Up => self.open = Some(highlight.saturating_sub(1)),
+                KeyCode::Down => self.open = Some((highlight + 1).min(last)),
+                KeyCode::Enter | KeyCode::Char(' ') => self.pick(self.focus, highlight),
+                KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.open = None,
+                _ => {}
+            }
+            return FormKey::Stay;
+        }
+        // The tools are a grid of two columns: Up and Down move between its rows, and
+        // leave it past the first or the last.
+        let last_tool = self.tools.len().saturating_sub(1);
+        let tool = self.tool.min(last_tool);
+        let in_tools = self.focus == GrantRow::Tools;
+        match key.code {
+            KeyCode::Down if in_tools && tool / 2 < last_tool / 2 => {
+                self.tool = (tool + 2).min(last_tool);
+                return FormKey::Stay;
+            }
+            KeyCode::Up if in_tools && tool / 2 > 0 => {
+                self.tool = tool - 2;
+                return FormKey::Stay;
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                self.focus = next;
+                // Into the grid from above: its first row, in the same column.
+                self.tool = tool % 2;
+                return FormKey::Stay;
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                self.focus = previous;
+                // Into the grid from below: its last row, in the same column.
+                if key.code == KeyCode::Up {
+                    self.tool = (last_tool / 2 * 2 + tool % 2).min(last_tool);
+                }
+                return FormKey::Stay;
+            }
+            KeyCode::Esc => return FormKey::Cancel,
+            _ => {}
+        }
+        match self.focus {
+            GrantRow::Create | GrantRow::Cancel => match key.code {
+                KeyCode::Left | KeyCode::Right => {
+                    self.focus = if self.focus == GrantRow::Create {
+                        GrantRow::Cancel
+                    } else {
+                        GrantRow::Create
+                    };
+                }
+                // The only Enter that creates.
+                KeyCode::Enter if self.focus == GrantRow::Create => return FormKey::Submit,
+                KeyCode::Enter => return FormKey::Cancel,
+                _ => {}
+            },
+            row => {
+                self.error = None;
+                match (row, key.code) {
+                    (
+                        GrantRow::Profile | GrantRow::Connection,
+                        KeyCode::Enter | KeyCode::Char(' '),
+                    ) => {
+                        self.open_dropdown();
+                    }
+                    (
+                        GrantRow::Profile
+                        | GrantRow::Connection
+                        | GrantRow::Capability
+                        | GrantRow::Expires,
+                        KeyCode::Left,
+                    ) => self.step(row, -1),
+                    (
+                        GrantRow::Profile
+                        | GrantRow::Connection
+                        | GrantRow::Capability
+                        | GrantRow::Expires,
+                        KeyCode::Right,
+                    )
+                    | (GrantRow::Capability | GrantRow::Expires, KeyCode::Char(' ')) => {
+                        self.step(row, 1);
+                    }
+                    (GrantRow::Tools, KeyCode::Left) => self.tool = tool.saturating_sub(1),
+                    (GrantRow::Tools, KeyCode::Right) => self.tool = (tool + 1).min(last_tool),
+                    (GrantRow::Tools, KeyCode::Char(' ') | KeyCode::Enter) => {
+                        self.pick(GrantRow::Tools, tool);
+                    }
+                    (GrantRow::Ask, KeyCode::Char(' ') | KeyCode::Enter) => self.ask = !self.ask,
+                    (_, KeyCode::Enter) => self.focus = next,
+                    (GrantRow::Objects, _) => {
+                        self.objects.handle_key(key);
+                    }
+                    (GrantRow::AskSecs, _) => {
+                        self.ask_secs.handle_key(key);
+                    }
+                    (GrantRow::Confirm, _) => {
+                        self.confirm.handle_key(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        FormKey::Stay
+    }
+
+    /// The input the focus is on, for a paste.
+    pub fn focused_input(&mut self) -> Option<&mut TextInput> {
+        match self.focus {
+            GrantRow::Objects => Some(&mut self.objects),
+            GrantRow::AskSecs => Some(&mut self.ask_secs),
+            GrantRow::Confirm => Some(&mut self.confirm),
+            _ => None,
+        }
+    }
+
+    /// What the keys do on the focused row.
+    pub fn hints(&self) -> &'static [(&'static str, &'static str)] {
+        if self.open.is_some() {
+            return &[("↑/↓", "choose"), ("Enter", "pick"), ("Esc", "close")];
+        }
+        match self.focus {
+            GrantRow::Profile | GrantRow::Connection => &[
+                ("Enter", "open"),
+                ("←/→", "change"),
+                ("Tab", "next"),
+                ("Esc", "cancel"),
+            ],
+            GrantRow::Capability | GrantRow::Expires => {
+                &[("←/→", "choose"), ("Tab", "next"), ("Esc", "cancel")]
+            }
+            GrantRow::Tools => &[
+                ("↑/↓/←/→", "move"),
+                ("Space/Enter", "toggle"),
+                ("Tab", "next"),
+                ("Esc", "cancel"),
+            ],
+            GrantRow::Ask => &[
+                ("Space/Enter", "toggle"),
+                ("Tab", "next"),
+                ("Esc", "cancel"),
+            ],
+            GrantRow::Objects | GrantRow::AskSecs | GrantRow::Confirm => &[
+                ("Enter/Tab", "next"),
+                ("Shift+Tab", "back"),
+                ("Esc", "cancel"),
+            ],
+            GrantRow::Create => &[
+                ("Enter", "create the grant"),
+                ("←/→", "switch"),
+                ("Esc", "cancel"),
+            ],
+            GrantRow::Cancel => &[("Enter", "cancel"), ("←/→", "switch")],
+        }
+    }
+
+    /// Puts the focus on the row a refusal is about, so the fix is where the cursor is.
+    pub fn fail(&mut self, message: String) {
+        let lower = message.to_lowercase();
+        let row = [
+            ("tool", GrantRow::Tools),
+            ("capability", GrantRow::Capability),
+            ("a time", GrantRow::Expires),
+            ("lasts from", GrantRow::Expires),
+            ("confirm", GrantRow::Confirm),
+            ("selector", GrantRow::Objects),
+            ("objects", GrantRow::Objects),
+            ("profile allows", GrantRow::Objects),
+            ("narrow the profile", GrantRow::Objects),
+            ("approval timeout", GrantRow::AskSecs),
+            ("connection", GrantRow::Connection),
+            ("profile", GrantRow::Profile),
+        ]
+        .into_iter()
+        .find(|(word, _)| lower.contains(word))
+        .map(|(_, row)| row)
+        .filter(|row| self.rows().contains(row))
+        .unwrap_or(self.focus);
+        self.focus = row;
+        self.open = None;
+        self.error = Some((row, message));
+    }
+
+    /// The request the CLI would make with the same answers, or what stops it.
+    pub fn request(&self) -> Result<dexo_app::mcp::GrantRequest, String> {
         if self.profiles.is_empty() {
             return Err(
                 "there is no profile to grant to: create one with dexo mcp profile create".into(),
             );
         }
+        let Some(connection) = self.connection_choice() else {
+            return Err(
+                "connection: there is none an agent can use: save a PostgreSQL or MySQL one first"
+                    .into(),
+            );
+        };
+        let tools = self.chosen_tools();
+        if tools.is_empty() {
+            return Err("tools: pick at least one".into());
+        }
+        let objects = self.objects.trim().to_string();
+        if objects.is_empty() {
+            return Err("objects: name them, as db.public.orders or db.public.*".into());
+        }
+        if let Err(error) =
+            dexo_app::mcp::SelectorRule::parse(dexo_app::mcp::Effect::Allow, &objects)
+        {
+            return Err(format!("objects: {error}"));
+        }
         let ask_secs = if self.ask {
-            match value(GRANT_ASK_SECS).parse::<u32>() {
+            match self.ask_secs.trim().parse::<u32>() {
                 Ok(secs) if (1..=dexo_app::mcp::approval::MAX_TIMEOUT_SECS).contains(&secs) => {
                     Some(secs)
                 }
@@ -341,67 +611,19 @@ impl GrantForm {
         } else {
             None
         };
+        let confirm = self.confirm.trim().to_string();
+        if confirm != connection.name && confirm != objects {
+            return Err(format!("confirm: type {} to confirm", connection.name));
+        }
         Ok(dexo_app::mcp::GrantRequest {
-            connection: self.connection_name(),
+            connection: connection.name,
             capability: self.capability_name().to_string(),
             tools,
-            selector: value(GRANT_SELECTOR),
-            expires: value(GRANT_EXPIRES),
-            confirm_target: value(GRANT_CONFIRM),
+            selector: objects,
+            expires: EXPIRES[self.expires].0.to_string(),
+            confirm_target: confirm,
             ask_secs,
         })
-    }
-
-    /// The form's lines; the first field is on the second line.
-    pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec![
-            "Left/Right pick a profile, connection or capability; Space flips the checkbox.".into(),
-        ];
-        for (index, field) in self.fields.iter().enumerate() {
-            if !self.shown(index) {
-                continue;
-            }
-            let marker = if index == self.focus { ">" } else { " " };
-            let value = match index {
-                GRANT_PROFILE => format!("< {} >", self.profile_name()),
-                GRANT_CONNECTION if !self.connections().is_empty() => {
-                    format!("< {} >", self.connection_name())
-                }
-                GRANT_CAPABILITY => format!("< {} >", self.capability_name()),
-                GRANT_ASK if self.ask => "[x] each write waits for you under Approvals".into(),
-                GRANT_ASK => "[ ] one write, then the grant is spent".into(),
-                _ => field.value.as_str().to_string(),
-            };
-            lines.push(format!("{marker} {}: {value}", field.label));
-        }
-        // Wrapped, not cut: the tools of a capability are a long line.
-        for hint in [
-            format!(
-                "tools for {}: {}",
-                self.capability_name(),
-                CAPABILITIES[self.capability].1
-            ),
-            "expires: 90s, 15m, 2h, 1h30m (up to 24h)".to_string(),
-            "confirm: type the connection or the selector again".to_string(),
-        ] {
-            for (index, part) in crate::model::wrap_words(&hint, 86).into_iter().enumerate() {
-                lines.push(format!("{}{part}", if index == 0 { "  " } else { "    " }));
-            }
-        }
-        // The row is always there, so the buttons do not move when a message comes.
-        let error = self.error.clone().unwrap_or_default();
-        let mut shown = crate::model::wrap_words(&error, 86);
-        shown.truncate(2);
-        shown.resize(2, String::new());
-        for part in shown {
-            lines.push(if part.is_empty() {
-                part
-            } else {
-                format!("  {part}")
-            });
-        }
-        lines.push(footer_line("Create", self.footer_focus()));
-        lines
     }
 }
 
@@ -515,13 +737,24 @@ pub struct McpProfilesScreen {
     pub checklist: Option<Checklist>,
 }
 
-/// Connections to check, and the row the focus is on.
+/// Where the focus is in the connections form.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ChecklistFocus {
+    #[default]
+    Grid,
+    Cancel,
+    Save,
+}
+
+/// Connections to check, the box the grid's cursor is on, and where the focus is.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Checklist {
     /// The profile the connections are for.
     pub profile: String,
     pub items: Vec<(String, bool)>,
     pub row: usize,
+    pub focus: ChecklistFocus,
+    pub error: Option<String>,
 }
 
 impl Checklist {
@@ -543,7 +776,59 @@ impl Checklist {
         Self {
             profile: profile.to_string(),
             items,
-            row: 0,
+            ..Self::default()
+        }
+    }
+
+    /// A key on the form: the grid of two columns moves with the arrows and checks with
+    /// Space or Enter; Enter saves only on Save.
+    pub fn key(&mut self, key: crossterm::event::KeyEvent) -> FormKey {
+        use crossterm::event::KeyCode;
+        let last = self.items.len().saturating_sub(1);
+        let row = self.row.min(last);
+        match (self.focus, key.code) {
+            (_, KeyCode::Esc) => return FormKey::Cancel,
+            (ChecklistFocus::Grid, KeyCode::Down) if row / 2 < last / 2 => {
+                self.row = (row + 2).min(last);
+            }
+            (ChecklistFocus::Grid, KeyCode::Up) if row / 2 > 0 => self.row = row - 2,
+            (ChecklistFocus::Grid, KeyCode::Left) => self.row = row.saturating_sub(1),
+            (ChecklistFocus::Grid, KeyCode::Right) => self.row = (row + 1).min(last),
+            (ChecklistFocus::Grid, KeyCode::Char(' ') | KeyCode::Enter) => {
+                self.error = None;
+                self.toggle(row);
+            }
+            (ChecklistFocus::Grid, KeyCode::Tab | KeyCode::Down) => {
+                self.focus = ChecklistFocus::Cancel;
+            }
+            (ChecklistFocus::Cancel, KeyCode::Tab | KeyCode::Right | KeyCode::Left) => {
+                self.focus = ChecklistFocus::Save;
+            }
+            (ChecklistFocus::Save, KeyCode::Left | KeyCode::Right | KeyCode::BackTab) => {
+                self.focus = ChecklistFocus::Cancel;
+            }
+            (ChecklistFocus::Save, KeyCode::Tab)
+            | (ChecklistFocus::Cancel, KeyCode::BackTab | KeyCode::Up) => {
+                self.focus = ChecklistFocus::Grid;
+            }
+            (ChecklistFocus::Save, KeyCode::Up) => self.focus = ChecklistFocus::Grid,
+            (ChecklistFocus::Cancel, KeyCode::Enter) => return FormKey::Cancel,
+            (ChecklistFocus::Save, KeyCode::Enter) => return FormKey::Submit,
+            _ => {}
+        }
+        FormKey::Stay
+    }
+
+    pub fn hints(&self) -> &'static [(&'static str, &'static str)] {
+        match self.focus {
+            ChecklistFocus::Grid => &[
+                ("↑/↓/←/→", "move"),
+                ("Space/Enter", "check"),
+                ("Tab", "next"),
+                ("Esc", "cancel"),
+            ],
+            ChecklistFocus::Save => &[("Enter", "save"), ("←/→", "switch"), ("Esc", "cancel")],
+            ChecklistFocus::Cancel => &[("Enter", "cancel"), ("←/→", "switch")],
         }
     }
 
@@ -1006,60 +1291,134 @@ mod tests {
         assert!(text.contains("[Revoke]"), "{text}");
     }
 
-    #[test]
-    fn the_grant_form_picks_its_profile_and_starts_on_it() {
+    fn key(code: crossterm::event::KeyCode) -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+    }
+
+    fn form() -> GrantForm {
         let choices = vec![
             ProfileChoice {
                 name: "a".into(),
                 connections: vec!["pg-dev".into()],
+                sees: vec!["db.public.*".into()],
             },
             ProfileChoice {
                 name: "b".into(),
                 connections: Vec::new(),
+                sees: Vec::new(),
             },
         ];
-        let mut form = GrantForm::new(choices, 1);
-        assert_eq!(form.focus, GRANT_PROFILE);
-        assert_eq!(form.profile_name(), "b");
-        form.step(-1);
-        assert_eq!(form.profile_name(), "a");
-        // The connection is the profile's own, not free text to leave empty.
-        form.fields[GRANT_TOOLS].value = "data_insert".into();
-        form.fields[GRANT_SELECTOR].value = "db.public.t".into();
-        let request = form.request().unwrap();
-        assert_eq!(request.connection, "pg-dev");
-        assert_eq!(request.capability, "data_write");
-        let lines = form.lines().join("\n");
-        assert!(lines.contains("profile: < a >"), "{lines}");
-        assert!(
-            !lines.contains("approval timeout"),
-            "only when it asks: {lines}"
-        );
-        form.toggle_ask();
-        assert!(form.lines().join("\n").contains("approval timeout"));
+        let saved = vec![
+            ConnectionChoice {
+                name: "pg-dev".into(),
+                environment: "development".into(),
+            },
+            ConnectionChoice {
+                name: "pg-prod".into(),
+                environment: "production".into(),
+            },
+        ];
+        GrantForm::new(choices, saved, 1)
     }
 
-    /// A refusal puts the cursor on the field it is about, and the form's size does not
-    /// change when it shows, so the buttons stay where they were.
     #[test]
-    fn a_refusal_focuses_its_field_and_leaves_the_buttons_in_place() {
-        let choices = vec![ProfileChoice {
-            name: "a".into(),
-            connections: Vec::new(),
-        }];
-        let mut form = GrantForm::new(choices, 0);
-        let before = form.lines().len();
-        form.focus_for_error("a grant lasts from 1 second to 24 hours: write the time as 90s");
-        assert_eq!(form.focus, GRANT_EXPIRES);
-        form.focus_for_error(
-            "db.public.* is outside what the profile allows: a grant can only narrow the profile",
+    fn the_grant_form_picks_its_profile_and_its_connections() {
+        use crossterm::event::KeyCode;
+        let mut form = form();
+        assert_eq!(form.focus, GrantRow::Profile);
+        assert_eq!(form.profile_name(), "b");
+        // A profile that lists no connection may use any saved one.
+        assert_eq!(form.connections().len(), 2);
+        form.key(key(KeyCode::Left));
+        assert_eq!(form.profile_name(), "a");
+        let connections = form.connections();
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].environment, "development");
+        assert_eq!(form.objects_hint(), "within db.public.*");
+        // Enter opens the dropdown, and picks in it.
+        form.key(key(KeyCode::Enter));
+        assert_eq!(form.open, Some(0));
+        form.key(key(KeyCode::Down));
+        form.key(key(KeyCode::Enter));
+        assert_eq!((form.profile_name().as_str(), form.open), ("b", None));
+    }
+
+    #[test]
+    fn enter_creates_only_on_create() {
+        use crossterm::event::KeyCode;
+        let mut form = form();
+        // Each row: Enter opens, toggles or moves on, never submits.
+        form.focus = GrantRow::Tools;
+        assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Stay);
+        assert!(form.tools[0], "Enter checks the tool");
+        form.focus = GrantRow::Objects;
+        for ch in "db.public.t".chars() {
+            form.key(key(KeyCode::Char(ch)));
+        }
+        assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Stay);
+        assert_eq!(form.focus, GrantRow::Expires);
+        form.focus = GrantRow::Ask;
+        assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Stay);
+        assert!(form.ask, "Enter flips the toggle");
+        assert!(form.rows().contains(&GrantRow::AskSecs));
+        form.focus = GrantRow::Confirm;
+        for ch in "pg-dev".chars() {
+            form.key(key(KeyCode::Char(ch)));
+        }
+        assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Stay);
+        assert_eq!(form.focus, GrantRow::Cancel);
+        assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Cancel);
+        form.focus = GrantRow::Create;
+        assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Submit);
+        let request = form.request().unwrap();
+        assert_eq!(request.tools, ["data_insert"]);
+        assert_eq!(
+            (request.selector.as_str(), request.expires.as_str()),
+            ("db.public.t", "15m")
         );
-        assert_eq!(form.focus, GRANT_SELECTOR);
-        form.focus_for_error("confirm: type local or db.public.t exactly as written above");
-        assert_eq!(form.focus, GRANT_CONFIRM);
-        form.error = Some("a refusal ".repeat(12));
-        assert_eq!(form.lines().len(), before, "the buttons do not move");
-        form.step(1);
+        assert_eq!(request.ask_secs, Some(120));
+    }
+
+    #[test]
+    fn the_tools_are_a_grid_the_arrows_walk() {
+        use crossterm::event::KeyCode;
+        let mut form = form();
+        form.focus = GrantRow::Capability;
+        form.key(key(KeyCode::Down));
+        assert_eq!((form.focus, form.tool), (GrantRow::Tools, 0));
+        form.key(key(KeyCode::Right));
+        form.key(key(KeyCode::Down));
+        assert_eq!((form.focus, form.tool), (GrantRow::Tools, 3));
+        // Past the last row, out of the grid; back in from below on its last row.
+        form.key(key(KeyCode::Down));
+        assert_eq!(form.focus, GrantRow::Objects);
+        form.key(key(KeyCode::Up));
+        assert_eq!((form.focus, form.tool), (GrantRow::Tools, 3));
+        form.key(key(KeyCode::Up));
+        form.key(key(KeyCode::Up));
+        assert_eq!(form.focus, GrantRow::Capability);
+    }
+
+    /// A refusal puts the cursor on the row it is about, and a change takes it away.
+    #[test]
+    fn a_refusal_focuses_its_row() {
+        use crossterm::event::KeyCode;
+        let mut form = form();
+        form.fail("a grant lasts from 1 second to 24 hours: write the time as 90s".into());
+        assert_eq!(form.focus, GrantRow::Expires);
+        form.fail(
+            "db.public.* is outside what the profile allows: a grant can only narrow the profile"
+                .into(),
+        );
+        assert_eq!(form.focus, GrantRow::Objects);
+        assert_eq!(
+            form.request().unwrap_err(),
+            "tools: pick at least one",
+            "the tools are picked on purpose"
+        );
+        form.fail("confirm: type pg-dev to confirm".into());
+        assert_eq!(form.focus, GrantRow::Confirm);
+        form.key(key(KeyCode::Char('p')));
         assert!(form.error.is_none(), "a change takes the old refusal away");
     }
 }
