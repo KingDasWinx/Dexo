@@ -16,6 +16,39 @@ pub const WRITE_TOOLS: &[&str] = &[
     "admin_terminate_session",
 ];
 
+/// Why a grant cannot give `profile` the write tool `tool`, or `None` when it can: the
+/// profile denies it, and the server never offers it; or it is data_execute_sql, which a
+/// profile allows only by name.
+pub fn why_not_grantable(profile: &McpProfile, tool: &str) -> Option<String> {
+    if !profile.tool_allowed(tool) {
+        return Some(format!(
+            "{} denies it: dexo mcp profile set --name {} --allow-tool {tool}",
+            profile.name, profile.name
+        ));
+    }
+    if tool == "data_execute_sql"
+        && !profile
+            .tool_rules
+            .iter()
+            .any(|rule| rule.tool == tool && rule.allowed)
+    {
+        return Some(format!(
+            "{} must allow it first: dexo mcp profile set --name {} --allow-tool data_execute_sql",
+            profile.name, profile.name
+        ));
+    }
+    None
+}
+
+/// The write tools a grant can give `profile`, in order: what New grant offers.
+pub fn grantable_tools(profile: &McpProfile) -> Vec<&'static str> {
+    WRITE_TOOLS
+        .iter()
+        .copied()
+        .filter(|tool| why_not_grantable(profile, tool).is_none())
+        .collect()
+}
+
 pub const DEFAULT_TTL_SECS: i64 = 15 * 60;
 pub const MAX_TTL_SECS: i64 = 24 * 60 * 60;
 /// A grant that lasts until it is revoked: `--expires never`. Its `expires_at` is the
@@ -127,15 +160,10 @@ impl Grant {
                     format!("tool {tool} is not valid for this capability"),
                 ));
             }
-            if tool == "data_execute_sql"
-                && !profile
-                    .tool_rules
-                    .iter()
-                    .any(|rule| rule.tool == "data_execute_sql" && rule.allowed)
-            {
+            if let Some(why) = why_not_grantable(profile, tool) {
                 return Err(AppError::new(
                     ErrorCategory::McpPolicy,
-                    "data_execute_sql requires an explicit profile tool rule",
+                    format!("{tool}: {why}"),
                 ));
             }
         }
@@ -570,5 +598,68 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    /// What New grant offers is what a grant can give: every write tool the profile does
+    /// not deny, and data_execute_sql only where a rule allows it by name; the rest each
+    /// say why.
+    #[test]
+    fn a_grant_gives_only_what_the_profile_lets_it() {
+        use super::{grantable_tools, why_not_grantable};
+        let mut profile = profile();
+        assert_eq!(
+            grantable_tools(&profile),
+            [
+                "data_insert",
+                "data_update",
+                "data_delete",
+                "schema_apply_ddl",
+                "admin_cancel_query",
+                "admin_terminate_session"
+            ]
+        );
+        assert!(
+            why_not_grantable(&profile, "data_execute_sql")
+                .is_some_and(|why| why.contains("--allow-tool data_execute_sql"))
+        );
+        profile.tool_rules.push(ToolRule {
+            tool: "data_delete".into(),
+            allowed: false,
+        });
+        assert!(!grantable_tools(&profile).contains(&"data_delete"));
+        // A denied tool is refused, not granted for nothing: the server never offers it.
+        let denied = Grant::new(
+            &profile,
+            "local",
+            GrantCapability::DataWrite,
+            vec!["data_delete".into()],
+            vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
+            0,
+            DEFAULT_TTL_SECS,
+        );
+        assert!(denied.is_err());
+        for tool in grantable_tools(&profile) {
+            let capability = [
+                GrantCapability::DataWrite,
+                GrantCapability::Ddl,
+                GrantCapability::Admin,
+            ]
+            .into_iter()
+            .find(|capability| capability.allows_tool(tool))
+            .unwrap();
+            assert!(
+                Grant::new(
+                    &profile,
+                    "local",
+                    capability,
+                    vec![tool.into()],
+                    vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
+                    0,
+                    DEFAULT_TTL_SECS,
+                )
+                .is_ok(),
+                "{tool}"
+            );
+        }
     }
 }

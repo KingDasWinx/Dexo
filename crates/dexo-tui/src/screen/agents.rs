@@ -1068,6 +1068,10 @@ fn grant_form(
         &form.tool_groups(),
         focused(GrantRow::Tools).then_some(form.tool),
     );
+    // What a grant cannot give this profile is not offered: which, why, and the fix.
+    for (tool, why) in form.withheld() {
+        lines.aside(format!("{tool} is not offered: {why}"), style(Role::Muted));
+    }
     // Everything the profile sees, or the tables checked from what Dexo last read.
     let options = form.tables_options();
     let options: Vec<&str> = options.iter().map(String::as_str).collect();
@@ -1178,7 +1182,7 @@ fn grant_form(
     lines.note(lasts, style(Role::Muted));
     if form.until_revoked() {
         lines.note(
-            "! it does not expire: revoke it with r when it is done",
+            "! no time limit: revoke it with r when it is done",
             panel::bold(model, Role::Warning),
         );
     }

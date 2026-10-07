@@ -15,6 +15,9 @@ pub struct McpProfileSummary {
     pub raw_read: bool,
     pub scopes: Vec<String>,
     pub tools: Vec<String>,
+    /// The write tools a grant can give it, and each other one with why not.
+    pub grantable: Vec<String>,
+    pub withheld: Vec<(String, String)>,
     /// Live grants for this profile. The screen shows the selected profile's, which
     /// is what makes `r` (revoke the selected profile's grants) mean something on screen.
     pub grants: Vec<GrantLine>,
@@ -112,6 +115,9 @@ pub struct ProfileChoice {
     pub connections: Vec<String>,
     /// The selectors it allows: a grant narrows one of them.
     pub sees: Vec<String>,
+    /// The write tools a grant can give it; the others, each with why not.
+    pub grantable: Vec<String>,
+    pub withheld: Vec<(String, String)>,
 }
 
 /// A saved connection a grant can be for, with its environment.
@@ -177,7 +183,8 @@ pub struct GrantForm {
     pub saved: Vec<ConnectionChoice>,
     pub profile: usize,
     pub connection: usize,
-    pub tools: Vec<bool>,
+    /// The tools checked, by name.
+    pub tools: Vec<String>,
     /// The grant covers everything the profile sees; or only the tables checked.
     pub everything: bool,
     pub tables: Option<TableList>,
@@ -216,7 +223,6 @@ impl GrantForm {
             error: None,
         };
         form.set_profile(profile);
-        form.tools = vec![false; CAPABILITIES.iter().map(|(.., tools)| tools.len()).sum()];
         form
     }
 
@@ -380,31 +386,56 @@ impl GrantForm {
         self.rows().iter().position(|at| *at == row).unwrap_or(0)
     }
 
-    /// Every tool a grant can allow, grouped by what each group does, each with
-    /// whether it is checked. The boxes count across the groups.
-    pub fn tool_groups(&self) -> Vec<(String, Vec<(String, bool)>)> {
-        let mut checked = self.tools.iter();
+    /// The tools a grant can give the profile, in order: the grid's boxes.
+    fn offered(&self) -> Vec<&'static str> {
+        let grantable = self
+            .profiles
+            .get(self.profile)
+            .map(|profile| profile.grantable.as_slice())
+            .unwrap_or_default();
         CAPABILITIES
             .iter()
-            .map(|(name, about, tools)| {
-                let items = tools
+            .flat_map(|(.., tools)| tools.iter().copied())
+            .filter(|tool| grantable.iter().any(|offered| offered == tool))
+            .collect()
+    }
+
+    /// The write tools the profile cannot be given, each with why not and how to change
+    /// that.
+    pub fn withheld(&self) -> Vec<(String, String)> {
+        self.profiles
+            .get(self.profile)
+            .map(|profile| profile.withheld.clone())
+            .unwrap_or_default()
+    }
+
+    /// The tools offered, grouped by what each group does, each with whether it is
+    /// checked. The boxes count across the groups.
+    pub fn tool_groups(&self) -> Vec<(String, Vec<(String, bool)>)> {
+        let offered = self.offered();
+        CAPABILITIES
+            .iter()
+            .filter_map(|(name, about, tools)| {
+                let items: Vec<(String, bool)> = tools
                     .iter()
-                    .map(|tool| (tool.to_string(), *checked.next().unwrap_or(&false)))
+                    .filter(|tool| offered.contains(tool))
+                    .map(|tool| (tool.to_string(), self.tools.iter().any(|on| on == tool)))
                     .collect();
-                (format!("{about} ({name})"), items)
+                (!items.is_empty()).then(|| (format!("{about} ({name})"), items))
             })
             .collect()
     }
 
     /// The tools checked of each capability that has any: one grant each.
     fn chosen(&self) -> Vec<(&'static str, Vec<String>)> {
-        let mut checked = self.tools.iter();
+        let offered = self.offered();
         CAPABILITIES
             .iter()
             .filter_map(|(name, _, tools)| {
                 let picked: Vec<String> = tools
                     .iter()
-                    .filter(|_| *checked.next().unwrap_or(&false))
+                    .filter(|tool| offered.contains(tool))
+                    .filter(|tool| self.tools.iter().any(|on| on == *tool))
                     .map(|tool| tool.to_string())
                     .collect();
                 (!picked.is_empty()).then_some((*name, picked))
@@ -417,12 +448,12 @@ impl GrantForm {
         self.chosen().len()
     }
 
-    /// The tools grid's rows, as drawn.
-    fn tool_rows() -> Vec<Vec<usize>> {
+    fn tool_rows(&self) -> Vec<Vec<usize>> {
         crate::widgets::panel::grid_rows(
-            &CAPABILITIES
+            &self
+                .tool_groups()
                 .iter()
-                .map(|(.., tools)| tools.len())
+                .map(|(_, items)| items.len())
                 .collect::<Vec<_>>(),
         )
     }
@@ -430,7 +461,7 @@ impl GrantForm {
     /// The grid the focus is on, and its rows.
     fn grid(&self) -> Option<(usize, Vec<Vec<usize>>)> {
         match self.focus {
-            GrantRow::Tools => Some((self.tool, Self::tool_rows())),
+            GrantRow::Tools => Some((self.tool, self.tool_rows())),
             GrantRow::TablePick => Some((
                 self.table,
                 crate::widgets::panel::grid_rows(&[self.table_items().len()]),
@@ -459,7 +490,7 @@ impl GrantForm {
     /// When it ends, as the end of a sentence.
     fn ends(&self) -> String {
         match EXPIRES[self.expires] {
-            ("never", ..) => "lasts until it is revoked".into(),
+            ("never", ..) => "no time limit".into(),
             (.., long) => format!("ends in {long}"),
         }
     }
@@ -555,8 +586,13 @@ impl GrantForm {
             GrantRow::Expires => self.expires = option.min(EXPIRES.len() - 1),
             GrantRow::Tools => {
                 self.tool = option;
-                if let Some(on) = self.tools.get_mut(option) {
-                    *on = !*on;
+                if let Some(tool) = self.offered().get(option) {
+                    match self.tools.iter().position(|on| on == tool) {
+                        Some(at) => {
+                            self.tools.remove(at);
+                        }
+                        None => self.tools.push(tool.to_string()),
+                    }
                 }
             }
             GrantRow::Ask => self.ask = !self.ask,
@@ -670,10 +706,8 @@ impl GrantForm {
                         self.step(row, 1);
                     }
                     (GrantRow::Tools, KeyCode::Char(' ') | KeyCode::Enter) => {
-                        self.pick(
-                            GrantRow::Tools,
-                            self.tool.min(self.tools.len().saturating_sub(1)),
-                        );
+                        let last = self.offered().len().saturating_sub(1);
+                        self.pick(GrantRow::Tools, self.tool.min(last));
                     }
                     (GrantRow::TablePick, KeyCode::Char(' ') | KeyCode::Enter) => {
                         self.pick(GrantRow::TablePick, self.table);
@@ -1528,11 +1562,22 @@ mod tests {
                 name: "a".into(),
                 connections: vec!["pg-dev".into(), "pg-prod".into()],
                 sees: vec!["db.public.*".into()],
+                grantable: dexo_app::mcp::WRITE_TOOLS
+                    .iter()
+                    .map(|tool| tool.to_string())
+                    .collect(),
+                withheld: Vec::new(),
             },
             ProfileChoice {
                 name: "b".into(),
                 connections: Vec::new(),
                 sees: Vec::new(),
+                grantable: dexo_app::mcp::WRITE_TOOLS
+                    .iter()
+                    .filter(|tool| **tool != "data_execute_sql")
+                    .map(|tool| tool.to_string())
+                    .collect(),
+                withheld: vec![("data_execute_sql".into(), "b must allow it first".into())],
             },
         ];
         let saved = vec![
@@ -1637,7 +1682,7 @@ mod tests {
         form.key(key(KeyCode::Left));
         assert!(form.until_revoked());
         assert!(
-            form.result().1.ends_with("until it is revoked"),
+            form.result().1.ends_with("no time limit"),
             "{:?}",
             form.result()
         );
@@ -1657,7 +1702,7 @@ mod tests {
         // Each row: Enter opens, toggles or moves on, never submits.
         form.focus = GrantRow::Tools;
         assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Stay);
-        assert!(form.tools[0], "Enter checks the tool");
+        assert_eq!(form.tools, ["data_insert"], "Enter checks the tool");
         form.focus = GrantRow::Ask;
         assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Stay);
         assert!(form.ask, "Enter flips the toggle");
@@ -1689,18 +1734,20 @@ mod tests {
         form.focus = GrantRow::Connection;
         form.key(key(KeyCode::Down));
         assert_eq!((form.focus, form.tool), (GrantRow::Tools, 0));
-        // data_write is two rows; ddl one, of one tool; admin one, of two.
+        // b may not be given data_execute_sql: data_write is two rows, the second of
+        // one tool; ddl one, of one tool; admin one, of two.
+        assert_eq!(form.withheld()[0].0, "data_execute_sql");
         let mut walked = Vec::new();
         form.key(key(KeyCode::Right));
         for _ in 0..3 {
             form.key(key(KeyCode::Down));
             walked.push(form.tool);
         }
-        assert_eq!(walked, [3, 4, 5]);
+        assert_eq!(walked, [2, 3, 4]);
         form.key(key(KeyCode::Down));
         assert_eq!(form.focus, GrantRow::Tables);
         form.key(key(KeyCode::Up));
-        assert_eq!((form.focus, form.tool), (GrantRow::Tools, 5));
+        assert_eq!((form.focus, form.tool), (GrantRow::Tools, 4));
         for _ in 0..4 {
             form.key(key(KeyCode::Up));
         }

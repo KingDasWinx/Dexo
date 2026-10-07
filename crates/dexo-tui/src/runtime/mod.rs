@@ -2960,6 +2960,17 @@ fn mcp_profiles_loaded() -> Option<Action> {
                 .iter()
                 .map(|rule| rule.tool.clone())
                 .collect(),
+            grantable: dexo_app::mcp::grantable_tools(&profile)
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            withheld: dexo_app::mcp::WRITE_TOOLS
+                .iter()
+                .filter_map(|tool| {
+                    dexo_app::mcp::why_not_grantable(&profile, tool)
+                        .map(|why| (tool.to_string(), why))
+                })
+                .collect(),
             grants: ledger
                 .as_ref()
                 .map(|ledger| grant_lines(ledger, &profile.name, now))
@@ -3226,7 +3237,12 @@ fn create_mcp_grants(
             crate::screens::mcp_profiles::duration_words(i64::from(first.ask_secs)),
         )
     } else {
-        format!("Granted {tools} on {objects} ({connection}), one write each; {what} {lasts}.")
+        let uses = if one {
+            "for one write"
+        } else {
+            "one write each"
+        };
+        format!("Granted {tools} on {objects} ({connection}) {uses}; {what} {lasts}.")
     };
     let ledger = dexo_storage::SqliteGrantLedger::open(&paths.database)
         .map_err(|error| error.to_string())?;

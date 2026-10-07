@@ -4379,6 +4379,8 @@ fn open_grant_form(model: &mut Model) {
         .map(|profile| crate::screens::mcp_profiles::ProfileChoice {
             name: profile.name.clone(),
             connections: profile.connections.clone(),
+            grantable: profile.grantable.clone(),
+            withheld: profile.withheld.clone(),
             sees: profile
                 .scopes
                 .iter()
@@ -16032,6 +16034,7 @@ mod tests {
                     enabled: true,
                     connections: vec!["local".into()],
                     scopes: vec!["allow db.public.*".into()],
+                    grantable: vec!["data_insert".into(), "data_update".into()],
                     ..Default::default()
                 }],
             },
