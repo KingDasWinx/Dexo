@@ -913,6 +913,10 @@ impl WorkbenchRuntime {
                 self.admin_on_side_connection(session, Some(action)).await
             }
             crate::Effect::LoadMcpProfiles => self.load_mcp_profiles().await,
+            crate::Effect::LoadGrantTables {
+                connection,
+                postgres,
+            } => self.load_grant_tables(connection, postgres),
             crate::Effect::LoadMcpClients => {
                 let action_tx = self.action_tx.clone();
                 tokio::task::spawn_blocking(move || {
@@ -2615,6 +2619,45 @@ impl WorkbenchRuntime {
         });
     }
 
+    /// The tables of `connection` as Dexo last read them, each as the selector a grant
+    /// names it by: `database.schema.table` on PostgreSQL, `database.table` on MySQL.
+    fn load_grant_tables(&self, connection: String, postgres: bool) {
+        self.off_the_loop(move || {
+            let tables = AppPaths::discover()
+                .ok()
+                .and_then(|paths| Database::open(&paths.database).ok())
+                .and_then(|db| {
+                    dexo_storage::CatalogCache::new(db.connection())
+                        .load_latest_for_connection(&connection)
+                        .ok()
+                        .flatten()
+                })
+                .map(|(database, objects)| {
+                    let mut tables: Vec<String> = objects
+                        .iter()
+                        .filter(|object| object.kind == dexo_driver_api::ObjectKind::Table)
+                        .map(|object| {
+                            let name = &object.qualified_name;
+                            let path: Vec<&str> = if postgres {
+                                vec![
+                                    database.as_str(),
+                                    name.schema().unwrap_or("public"),
+                                    name.object(),
+                                ]
+                            } else {
+                                vec![name.schema().unwrap_or(database.as_str()), name.object()]
+                            };
+                            path.join(".")
+                        })
+                        .collect();
+                    tables.sort();
+                    tables.dedup();
+                    tables
+                });
+            vec![Action::GrantTablesLoaded { connection, tables }]
+        });
+    }
+
     async fn load_object_usage(&self, project_id: String, connection_id: String) {
         self.off_the_loop(move || {
             let Ok(paths) = AppPaths::discover() else {
@@ -2888,6 +2931,7 @@ fn grant_lines(
                 .collect::<Vec<_>>()
                 .join(", "),
             ask_secs: grant.ask_secs,
+            until_revoked: grant.until_revoked(),
         })
         .collect()
 }
@@ -3142,20 +3186,26 @@ fn create_mcp_grant(
     let grant = request
         .issue(&loaded, &saved, unix_seconds())
         .map_err(|error| error.to_string())?;
-    let lasts = crate::screens::mcp_profiles::duration_words(grant.expires_at - unix_seconds());
+    let lasts = if grant.until_revoked() {
+        "lasts until it is revoked".to_string()
+    } else {
+        format!(
+            "ends in {}",
+            crate::screens::mcp_profiles::duration_words(grant.expires_at - unix_seconds())
+        )
+    };
+    let objects = request.selectors.join(", ");
     let message = if grant.asks() {
         format!(
-            "Granted {} on {} ({}): each write waits up to {} for you under Agents, Approvals; the grant ends in {lasts}.",
+            "Granted {} on {objects} ({}): each write waits up to {} for you under Agents, Approvals; the grant {lasts}.",
             grant.tools.join(", "),
-            request.selector,
             request.connection,
             crate::screens::mcp_profiles::duration_words(i64::from(grant.ask_secs)),
         )
     } else {
         format!(
-            "Granted {} on {} ({}) for one write; the grant ends in {lasts}.",
+            "Granted {} on {objects} ({}) for one write; the grant {lasts}.",
             grant.tools.join(", "),
-            request.selector,
             request.connection,
         )
     };

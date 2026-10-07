@@ -1642,6 +1642,15 @@ fn query_mode_words(mode: QueryMode) -> &'static str {
 }
 
 /// A span in words: `45 s`, `29 min`, `3 h`.
+/// When a grant ends: "ends in 15 min", or "lasts until it is revoked".
+fn grant_lasts(grant: &dexo_app::mcp::Grant, now: i64) -> String {
+    if grant.until_revoked() {
+        "lasts until it is revoked".into()
+    } else {
+        format!("ends in {}", span_words(grant.expires_at - now))
+    }
+}
+
 fn span_words(secs: i64) -> String {
     match secs {
         i64::MIN..=0 => "now".into(),
@@ -2111,16 +2120,16 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
                 connection,
                 capability,
                 tools: tool,
-                selector,
+                selectors: selector,
                 expires,
                 confirm_target: confirm_target.unwrap_or_default(),
                 ask_secs: ask.then_some(approval_timeout),
             }
             .issue(&loaded, &saved, now)?;
-            let lasts = span_words(grant.expires_at - now);
+            let lasts = grant_lasts(&grant, now);
             if grant.asks() {
                 println!(
-                    "granted {} {} on {}, ends in {lasts}: each write waits up to {} for your approval under Agents, Approvals, in the TUI (grant id {})",
+                    "granted {} {} on {}, {lasts}: each write waits up to {} for your approval under Agents, Approvals, in the TUI (grant id {})",
                     grant.capability.as_str(),
                     grant.tools.join(", "),
                     grant.connection,
@@ -2129,7 +2138,7 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
                 );
             } else {
                 println!(
-                    "granted {} {} on {}, ends in {lasts}: one write, then it is spent (grant id {})",
+                    "granted {} {} on {}, {lasts}: one write, then it is spent (grant id {})",
                     grant.capability.as_str(),
                     grant.tools.join(", "),
                     grant.connection,
@@ -2154,7 +2163,7 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
                     "one write, then it is spent".to_string()
                 };
                 println!(
-                    "{}  {} on {}  {} {}: {uses}, ends in {}",
+                    "{}  {} on {}  {} {}: {uses}, {}",
                     grant.id,
                     grant.tools.join(", "),
                     grant.connection,
@@ -2165,7 +2174,7 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
                         .map(|rule| rule.selector.to_string())
                         .collect::<Vec<_>>()
                         .join(", "),
-                    span_words(grant.expires_at - now)
+                    grant_lasts(&grant, now)
                 );
             }
         }

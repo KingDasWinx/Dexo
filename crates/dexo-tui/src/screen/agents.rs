@@ -1047,6 +1047,10 @@ fn grant_form(
         invalid(GrantRow::Connection),
         open(GrantRow::Connection, rows),
     );
+    // The connections MCP never writes to are not offered: which, and why.
+    for (name, why) in form.left_out() {
+        lines.aside(format!("{name} is not offered: {why}"), style(Role::Muted));
+    }
 
     lines.section(model, "WHAT");
     lines.segmented(
@@ -1065,16 +1069,57 @@ fn grant_form(
         &form.tool_items(),
         focused(GrantRow::Tools).then_some(form.tool),
     );
-    lines.text(
+    // Everything the profile sees, or the tables checked from what Dexo last read.
+    let sees = form.sees();
+    let options = form.tables_options();
+    let options: Vec<&str> = options.iter().map(String::as_str).collect();
+    let after = if !form.everything {
+        String::new()
+    } else if sees.is_empty() {
+        "nothing yet: dexo mcp allow".to_string()
+    } else {
+        sees.join(", ")
+    };
+    lines.segmented(
         model,
-        at(GrantRow::Objects),
-        "Objects",
-        &form.objects,
-        "",
-        &form.objects_hint(),
-        focused(GrantRow::Objects),
-        invalid(GrantRow::Objects),
+        at(GrantRow::Tables),
+        "Tables",
+        &options,
+        usize::from(!form.everything),
+        focused(GrantRow::Tables),
+        &after,
     );
+    if !form.everything {
+        use crate::screens::mcp_profiles::TableState;
+        let connection = form
+            .connection_choice()
+            .map(|choice| choice.name)
+            .unwrap_or_default();
+        match form.tables.as_ref().map(|tables| &tables.state) {
+            Some(TableState::Read(items)) if !items.is_empty() => lines.grid(
+                model,
+                at(GrantRow::TablePick),
+                "",
+                &form.table_items(),
+                focused(GrantRow::TablePick).then_some(form.table),
+            ),
+            Some(TableState::Read(_)) => lines.aside(
+                format!(
+                    "no table of {connection} is inside what {} sees",
+                    form.profile_name()
+                ),
+                style(Role::Muted),
+            ),
+            Some(TableState::NeverRead) => lines.aside(
+                format!("Dexo has not read {connection}'s tables: open it once in the Workbench"),
+                style(Role::Warning),
+            ),
+            _ => lines.aside(
+                format!("reading {connection}'s tables…"),
+                style(Role::Muted),
+            ),
+        }
+    }
 
     lines.section(model, "HOW LONG");
     lines.segmented(
@@ -1132,12 +1177,9 @@ fn grant_form(
         None => lines.note("pick the tools it may use", style(Role::Muted)),
     }
     lines.note(lasts, style(Role::Muted));
-    let production = form.connection_choice().is_some_and(|choice| {
-        crate::accessibility::environment_role(&choice.environment) == Some(Role::Production)
-    });
-    if production {
+    if form.until_revoked() {
         lines.note(
-            "! writes to a production connection",
+            "! it does not expire: revoke it with r when it is done",
             panel::bold(model, Role::Warning),
         );
     }
@@ -1160,11 +1202,7 @@ fn grant_form(
             Button {
                 label: "Create grant",
                 focused: focused(GrantRow::Create),
-                tone: if production {
-                    Role::Warning
-                } else {
-                    Role::Focus
-                },
+                tone: Role::Focus,
                 primary: true,
                 target: HitTarget::FooterSubmit,
             },

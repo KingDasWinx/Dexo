@@ -148,6 +148,14 @@ impl Lines {
         self.push(Line::styled(format!("   {}", text.into()), style));
     }
 
+    /// A line of plain text in the value column, under the row it is about.
+    pub fn aside(&mut self, text: impl Into<String>, style: Style) {
+        self.push(Line::styled(
+            format!("{}{}", " ".repeat(VALUE + 1), text.into()),
+            style,
+        ));
+    }
+
     /// A choice among a few short options, side by side, the chosen one filled; what it
     /// means after them.
     #[allow(clippy::too_many_arguments)]

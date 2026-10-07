@@ -460,6 +460,7 @@ fn selecting_a_profile_shows_its_own_grants() {
         connection: "prod".into(),
         selectors: "db.public.items".into(),
         ask_secs: 0,
+        until_revoked: false,
     };
     let profile = |name: &str, grants: Vec<GrantLine>| McpProfileSummary {
         name: name.into(),

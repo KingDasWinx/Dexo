@@ -86,12 +86,12 @@ fn fields() -> Vec<Field> {
                     0,
                 );
                 // A text row: the profile row is a choice.
-                form.focus = dexo_tui::screens::mcp_profiles::GrantRow::Objects;
+                form.focus = dexo_tui::screens::mcp_profiles::GrantRow::Confirm;
                 m.mcp_profiles.grant_form = Some(form);
             },
             text: |m| {
                 let form = m.mcp_profiles.grant_form.as_ref().unwrap();
-                form.objects.as_str().to_string()
+                form.confirm.as_str().to_string()
             },
             masked: false,
         },

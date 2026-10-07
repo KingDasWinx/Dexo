@@ -2085,6 +2085,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.messages.info(message);
             vec![Effect::LoadMcpProfiles]
         }
+        Action::GrantTablesLoaded { connection, tables } => {
+            if let Some(form) = model.mcp_profiles.grant_form.as_mut() {
+                form.take_tables(&connection, tables);
+            }
+            Vec::new()
+        }
         Action::McpGrantFailed { message } => {
             match model.mcp_profiles.grant_form.as_mut() {
                 Some(form) => form.fail(message),
@@ -4239,13 +4245,33 @@ fn grant_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         return Vec::new();
     };
     match form.key(key) {
-        FormKey::Stay => Vec::new(),
+        FormKey::Stay => read_grant_tables(model),
         FormKey::Submit => submit_grant_form(model),
         FormKey::Cancel => {
             close_grant_form(model);
             Vec::new()
         }
     }
+}
+
+/// New grant wants only some tables of a connection whose tables it has not read: they
+/// are read, from what Dexo last saw of its catalog.
+fn read_grant_tables(model: &mut Model) -> Vec<Effect> {
+    use crate::screens::mcp_profiles::{TableList, TableState};
+    let Some(form) = model.mcp_profiles.grant_form.as_mut() else {
+        return Vec::new();
+    };
+    let Some((connection, postgres)) = form.wants_tables() else {
+        return Vec::new();
+    };
+    form.tables = Some(TableList {
+        connection: connection.clone(),
+        state: TableState::Reading,
+    });
+    vec![Effect::LoadGrantTables {
+        connection,
+        postgres,
+    }]
 }
 
 fn submit_grant_form(model: &mut Model) -> Vec<Effect> {
@@ -4289,7 +4315,7 @@ fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> 
                 if let Some(row) = row(form, field) {
                     form.pick(row, option);
                 }
-                Vec::new()
+                read_grant_tables(model)
             }
             Some(HitTarget::FooterSubmit) => submit_grant_form(model),
             Some(HitTarget::FooterCancel) => {
@@ -4361,18 +4387,32 @@ fn open_grant_form(model: &mut Model) {
         })
         .collect();
     let selected = screen.selected;
-    // The connections agents can use, with the environment each is marked with.
+    // The connections agents can use, with the environment each is marked with, and why
+    // MCP never writes to one: production, or a policy that keeps it read-only.
     let saved = mcp_connections(model)
         .into_iter()
-        .map(|name| crate::screens::mcp_profiles::ConnectionChoice {
-            environment: model
+        .filter_map(|name| {
+            let row = model
                 .connections
                 .profiles
                 .iter()
-                .find(|row| row.profile.name == name)
-                .map(|row| row.profile.environment.clone())
-                .unwrap_or_default(),
-            name,
+                .find(|row| row.profile.name == name)?;
+            let meta = dexo_app::mcp::McpConnection::from_profile(&row.profile);
+            Some(crate::screens::mcp_profiles::ConnectionChoice {
+                environment: row.profile.environment.clone(),
+                refused: match &meta {
+                    Ok(meta) if meta.environment == dexo_app::Environment::Production => {
+                        Some("MCP never writes to production".to_string())
+                    }
+                    Ok(meta) if meta.read_only => Some("its policy keeps it read-only".to_string()),
+                    Ok(meta) => meta.accepts_writes().err().map(|error| error.to_string()),
+                    Err(error) => Some(error.to_string()),
+                },
+                postgres: meta
+                    .as_ref()
+                    .is_ok_and(|meta| meta.dialect == dexo_sql::Dialect::Postgres),
+                name,
+            })
         })
         .collect();
     model.mcp_profiles.grant_form = Some(crate::screens::mcp_profiles::GrantForm::new(
@@ -15991,6 +16031,7 @@ mod tests {
                     name: "assistant".into(),
                     enabled: true,
                     connections: vec!["local".into()],
+                    scopes: vec!["allow db.public.*".into()],
                     ..Default::default()
                 }],
             },
@@ -16007,10 +16048,9 @@ mod tests {
         tab(&mut model);
         tab(&mut model);
         tab(&mut model);
-        // The first tool, then the objects.
+        // The first tool; the tables are everything the profile sees.
         update(&mut model, key(KeyCode::Char(' ')));
         tab(&mut model);
-        typed(&mut model, "db.public.items");
         tab(&mut model);
         tab(&mut model);
         // "ask before each write", then its timeout, then the confirmation.
@@ -16032,7 +16072,7 @@ mod tests {
             connection: "local".into(),
             capability: "data_write".into(),
             tools: vec!["data_insert".into()],
-            selector: "db.public.items".into(),
+            selectors: vec!["db.public.*".into()],
             expires: "15m".into(),
             confirm_target: "local".into(),
             ask_secs: Some(90),

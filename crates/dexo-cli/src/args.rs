@@ -571,8 +571,10 @@ pub enum McpGrantCommand {
         capability: String,
         #[arg(long)]
         tool: Vec<String>,
-        #[arg(long)]
-        selector: String,
+        /// The objects the grant covers; repeat it for several.
+        #[arg(long, required = true)]
+        selector: Vec<String>,
+        /// How long it lasts, as 15m, 2h or 1h30m (24h at most), or never: until revoked.
         #[arg(long, default_value = "15m")]
         expires: String,
         #[arg(long = "confirm-target")]

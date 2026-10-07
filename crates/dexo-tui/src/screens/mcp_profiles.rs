@@ -30,6 +30,8 @@ pub struct GrantLine {
     pub selectors: String,
     /// Above zero, each write the grant covers waits this long for a person.
     pub ask_secs: u32,
+    /// It lasts until it is revoked: `expires_in_secs` means nothing.
+    pub until_revoked: bool,
 }
 
 /// A span of seconds in words: `45 s`, `29 min`, `3 h`.
@@ -58,11 +60,15 @@ impl GrantLine {
         } else {
             format!(" on {}", self.selectors)
         };
+        let ends = if self.until_revoked {
+            "lasts until it is revoked".to_string()
+        } else {
+            format!("ends in {}", duration_words(self.expires_in_secs))
+        };
         format!(
-            "{}{objects} ({}): {how}, ends in {}",
+            "{}{objects} ({}): {how}, {ends}",
             self.tools.replace(',', ", "),
             self.connection,
-            duration_words(self.expires_in_secs)
         )
     }
 }
@@ -87,13 +93,15 @@ const CAPABILITIES: [(&str, &str, &[&str]); 3] = [
     ),
 ];
 
-/// How long a grant lasts: what `--expires` takes, and how it reads.
-const EXPIRES: [(&str, &str); 5] = [
-    ("15m", "15 minutes"),
-    ("1h", "1 hour"),
-    ("2h", "2 hours"),
-    ("8h", "8 hours"),
-    ("24h", "24 hours"),
+/// How long a grant lasts: what `--expires` takes, what the choice says, and how it
+/// reads after "ends in".
+const EXPIRES: [(&str, &str, &str); 6] = [
+    ("15m", "15m", "15 minutes"),
+    ("1h", "1h", "1 hour"),
+    ("2h", "2h", "2 hours"),
+    ("8h", "8h", "8 hours"),
+    ("24h", "24h", "24 hours"),
+    ("never", "Until revoked", ""),
 ];
 
 /// The profiles a grant can be for, with the connections each may use and the objects
@@ -111,6 +119,27 @@ pub struct ProfileChoice {
 pub struct ConnectionChoice {
     pub name: String,
     pub environment: String,
+    /// Why MCP never writes to it -- production, or kept read-only -- which no grant
+    /// changes: it is left out of the choices.
+    pub refused: Option<String>,
+    /// A PostgreSQL connection: its tables are `database.schema.table`.
+    pub postgres: bool,
+}
+
+/// The tables of the grant's connection, as Dexo last read them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableList {
+    pub connection: String,
+    pub state: TableState,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TableState {
+    Reading,
+    /// Each table's selector, and whether it is checked.
+    Read(Vec<(String, bool)>),
+    /// Dexo has never read the connection's catalog.
+    NeverRead,
 }
 
 /// New grant's rows, in the order the focus walks them.
@@ -120,7 +149,10 @@ pub enum GrantRow {
     Connection,
     Capability,
     Tools,
-    Objects,
+    /// Everything the profile sees, or only some tables.
+    Tables,
+    /// The tables to check, when only some.
+    TablePick,
     Expires,
     Ask,
     AskSecs,
@@ -148,7 +180,11 @@ pub struct GrantForm {
     pub connection: usize,
     pub capability: usize,
     pub tools: Vec<bool>,
-    pub objects: TextInput,
+    /// The grant covers everything the profile sees; or only the tables checked.
+    pub everything: bool,
+    pub tables: Option<TableList>,
+    /// The table the grid's cursor is on.
+    pub table: usize,
     pub expires: usize,
     pub ask: bool,
     pub ask_secs: TextInput,
@@ -170,7 +206,9 @@ impl GrantForm {
             connection: 0,
             capability: 0,
             tools: Vec::new(),
-            objects: TextInput::default(),
+            everything: true,
+            tables: None,
+            table: 0,
             expires: 0,
             ask: false,
             ask_secs: TextInput::new("120"),
@@ -190,6 +228,96 @@ impl GrantForm {
         self.connection = 0;
     }
 
+    /// What the profile sees, as written: what "everything" covers.
+    pub fn sees(&self) -> Vec<String> {
+        self.profiles
+            .get(self.profile)
+            .map(|profile| profile.sees.clone())
+            .unwrap_or_default()
+    }
+
+    /// The tables of the connection chosen are to be read: only some are wanted, and
+    /// they were not read for it. Its name and whether it is PostgreSQL.
+    pub fn wants_tables(&self) -> Option<(String, bool)> {
+        if self.everything {
+            return None;
+        }
+        let choice = self.connection_choice()?;
+        let read = self
+            .tables
+            .as_ref()
+            .is_some_and(|tables| tables.connection == choice.name);
+        (!read).then_some((choice.name, choice.postgres))
+    }
+
+    /// The connection's tables as read: those inside what the profile sees, none
+    /// checked. `None`: Dexo never read them.
+    pub fn take_tables(&mut self, connection: &str, tables: Option<Vec<String>>) {
+        use dexo_app::mcp::{Decision, Effect, ObjectPolicy, ObjectRef, SelectorRule};
+        let sees: Vec<SelectorRule> = self
+            .sees()
+            .iter()
+            .filter_map(|selector| SelectorRule::parse(Effect::Allow, selector).ok())
+            .collect();
+        let Some(list) = self
+            .tables
+            .as_mut()
+            .filter(|list| list.connection == connection)
+        else {
+            return;
+        };
+        let policy = ObjectPolicy::new(sees);
+        list.state = match tables {
+            Some(tables) => TableState::Read(
+                tables
+                    .into_iter()
+                    .filter(|table| {
+                        let path = table.split('.').map(str::to_string).collect();
+                        policy.decide(&ObjectRef { path }) == Decision::Allow
+                    })
+                    .map(|table| (table, false))
+                    .collect(),
+            ),
+            None => TableState::NeverRead,
+        };
+        self.table = 0;
+    }
+
+    /// The tables to check, each named without its database, with whether it is.
+    pub fn table_items(&self) -> Vec<(String, bool)> {
+        match self.tables.as_ref().map(|tables| &tables.state) {
+            Some(TableState::Read(items)) => items
+                .iter()
+                .map(|(selector, on)| {
+                    let shown = selector
+                        .split_once('.')
+                        .map_or(selector.as_str(), |(_, rest)| rest);
+                    (shown.to_string(), *on)
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn checked_tables(&self) -> Vec<String> {
+        match self.tables.as_ref().map(|tables| &tables.state) {
+            Some(TableState::Read(items)) => items
+                .iter()
+                .filter(|(_, on)| *on)
+                .map(|(selector, _)| selector.clone())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The connections MCP never writes to, each with why, left out of the choices.
+    pub fn left_out(&self) -> Vec<(String, String)> {
+        self.listed()
+            .into_iter()
+            .filter_map(|choice| choice.refused.map(|why| (choice.name, why)))
+            .collect()
+    }
+
     /// A new capability starts with none of its tools: each is picked on purpose.
     fn set_capability(&mut self, index: usize) {
         self.capability = index;
@@ -205,7 +333,7 @@ impl GrantForm {
     }
 
     /// The connections the profile may use, or every saved one when it lists none.
-    pub fn connections(&self) -> Vec<ConnectionChoice> {
+    fn listed(&self) -> Vec<ConnectionChoice> {
         let listed = self
             .profiles
             .get(self.profile)
@@ -216,15 +344,24 @@ impl GrantForm {
         }
         listed
             .iter()
-            .map(|name| ConnectionChoice {
-                name: name.clone(),
-                environment: self
-                    .saved
+            .map(|name| {
+                self.saved
                     .iter()
                     .find(|saved| &saved.name == name)
-                    .map(|saved| saved.environment.clone())
-                    .unwrap_or_default(),
+                    .cloned()
+                    .unwrap_or_else(|| ConnectionChoice {
+                        name: name.clone(),
+                        ..ConnectionChoice::default()
+                    })
             })
+            .collect()
+    }
+
+    /// The connections a grant can be for: the profile's, less those MCP never writes to.
+    pub fn connections(&self) -> Vec<ConnectionChoice> {
+        self.listed()
+            .into_iter()
+            .filter(|choice| choice.refused.is_none())
             .collect()
     }
 
@@ -232,12 +369,15 @@ impl GrantForm {
         self.connections().get(self.connection).cloned()
     }
 
-    /// The rows walked, in order: the approval timeout only while the grant asks.
+    /// The rows walked, in order: the tables to check only for some, the approval
+    /// timeout only while the grant asks.
     pub fn rows(&self) -> Vec<GrantRow> {
         use GrantRow::*;
-        let mut rows = vec![
-            Profile, Connection, Capability, Tools, Objects, Expires, Ask,
-        ];
+        let mut rows = vec![Profile, Connection, Capability, Tools, Tables];
+        if !self.everything {
+            rows.push(TablePick);
+        }
+        rows.extend([Expires, Ask]);
         if self.ask {
             rows.push(AskSecs);
         }
@@ -281,18 +421,27 @@ impl GrantForm {
     }
 
     pub fn expires_options() -> Vec<&'static str> {
-        EXPIRES.iter().map(|(short, _)| *short).collect()
+        EXPIRES.iter().map(|(_, shown, _)| *shown).collect()
     }
 
-    /// What the objects field expects: what the profile sees, when it says.
-    pub fn objects_hint(&self) -> String {
-        match self.profiles.get(self.profile) {
-            Some(profile) if !profile.sees.is_empty() => {
-                format!("within {}", profile.sees.join(", "))
-            }
-            // A grant only narrows what the profile sees: with nothing, it is refused.
-            Some(profile) => format!("{} sees nothing yet: dexo mcp allow first", profile.name),
-            None => "db.schema.table · a lone * for any part".into(),
+    /// The two ways to say which tables: everything the profile sees, or some.
+    pub fn tables_options(&self) -> Vec<String> {
+        vec![
+            format!("Everything {} sees", self.profile_name()),
+            "Only some…".into(),
+        ]
+    }
+
+    /// The grant does not expire: it lasts until it is revoked.
+    pub fn until_revoked(&self) -> bool {
+        EXPIRES[self.expires].0 == "never"
+    }
+
+    /// When it ends, as the end of a sentence.
+    fn ends(&self) -> String {
+        match EXPIRES[self.expires] {
+            ("never", ..) => "lasts until it is revoked".into(),
+            (.., long) => format!("ends in {long}"),
         }
     }
 
@@ -311,20 +460,27 @@ impl GrantForm {
         let allows = if tools.is_empty() {
             None
         } else {
-            let objects = match self.objects.trim() {
-                "" => "…".to_string(),
-                objects => objects.to_string(),
+            let tables: Vec<String> = if self.everything {
+                self.sees()
+            } else {
+                self.table_items()
+                    .into_iter()
+                    .filter(|(_, on)| *on)
+                    .map(|(name, _)| name)
+                    .collect()
+            };
+            let tables = if tables.is_empty() {
+                "…".to_string()
+            } else {
+                tables.join(", ")
             };
             let connection = self
                 .connection_choice()
                 .map(|choice| choice.name)
                 .unwrap_or_else(|| "…".into());
-            Some(format!("{} on {objects} in {connection}", tools.join(", ")))
+            Some(format!("{} on {tables} in {connection}", tools.join(", ")))
         };
-        (
-            allows,
-            format!("{} · ends in {}", self.how(), EXPIRES[self.expires].1),
-        )
+        (allows, format!("{} · {}", self.how(), self.ends()))
     }
 
     fn step(&mut self, row: GrantRow, delta: isize) {
@@ -336,6 +492,7 @@ impl GrantForm {
                 self.connection = wrap(self.connection, self.connections().len());
             }
             GrantRow::Capability => self.set_capability(wrap(self.capability, CAPABILITIES.len())),
+            GrantRow::Tables => self.everything = !self.everything,
             GrantRow::Expires => self.expires = wrap(self.expires, EXPIRES.len()),
             _ => {}
         }
@@ -356,6 +513,18 @@ impl GrantForm {
                 self.open = None;
             }
             GrantRow::Capability => self.set_capability(option.min(CAPABILITIES.len() - 1)),
+            GrantRow::Tables => self.everything = option == 0,
+            GrantRow::TablePick => {
+                self.table = option;
+                if let Some(TableList {
+                    state: TableState::Read(items),
+                    ..
+                }) = self.tables.as_mut()
+                    && let Some((_, on)) = items.get_mut(option)
+                {
+                    *on = !*on;
+                }
+            }
             GrantRow::Expires => self.expires = option.min(EXPIRES.len() - 1),
             GrantRow::Tools => {
                 self.tool = option;
@@ -400,32 +569,39 @@ impl GrantForm {
             }
             return FormKey::Stay;
         }
-        // The tools are a grid of two columns: Up and Down move between its rows, and
-        // leave it past the first or the last.
-        let last_tool = self.tools.len().saturating_sub(1);
-        let tool = self.tool.min(last_tool);
-        let in_tools = self.focus == GrantRow::Tools;
+        // The tools and the tables are grids of two columns: Up and Down move between
+        // their rows, and leave them past the first or the last.
+        let grid = match self.focus {
+            GrantRow::Tools => Some((self.tool, self.tools.len())),
+            GrantRow::TablePick => Some((self.table, self.table_items().len())),
+            _ => None,
+        };
+        if let Some((cursor, len)) = grid {
+            let last = len.saturating_sub(1);
+            let cursor = cursor.min(last);
+            let moved = match key.code {
+                KeyCode::Down if cursor / 2 < last / 2 => Some((cursor + 2).min(last)),
+                KeyCode::Up if cursor / 2 > 0 => Some(cursor - 2),
+                KeyCode::Left => Some(cursor.saturating_sub(1)),
+                KeyCode::Right => Some((cursor + 1).min(last)),
+                _ => None,
+            };
+            if let Some(moved) = moved {
+                self.set_cursor(moved);
+                return FormKey::Stay;
+            }
+        }
         match key.code {
-            KeyCode::Down if in_tools && tool / 2 < last_tool / 2 => {
-                self.tool = (tool + 2).min(last_tool);
-                return FormKey::Stay;
-            }
-            KeyCode::Up if in_tools && tool / 2 > 0 => {
-                self.tool = tool - 2;
-                return FormKey::Stay;
-            }
             KeyCode::Tab | KeyCode::Down => {
                 self.focus = next;
-                // Into the grid from above: its first row, in the same column.
-                self.tool = tool % 2;
+                // Into a grid from above: its first row, in the same column.
+                self.enter_grid(false);
                 return FormKey::Stay;
             }
             KeyCode::BackTab | KeyCode::Up => {
                 self.focus = previous;
-                // Into the grid from below: its last row, in the same column.
-                if key.code == KeyCode::Up {
-                    self.tool = (last_tool / 2 * 2 + tool % 2).min(last_tool);
-                }
+                // Into a grid from below with Up: its last row, in the same column.
+                self.enter_grid(key.code == KeyCode::Up);
                 return FormKey::Stay;
             }
             KeyCode::Esc => return FormKey::Cancel,
@@ -458,6 +634,7 @@ impl GrantForm {
                         GrantRow::Profile
                         | GrantRow::Connection
                         | GrantRow::Capability
+                        | GrantRow::Tables
                         | GrantRow::Expires,
                         KeyCode::Left,
                     ) => self.step(row, -1),
@@ -465,22 +642,27 @@ impl GrantForm {
                         GrantRow::Profile
                         | GrantRow::Connection
                         | GrantRow::Capability
+                        | GrantRow::Tables
                         | GrantRow::Expires,
                         KeyCode::Right,
                     )
-                    | (GrantRow::Capability | GrantRow::Expires, KeyCode::Char(' ')) => {
+                    | (
+                        GrantRow::Capability | GrantRow::Tables | GrantRow::Expires,
+                        KeyCode::Char(' '),
+                    ) => {
                         self.step(row, 1);
                     }
-                    (GrantRow::Tools, KeyCode::Left) => self.tool = tool.saturating_sub(1),
-                    (GrantRow::Tools, KeyCode::Right) => self.tool = (tool + 1).min(last_tool),
                     (GrantRow::Tools, KeyCode::Char(' ') | KeyCode::Enter) => {
-                        self.pick(GrantRow::Tools, tool);
+                        self.pick(
+                            GrantRow::Tools,
+                            self.tool.min(self.tools.len().saturating_sub(1)),
+                        );
+                    }
+                    (GrantRow::TablePick, KeyCode::Char(' ') | KeyCode::Enter) => {
+                        self.pick(GrantRow::TablePick, self.table);
                     }
                     (GrantRow::Ask, KeyCode::Char(' ') | KeyCode::Enter) => self.ask = !self.ask,
                     (_, KeyCode::Enter) => self.focus = next,
-                    (GrantRow::Objects, _) => {
-                        self.objects.handle_key(key);
-                    }
                     (GrantRow::AskSecs, _) => {
                         self.ask_secs.handle_key(key);
                     }
@@ -494,10 +676,36 @@ impl GrantForm {
         FormKey::Stay
     }
 
+    /// Moves the focused grid's cursor.
+    fn set_cursor(&mut self, at: usize) {
+        match self.focus {
+            GrantRow::Tools => self.tool = at,
+            GrantRow::TablePick => self.table = at,
+            _ => {}
+        }
+    }
+
+    /// Where a grid's cursor lands as the focus comes into it: its first row, or its last
+    /// one coming from below, in the column it was in.
+    fn enter_grid(&mut self, from_below: bool) {
+        let (cursor, len) = match self.focus {
+            GrantRow::Tools => (self.tool, self.tools.len()),
+            GrantRow::TablePick => (self.table, self.table_items().len()),
+            _ => return,
+        };
+        let last = len.saturating_sub(1);
+        let column = cursor % 2;
+        let at = if from_below {
+            (last / 2 * 2 + column).min(last)
+        } else {
+            column.min(last)
+        };
+        self.set_cursor(at);
+    }
+
     /// The input the focus is on, for a paste.
     pub fn focused_input(&mut self) -> Option<&mut TextInput> {
         match self.focus {
-            GrantRow::Objects => Some(&mut self.objects),
             GrantRow::AskSecs => Some(&mut self.ask_secs),
             GrantRow::Confirm => Some(&mut self.confirm),
             _ => None,
@@ -516,12 +724,12 @@ impl GrantForm {
                 ("Tab", "next"),
                 ("Esc", "cancel"),
             ],
-            GrantRow::Capability | GrantRow::Expires => {
+            GrantRow::Capability | GrantRow::Tables | GrantRow::Expires => {
                 &[("←/→", "choose"), ("Tab", "next"), ("Esc", "cancel")]
             }
-            GrantRow::Tools => &[
+            GrantRow::Tools | GrantRow::TablePick => &[
                 ("↑/↓/←/→", "move"),
-                ("Space/Enter", "toggle"),
+                ("Space/Enter", "check"),
                 ("Tab", "next"),
                 ("Esc", "cancel"),
             ],
@@ -530,7 +738,7 @@ impl GrantForm {
                 ("Tab", "next"),
                 ("Esc", "cancel"),
             ],
-            GrantRow::Objects | GrantRow::AskSecs | GrantRow::Confirm => &[
+            GrantRow::AskSecs | GrantRow::Confirm => &[
                 ("Enter/Tab", "next"),
                 ("Shift+Tab", "back"),
                 ("Esc", "cancel"),
@@ -553,10 +761,12 @@ impl GrantForm {
             ("a time", GrantRow::Expires),
             ("lasts from", GrantRow::Expires),
             ("confirm", GrantRow::Confirm),
-            ("selector", GrantRow::Objects),
-            ("objects", GrantRow::Objects),
-            ("profile allows", GrantRow::Objects),
-            ("narrow the profile", GrantRow::Objects),
+            ("tables", GrantRow::Tables),
+            ("sees nothing", GrantRow::Tables),
+            ("selector", GrantRow::Tables),
+            ("objects", GrantRow::Tables),
+            ("profile allows", GrantRow::Tables),
+            ("narrow the profile", GrantRow::Tables),
             ("approval timeout", GrantRow::AskSecs),
             ("connection", GrantRow::Connection),
             ("profile", GrantRow::Profile),
@@ -580,7 +790,7 @@ impl GrantForm {
         }
         let Some(connection) = self.connection_choice() else {
             return Err(
-                "connection: there is none an agent can use: save a PostgreSQL or MySQL one first"
+                "connection: none this profile may use takes writes: MCP never writes to production or read-only connections"
                     .into(),
             );
         };
@@ -588,15 +798,22 @@ impl GrantForm {
         if tools.is_empty() {
             return Err("tools: pick at least one".into());
         }
-        let objects = self.objects.trim().to_string();
-        if objects.is_empty() {
-            return Err("objects: name them, as db.public.orders or db.public.*".into());
-        }
-        if let Err(error) =
-            dexo_app::mcp::SelectorRule::parse(dexo_app::mcp::Effect::Allow, &objects)
-        {
-            return Err(format!("objects: {error}"));
-        }
+        let selectors = if self.everything {
+            let sees = self.sees();
+            if sees.is_empty() {
+                let name = self.profile_name();
+                return Err(format!(
+                    "{name} sees nothing yet: let it see some tables with dexo mcp allow --profile {name} --selector db.public.*"
+                ));
+            }
+            sees
+        } else {
+            let checked = self.checked_tables();
+            if checked.is_empty() {
+                return Err("tables: check at least one".into());
+            }
+            checked
+        };
         let ask_secs = if self.ask {
             match self.ask_secs.trim().parse::<u32>() {
                 Ok(secs) if (1..=dexo_app::mcp::approval::MAX_TIMEOUT_SECS).contains(&secs) => {
@@ -612,14 +829,14 @@ impl GrantForm {
             None
         };
         let confirm = self.confirm.trim().to_string();
-        if confirm != connection.name && confirm != objects {
+        if confirm != connection.name {
             return Err(format!("confirm: type {} to confirm", connection.name));
         }
         Ok(dexo_app::mcp::GrantRequest {
             connection: connection.name,
             capability: self.capability_name().to_string(),
             tools,
-            selector: objects,
+            selectors,
             expires: EXPIRES[self.expires].0.to_string(),
             confirm_target: confirm,
             ask_secs,
@@ -870,6 +1087,7 @@ impl McpProfilesScreen {
                     connection: "local".into(),
                     selectors: "db.public.items".into(),
                     ask_secs: 0,
+                    until_revoked: false,
                 }],
                 ..McpProfileSummary::default()
             }],
@@ -1216,6 +1434,7 @@ mod tests {
                     connection: "pg-dev".into(),
                     selectors: "qa7.public.orders".into(),
                     ask_secs: if n == 0 { 120 } else { 0 },
+                    until_revoked: false,
                 })
                 .collect(),
             ..McpProfileSummary::default()
@@ -1299,7 +1518,7 @@ mod tests {
         let choices = vec![
             ProfileChoice {
                 name: "a".into(),
-                connections: vec!["pg-dev".into()],
+                connections: vec!["pg-dev".into(), "pg-prod".into()],
                 sees: vec!["db.public.*".into()],
             },
             ProfileChoice {
@@ -1312,10 +1531,14 @@ mod tests {
             ConnectionChoice {
                 name: "pg-dev".into(),
                 environment: "development".into(),
+                refused: None,
+                postgres: true,
             },
             ConnectionChoice {
                 name: "pg-prod".into(),
                 environment: "production".into(),
+                refused: Some("MCP never writes to production".into()),
+                postgres: true,
             },
         ];
         GrantForm::new(choices, saved, 1)
@@ -1327,14 +1550,20 @@ mod tests {
         let mut form = form();
         assert_eq!(form.focus, GrantRow::Profile);
         assert_eq!(form.profile_name(), "b");
-        // A profile that lists no connection may use any saved one.
-        assert_eq!(form.connections().len(), 2);
+        // A profile that lists no connection may use any saved one MCP writes to.
+        assert_eq!(form.connections().len(), 1);
         form.key(key(KeyCode::Left));
         assert_eq!(form.profile_name(), "a");
         let connections = form.connections();
-        assert_eq!(connections.len(), 1);
+        assert_eq!(connections.len(), 1, "production is left out");
         assert_eq!(connections[0].environment, "development");
-        assert_eq!(form.objects_hint(), "within db.public.*");
+        assert_eq!(
+            form.left_out(),
+            [(
+                "pg-prod".to_string(),
+                "MCP never writes to production".to_string()
+            )]
+        );
         // Enter opens the dropdown, and picks in it.
         form.key(key(KeyCode::Enter));
         assert_eq!(form.open, Some(0));
@@ -1343,20 +1572,84 @@ mod tests {
         assert_eq!((form.profile_name().as_str(), form.open), ("b", None));
     }
 
+    /// Everything the profile sees, with nothing to type; or only the tables checked,
+    /// read from the connection's catalog and kept inside what the profile sees.
+    #[test]
+    fn the_tables_are_everything_it_sees_or_the_ones_checked() {
+        use crossterm::event::KeyCode;
+        let mut form = form();
+        form.key(key(KeyCode::Left));
+        form.pick(GrantRow::Tools, 0);
+        form.confirm.set_text("pg-dev");
+        let request = form.request().unwrap();
+        assert_eq!(request.selectors, ["db.public.*"]);
+        assert_eq!(form.wants_tables(), None);
+        // Only some: the connection's tables are read once.
+        form.focus = GrantRow::Tables;
+        form.key(key(KeyCode::Right));
+        assert!(!form.everything && form.rows().contains(&GrantRow::TablePick));
+        assert_eq!(form.wants_tables(), Some(("pg-dev".to_string(), true)));
+        form.tables = Some(TableList {
+            connection: "pg-dev".into(),
+            state: TableState::Reading,
+        });
+        form.take_tables(
+            "pg-dev",
+            Some(vec![
+                "db.public.orders".into(),
+                "db.public.items".into(),
+                "db.audit.log".into(),
+            ]),
+        );
+        assert_eq!(form.wants_tables(), None);
+        let names: Vec<String> = form
+            .table_items()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            names,
+            ["public.orders", "public.items"],
+            "outside what it sees: gone"
+        );
+        assert_eq!(form.request().unwrap_err(), "tables: check at least one");
+        form.pick(GrantRow::TablePick, 1);
+        assert_eq!(form.request().unwrap().selectors, ["db.public.items"]);
+        // A profile that sees nothing says how to fix it.
+        form.pick(GrantRow::Profile, 1);
+        form.everything = true;
+        assert!(form.request().unwrap_err().contains("b sees nothing yet"));
+    }
+
+    #[test]
+    fn a_grant_can_last_until_it_is_revoked() {
+        use crossterm::event::KeyCode;
+        let mut form = form();
+        form.focus = GrantRow::Expires;
+        form.key(key(KeyCode::Left));
+        assert!(form.until_revoked());
+        assert!(
+            form.result().1.ends_with("until it is revoked"),
+            "{:?}",
+            form.result()
+        );
+        form.key(key(KeyCode::Left));
+        form.pick(GrantRow::Profile, 0);
+        form.pick(GrantRow::Tools, 0);
+        form.confirm.set_text("pg-dev");
+        form.expires = 5;
+        assert_eq!(form.request().unwrap().expires, "never");
+    }
+
     #[test]
     fn enter_creates_only_on_create() {
         use crossterm::event::KeyCode;
         let mut form = form();
+        form.pick(GrantRow::Profile, 0);
         // Each row: Enter opens, toggles or moves on, never submits.
         form.focus = GrantRow::Tools;
         assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Stay);
         assert!(form.tools[0], "Enter checks the tool");
-        form.focus = GrantRow::Objects;
-        for ch in "db.public.t".chars() {
-            form.key(key(KeyCode::Char(ch)));
-        }
-        assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Stay);
-        assert_eq!(form.focus, GrantRow::Expires);
         form.focus = GrantRow::Ask;
         assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Stay);
         assert!(form.ask, "Enter flips the toggle");
@@ -1373,8 +1666,8 @@ mod tests {
         let request = form.request().unwrap();
         assert_eq!(request.tools, ["data_insert"]);
         assert_eq!(
-            (request.selector.as_str(), request.expires.as_str()),
-            ("db.public.t", "15m")
+            (request.selectors.as_slice(), request.expires.as_str()),
+            (["db.public.*".to_string()].as_slice(), "15m")
         );
         assert_eq!(request.ask_secs, Some(120));
     }
@@ -1391,7 +1684,7 @@ mod tests {
         assert_eq!((form.focus, form.tool), (GrantRow::Tools, 3));
         // Past the last row, out of the grid; back in from below on its last row.
         form.key(key(KeyCode::Down));
-        assert_eq!(form.focus, GrantRow::Objects);
+        assert_eq!(form.focus, GrantRow::Tables);
         form.key(key(KeyCode::Up));
         assert_eq!((form.focus, form.tool), (GrantRow::Tools, 3));
         form.key(key(KeyCode::Up));
@@ -1410,7 +1703,7 @@ mod tests {
             "db.public.* is outside what the profile allows: a grant can only narrow the profile"
                 .into(),
         );
-        assert_eq!(form.focus, GrantRow::Objects);
+        assert_eq!(form.focus, GrantRow::Tables);
         assert_eq!(
             form.request().unwrap_err(),
             "tools: pick at least one",

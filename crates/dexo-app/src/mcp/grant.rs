@@ -18,6 +18,9 @@ pub const WRITE_TOOLS: &[&str] = &[
 
 pub const DEFAULT_TTL_SECS: i64 = 15 * 60;
 pub const MAX_TTL_SECS: i64 = 24 * 60 * 60;
+/// A grant that lasts until it is revoked: `--expires never`. Its `expires_at` is the
+/// furthest time there is, so every check that a grant has not expired holds.
+pub const UNTIL_REVOKED: i64 = i64::MAX;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum GrantCapability {
@@ -97,6 +100,11 @@ impl Grant {
         self.ask_secs > 0
     }
 
+    /// Made with `--expires never`: it ends only when it is revoked, or spent.
+    pub fn until_revoked(&self) -> bool {
+        self.expires_at == UNTIL_REVOKED
+    }
+
     pub fn new(
         profile: &McpProfile,
         connection: impl Into<String>,
@@ -131,12 +139,13 @@ impl Grant {
                 ));
             }
         }
-        if ttl_secs <= 0 || ttl_secs > MAX_TTL_SECS {
+        if ttl_secs <= 0 || (ttl_secs > MAX_TTL_SECS && ttl_secs != UNTIL_REVOKED) {
             return Err(AppError::new(
                 ErrorCategory::Configuration,
-                "a grant lasts from 1 second to 24 hours: write the time as 90s, 15m, 2h or 1h30m",
+                "a grant lasts from 1 second to 24 hours, or until revoked: write the time as 90s, 15m, 2h, 1h30m or never",
             ));
         }
+
         let policy = ObjectPolicy::new(profile.selectors.clone());
         for rule in &selectors {
             let sample = sample_object(&rule.selector);
@@ -191,16 +200,19 @@ impl Grant {
     }
 }
 
-/// How long a grant lasts, as `90s`, `15m`, `2h`, `1d` or joined, `1h30m`. A number with
-/// no unit is refused: `15` read as seconds gave a grant that ended before it was used
-/// to someone who meant minutes.
+/// How long a grant lasts, as `90s`, `15m`, `2h`, `1d` or joined, `1h30m`, or `never`:
+/// until it is revoked. A number with no unit is refused: `15` read as seconds gave a
+/// grant that ended before it was used to someone who meant minutes.
 pub fn parse_ttl(spec: &str) -> Result<i64, AppError> {
     let bad = || {
         AppError::new(
             ErrorCategory::Configuration,
-            format!("'{spec}' is not a time: write it as 90s, 15m, 2h or 1h30m"),
+            format!("'{spec}' is not a time: write it as 90s, 15m, 2h, 1h30m or never"),
         )
     };
+    if spec.trim().eq_ignore_ascii_case("never") {
+        return Ok(UNTIL_REVOKED);
+    }
     let mut total: i64 = 0;
     let mut digits = String::new();
     for ch in spec.trim().chars() {
@@ -232,10 +244,11 @@ pub struct GrantRequest {
     pub connection: String,
     pub capability: String,
     pub tools: Vec<String>,
-    pub selector: String,
-    /// How long the grant lasts, as `15m`, `2h` or seconds.
+    /// The objects the grant covers, each a selector inside what the profile sees.
+    pub selectors: Vec<String>,
+    /// How long the grant lasts, as `15m` or `2h`, or `never`: until it is revoked.
     pub expires: String,
-    /// The connection or the selector, typed again to confirm.
+    /// The connection or one of the selectors, typed again to confirm.
     pub confirm_target: String,
     /// Each write the grant covers waits up to this many seconds for a person to
     /// approve it; without it, the grant is spent by one write.
@@ -251,13 +264,11 @@ impl GrantRequest {
         saved: &crate::connection_profile::ConnectionProfile,
         now: i64,
     ) -> Result<Grant, AppError> {
-        if self.confirm_target != self.connection && self.confirm_target != self.selector {
+        if self.confirm_target != self.connection && !self.selectors.contains(&self.confirm_target)
+        {
             return Err(AppError::new(
                 ErrorCategory::Configuration,
-                format!(
-                    "confirm: type {} or {} exactly as written above",
-                    self.connection, self.selector
-                ),
+                format!("confirm: type {} exactly as written above", self.connection),
             ));
         }
         if self.connection.trim().is_empty() {
@@ -283,12 +294,23 @@ impl GrantRequest {
             ));
         }
         crate::mcp::McpConnection::from_profile(saved)?.accepts_writes()?;
+        if self.selectors.is_empty() {
+            return Err(AppError::new(
+                ErrorCategory::McpPolicy,
+                "name the objects the grant covers, as db.public.orders or db.public.*",
+            ));
+        }
+        let selectors = self
+            .selectors
+            .iter()
+            .map(|selector| SelectorRule::parse(Effect::Allow, selector))
+            .collect::<Result<Vec<_>, _>>()?;
         let grant = Grant::new(
             profile,
             self.connection.clone(),
             GrantCapability::parse(&self.capability)?,
             self.tools.clone(),
-            vec![SelectorRule::parse(Effect::Allow, &self.selector)?],
+            selectors,
             now,
             parse_ttl(&self.expires)?,
         )?;
@@ -336,6 +358,7 @@ mod tests {
         assert_eq!(parse_ttl("90s").unwrap(), 90);
         assert_eq!(parse_ttl("1d").unwrap(), MAX_TTL_SECS);
         assert_eq!(parse_ttl("1h30m").unwrap(), 5400);
+        assert_eq!(parse_ttl("never").unwrap(), super::UNTIL_REVOKED);
         for refused in ["15", "", "m", "1.5h", "15 min", "abc"] {
             assert!(parse_ttl(refused).is_err(), "{refused:?}");
         }
@@ -371,7 +394,7 @@ mod tests {
             connection: "local".into(),
             capability: "data_write".into(),
             tools: vec!["data_insert".into()],
-            selector: "db.public.items".into(),
+            selectors: vec!["db.public.items".into()],
             expires: "15m".into(),
             confirm_target: "local".into(),
             ask_secs: Some(90),
@@ -396,6 +419,27 @@ mod tests {
         let mut elsewhere = profile();
         elsewhere.connections = vec!["staging".into()];
         assert!(request.issue(&elsewhere, &saved, 0).is_err());
+        // Several tables in one grant; none is refused.
+        let tables = GrantRequest {
+            selectors: vec!["db.public.items".into(), "db.public.orders".into()],
+            ..request.clone()
+        }
+        .issue(&profile(), &saved, 0)
+        .unwrap();
+        assert_eq!(tables.selectors.len(), 2);
+        let nothing = GrantRequest {
+            selectors: Vec::new(),
+            ..request.clone()
+        };
+        assert!(nothing.issue(&profile(), &saved, 0).is_err());
+        // Until revoked: it does not expire.
+        let forever = GrantRequest {
+            expires: "never".into(),
+            ..request.clone()
+        }
+        .issue(&profile(), &saved, 0)
+        .unwrap();
+        assert!(forever.until_revoked() && forever.active(i64::MAX - 1));
     }
 
     /// An asking grant waits at least a second and at most an hour per write.
