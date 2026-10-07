@@ -147,7 +147,6 @@ pub enum TableState {
 pub enum GrantRow {
     Profile,
     Connection,
-    Capability,
     Tools,
     /// Everything the profile sees, or only some tables.
     Tables,
@@ -178,7 +177,6 @@ pub struct GrantForm {
     pub saved: Vec<ConnectionChoice>,
     pub profile: usize,
     pub connection: usize,
-    pub capability: usize,
     pub tools: Vec<bool>,
     /// The grant covers everything the profile sees; or only the tables checked.
     pub everything: bool,
@@ -204,7 +202,6 @@ impl GrantForm {
             saved,
             profile: 0,
             connection: 0,
-            capability: 0,
             tools: Vec::new(),
             everything: true,
             tables: None,
@@ -219,7 +216,7 @@ impl GrantForm {
             error: None,
         };
         form.set_profile(profile);
-        form.set_capability(0);
+        form.tools = vec![false; CAPABILITIES.iter().map(|(.., tools)| tools.len()).sum()];
         form
     }
 
@@ -318,13 +315,6 @@ impl GrantForm {
             .collect()
     }
 
-    /// A new capability starts with none of its tools: each is picked on purpose.
-    fn set_capability(&mut self, index: usize) {
-        self.capability = index;
-        self.tools = vec![false; CAPABILITIES[index].2.len()];
-        self.tool = 0;
-    }
-
     pub fn profile_name(&self) -> String {
         self.profiles
             .get(self.profile)
@@ -373,7 +363,7 @@ impl GrantForm {
     /// timeout only while the grant asks.
     pub fn rows(&self) -> Vec<GrantRow> {
         use GrantRow::*;
-        let mut rows = vec![Profile, Connection, Capability, Tools, Tables];
+        let mut rows = vec![Profile, Connection, Tools, Tables];
         if !self.everything {
             rows.push(TablePick);
         }
@@ -390,34 +380,63 @@ impl GrantForm {
         self.rows().iter().position(|at| *at == row).unwrap_or(0)
     }
 
-    pub fn capability_name(&self) -> &'static str {
-        CAPABILITIES[self.capability].0
-    }
-
-    pub fn capabilities() -> Vec<&'static str> {
-        CAPABILITIES.iter().map(|(name, ..)| *name).collect()
-    }
-
-    pub fn capability_about(&self) -> &'static str {
-        CAPABILITIES[self.capability].1
-    }
-
-    /// The capability's tools, each with whether it is picked.
-    pub fn tool_items(&self) -> Vec<(String, bool)> {
-        CAPABILITIES[self.capability]
-            .2
+    /// Every tool a grant can allow, grouped by what each group does, each with
+    /// whether it is checked. The boxes count across the groups.
+    pub fn tool_groups(&self) -> Vec<(String, Vec<(String, bool)>)> {
+        let mut checked = self.tools.iter();
+        CAPABILITIES
             .iter()
-            .zip(&self.tools)
-            .map(|(tool, on)| (tool.to_string(), *on))
+            .map(|(name, about, tools)| {
+                let items = tools
+                    .iter()
+                    .map(|tool| (tool.to_string(), *checked.next().unwrap_or(&false)))
+                    .collect();
+                (format!("{about} ({name})"), items)
+            })
             .collect()
     }
 
-    fn chosen_tools(&self) -> Vec<String> {
-        self.tool_items()
-            .into_iter()
-            .filter(|(_, on)| *on)
-            .map(|(tool, _)| tool)
+    /// The tools checked of each capability that has any: one grant each.
+    fn chosen(&self) -> Vec<(&'static str, Vec<String>)> {
+        let mut checked = self.tools.iter();
+        CAPABILITIES
+            .iter()
+            .filter_map(|(name, _, tools)| {
+                let picked: Vec<String> = tools
+                    .iter()
+                    .filter(|_| *checked.next().unwrap_or(&false))
+                    .map(|tool| tool.to_string())
+                    .collect();
+                (!picked.is_empty()).then_some((*name, picked))
+            })
             .collect()
+    }
+
+    /// How many grants Create makes: one for each kind of tool checked.
+    pub fn grants(&self) -> usize {
+        self.chosen().len()
+    }
+
+    /// The tools grid's rows, as drawn.
+    fn tool_rows() -> Vec<Vec<usize>> {
+        crate::widgets::panel::grid_rows(
+            &CAPABILITIES
+                .iter()
+                .map(|(.., tools)| tools.len())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// The grid the focus is on, and its rows.
+    fn grid(&self) -> Option<(usize, Vec<Vec<usize>>)> {
+        match self.focus {
+            GrantRow::Tools => Some((self.tool, Self::tool_rows())),
+            GrantRow::TablePick => Some((
+                self.table,
+                crate::widgets::panel::grid_rows(&[self.table_items().len()]),
+            )),
+            _ => None,
+        }
     }
 
     pub fn expires_options() -> Vec<&'static str> {
@@ -454,10 +473,10 @@ impl GrantForm {
         }
     }
 
-    /// What the grant will do, in a sentence, then how long it lasts.
+    /// What the grants will do, in a sentence, then how long they last.
     pub fn result(&self) -> (Option<String>, String) {
-        let tools = self.chosen_tools();
-        let allows = if tools.is_empty() {
+        let chosen = self.chosen();
+        let allows = if chosen.is_empty() {
             None
         } else {
             let tables: Vec<String> = if self.everything {
@@ -478,7 +497,17 @@ impl GrantForm {
                 .connection_choice()
                 .map(|choice| choice.name)
                 .unwrap_or_else(|| "…".into());
-            Some(format!("{} on {tables} in {connection}", tools.join(", ")))
+            // One grant for each kind of tool checked.
+            let tools = chosen
+                .iter()
+                .map(|(_, tools)| tools.join(", "))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            let grants = match chosen.len() {
+                1 => String::new(),
+                count => format!("{count} grants: "),
+            };
+            Some(format!("{grants}{tools} on {tables} in {connection}"))
         };
         (allows, format!("{} · {}", self.how(), self.ends()))
     }
@@ -491,7 +520,6 @@ impl GrantForm {
             GrantRow::Connection => {
                 self.connection = wrap(self.connection, self.connections().len());
             }
-            GrantRow::Capability => self.set_capability(wrap(self.capability, CAPABILITIES.len())),
             GrantRow::Tables => self.everything = !self.everything,
             GrantRow::Expires => self.expires = wrap(self.expires, EXPIRES.len()),
             _ => {}
@@ -512,7 +540,6 @@ impl GrantForm {
                 self.connection = option.min(self.connections().len().saturating_sub(1));
                 self.open = None;
             }
-            GrantRow::Capability => self.set_capability(option.min(CAPABILITIES.len() - 1)),
             GrantRow::Tables => self.everything = option == 0,
             GrantRow::TablePick => {
                 self.table = option;
@@ -570,18 +597,13 @@ impl GrantForm {
             return FormKey::Stay;
         }
         // The tools and the tables are grids of two columns: Up and Down move between
-        // their rows, and leave them past the first or the last.
-        let grid = match self.focus {
-            GrantRow::Tools => Some((self.tool, self.tools.len())),
-            GrantRow::TablePick => Some((self.table, self.table_items().len())),
-            _ => None,
-        };
-        if let Some((cursor, len)) = grid {
-            let last = len.saturating_sub(1);
+        // their rows, across the tools' groups, and leave past the first or the last.
+        if let Some((cursor, rows)) = self.grid() {
+            let last = rows.iter().flatten().count().saturating_sub(1);
             let cursor = cursor.min(last);
             let moved = match key.code {
-                KeyCode::Down if cursor / 2 < last / 2 => Some((cursor + 2).min(last)),
-                KeyCode::Up if cursor / 2 > 0 => Some(cursor - 2),
+                KeyCode::Down => crate::widgets::panel::grid_step(&rows, cursor, false),
+                KeyCode::Up => crate::widgets::panel::grid_step(&rows, cursor, true),
                 KeyCode::Left => Some(cursor.saturating_sub(1)),
                 KeyCode::Right => Some((cursor + 1).min(last)),
                 _ => None,
@@ -633,7 +655,6 @@ impl GrantForm {
                     (
                         GrantRow::Profile
                         | GrantRow::Connection
-                        | GrantRow::Capability
                         | GrantRow::Tables
                         | GrantRow::Expires,
                         KeyCode::Left,
@@ -641,15 +662,11 @@ impl GrantForm {
                     (
                         GrantRow::Profile
                         | GrantRow::Connection
-                        | GrantRow::Capability
                         | GrantRow::Tables
                         | GrantRow::Expires,
                         KeyCode::Right,
                     )
-                    | (
-                        GrantRow::Capability | GrantRow::Tables | GrantRow::Expires,
-                        KeyCode::Char(' '),
-                    ) => {
+                    | (GrantRow::Tables | GrantRow::Expires, KeyCode::Char(' ')) => {
                         self.step(row, 1);
                     }
                     (GrantRow::Tools, KeyCode::Char(' ') | KeyCode::Enter) => {
@@ -688,19 +705,10 @@ impl GrantForm {
     /// Where a grid's cursor lands as the focus comes into it: its first row, or its last
     /// one coming from below, in the column it was in.
     fn enter_grid(&mut self, from_below: bool) {
-        let (cursor, len) = match self.focus {
-            GrantRow::Tools => (self.tool, self.tools.len()),
-            GrantRow::TablePick => (self.table, self.table_items().len()),
-            _ => return,
-        };
-        let last = len.saturating_sub(1);
-        let column = cursor % 2;
-        let at = if from_below {
-            (last / 2 * 2 + column).min(last)
-        } else {
-            column.min(last)
-        };
-        self.set_cursor(at);
+        if let Some((cursor, rows)) = self.grid() {
+            let at = crate::widgets::panel::grid_enter(&rows, cursor, from_below);
+            self.set_cursor(at);
+        }
     }
 
     /// The input the focus is on, for a paste.
@@ -724,7 +732,7 @@ impl GrantForm {
                 ("Tab", "next"),
                 ("Esc", "cancel"),
             ],
-            GrantRow::Capability | GrantRow::Tables | GrantRow::Expires => {
+            GrantRow::Tables | GrantRow::Expires => {
                 &[("←/→", "choose"), ("Tab", "next"), ("Esc", "cancel")]
             }
             GrantRow::Tools | GrantRow::TablePick => &[
@@ -743,11 +751,7 @@ impl GrantForm {
                 ("Shift+Tab", "back"),
                 ("Esc", "cancel"),
             ],
-            GrantRow::Create => &[
-                ("Enter", "create the grant"),
-                ("←/→", "switch"),
-                ("Esc", "cancel"),
-            ],
+            GrantRow::Create => &[("Enter", "create"), ("←/→", "switch"), ("Esc", "cancel")],
             GrantRow::Cancel => &[("Enter", "cancel"), ("←/→", "switch")],
         }
     }
@@ -757,7 +761,7 @@ impl GrantForm {
         let lower = message.to_lowercase();
         let row = [
             ("tool", GrantRow::Tools),
-            ("capability", GrantRow::Capability),
+            ("capability", GrantRow::Tools),
             ("a time", GrantRow::Expires),
             ("lasts from", GrantRow::Expires),
             ("confirm", GrantRow::Confirm),
@@ -781,8 +785,9 @@ impl GrantForm {
         self.error = Some((row, message));
     }
 
-    /// The request the CLI would make with the same answers, or what stops it.
-    pub fn request(&self) -> Result<dexo_app::mcp::GrantRequest, String> {
+    /// The requests the CLI would make with the same answers, one for each kind of tool
+    /// checked, or what stops them.
+    pub fn requests(&self) -> Result<Vec<dexo_app::mcp::GrantRequest>, String> {
         if self.profiles.is_empty() {
             return Err(
                 "there is no profile to grant to: create one with dexo mcp profile create".into(),
@@ -794,8 +799,8 @@ impl GrantForm {
                     .into(),
             );
         };
-        let tools = self.chosen_tools();
-        if tools.is_empty() {
+        let chosen = self.chosen();
+        if chosen.is_empty() {
             return Err("tools: pick at least one".into());
         }
         let selectors = if self.everything {
@@ -832,15 +837,18 @@ impl GrantForm {
         if confirm != connection.name {
             return Err(format!("confirm: type {} to confirm", connection.name));
         }
-        Ok(dexo_app::mcp::GrantRequest {
-            connection: connection.name,
-            capability: self.capability_name().to_string(),
-            tools,
-            selectors,
-            expires: EXPIRES[self.expires].0.to_string(),
-            confirm_target: confirm,
-            ask_secs,
-        })
+        Ok(chosen
+            .into_iter()
+            .map(|(capability, tools)| dexo_app::mcp::GrantRequest {
+                connection: connection.name.clone(),
+                capability: capability.to_string(),
+                tools,
+                selectors: selectors.clone(),
+                expires: EXPIRES[self.expires].0.to_string(),
+                confirm_target: confirm.clone(),
+                ask_secs,
+            })
+            .collect())
     }
 }
 
@@ -1581,7 +1589,7 @@ mod tests {
         form.key(key(KeyCode::Left));
         form.pick(GrantRow::Tools, 0);
         form.confirm.set_text("pg-dev");
-        let request = form.request().unwrap();
+        let request = form.requests().unwrap().remove(0);
         assert_eq!(request.selectors, ["db.public.*"]);
         assert_eq!(form.wants_tables(), None);
         // Only some: the connection's tables are read once.
@@ -1612,13 +1620,13 @@ mod tests {
             ["public.orders", "public.items"],
             "outside what it sees: gone"
         );
-        assert_eq!(form.request().unwrap_err(), "tables: check at least one");
+        assert_eq!(form.requests().unwrap_err(), "tables: check at least one");
         form.pick(GrantRow::TablePick, 1);
-        assert_eq!(form.request().unwrap().selectors, ["db.public.items"]);
+        assert_eq!(form.requests().unwrap()[0].selectors, ["db.public.items"]);
         // A profile that sees nothing says how to fix it.
         form.pick(GrantRow::Profile, 1);
         form.everything = true;
-        assert!(form.request().unwrap_err().contains("b sees nothing yet"));
+        assert!(form.requests().unwrap_err().contains("b sees nothing yet"));
     }
 
     #[test]
@@ -1638,7 +1646,7 @@ mod tests {
         form.pick(GrantRow::Tools, 0);
         form.confirm.set_text("pg-dev");
         form.expires = 5;
-        assert_eq!(form.request().unwrap().expires, "never");
+        assert_eq!(form.requests().unwrap()[0].expires, "never");
     }
 
     #[test]
@@ -1663,7 +1671,7 @@ mod tests {
         assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Cancel);
         form.focus = GrantRow::Create;
         assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Submit);
-        let request = form.request().unwrap();
+        let request = form.requests().unwrap().remove(0);
         assert_eq!(request.tools, ["data_insert"]);
         assert_eq!(
             (request.selectors.as_slice(), request.expires.as_str()),
@@ -1672,24 +1680,66 @@ mod tests {
         assert_eq!(request.ask_secs, Some(120));
     }
 
+    /// Every tool in one grid, grouped by what it does: Up and Down walk its rows across
+    /// the groups, and leave it past the first or the last.
     #[test]
-    fn the_tools_are_a_grid_the_arrows_walk() {
+    fn the_tools_are_one_grid_the_arrows_walk() {
         use crossterm::event::KeyCode;
         let mut form = form();
-        form.focus = GrantRow::Capability;
+        form.focus = GrantRow::Connection;
         form.key(key(KeyCode::Down));
         assert_eq!((form.focus, form.tool), (GrantRow::Tools, 0));
+        // data_write is two rows; ddl one, of one tool; admin one, of two.
+        let mut walked = Vec::new();
         form.key(key(KeyCode::Right));
-        form.key(key(KeyCode::Down));
-        assert_eq!((form.focus, form.tool), (GrantRow::Tools, 3));
-        // Past the last row, out of the grid; back in from below on its last row.
+        for _ in 0..3 {
+            form.key(key(KeyCode::Down));
+            walked.push(form.tool);
+        }
+        assert_eq!(walked, [3, 4, 5]);
         form.key(key(KeyCode::Down));
         assert_eq!(form.focus, GrantRow::Tables);
         form.key(key(KeyCode::Up));
-        assert_eq!((form.focus, form.tool), (GrantRow::Tools, 3));
-        form.key(key(KeyCode::Up));
-        form.key(key(KeyCode::Up));
-        assert_eq!(form.focus, GrantRow::Capability);
+        assert_eq!((form.focus, form.tool), (GrantRow::Tools, 5));
+        for _ in 0..4 {
+            form.key(key(KeyCode::Up));
+        }
+        assert_eq!(form.focus, GrantRow::Connection);
+    }
+
+    /// Tools of two kinds checked make two grants, with the same tables and time.
+    #[test]
+    fn tools_of_two_kinds_make_two_grants() {
+        let mut form = form();
+        form.pick(GrantRow::Profile, 0);
+        form.pick(GrantRow::Tools, 0);
+        form.pick(GrantRow::Tools, 4);
+        form.confirm.set_text("pg-dev");
+        let requests = form.requests().unwrap();
+        let kinds: Vec<(&str, Vec<String>)> = requests
+            .iter()
+            .map(|request| (request.capability.as_str(), request.tools.clone()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("data_write", vec!["data_insert".to_string()]),
+                ("ddl", vec!["schema_apply_ddl".to_string()])
+            ]
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.selectors == ["db.public.*"])
+        );
+        let (allows, _) = form.result();
+        assert!(
+            allows.is_some_and(
+                |allows| allows.starts_with("2 grants: data_insert · schema_apply_ddl")
+            ),
+            "{:?}",
+            form.result()
+        );
     }
 
     /// A refusal puts the cursor on the row it is about, and a change takes it away.
@@ -1705,7 +1755,7 @@ mod tests {
         );
         assert_eq!(form.focus, GrantRow::Tables);
         assert_eq!(
-            form.request().unwrap_err(),
+            form.requests().unwrap_err(),
             "tools: pick at least one",
             "the tools are picked on purpose"
         );

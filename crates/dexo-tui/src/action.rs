@@ -1181,9 +1181,10 @@ pub enum Effect {
         profile: String,
     },
     RevokeAllMcpGrants,
-    CreateMcpGrant {
+    /// New grant's grants, one for each kind of tool checked: all made, or none.
+    CreateMcpGrants {
         profile: String,
-        request: dexo_app::mcp::GrantRequest,
+        requests: Vec<dexo_app::mcp::GrantRequest>,
     },
     WriteDiagnostics {
         path: std::path::PathBuf,

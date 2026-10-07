@@ -938,7 +938,7 @@ fn checklist_form(
         model,
         0,
         "Connections",
-        &checklist.items,
+        &[(String::new(), checklist.items.clone())],
         on_grid.then_some(checklist.row),
     );
     lines.error(model, checklist.error.as_deref());
@@ -1059,34 +1059,18 @@ fn grant_form(
         lines.aside(format!("{name} is not offered: {why}"), style(Role::Muted));
     }
 
+    // Every tool, grouped by what it does: a grant is made for each group checked.
     lines.section(model, "WHAT");
-    lines.segmented(
-        model,
-        at(GrantRow::Capability),
-        "Capability",
-        &GrantForm::capabilities(),
-        form.capability,
-        focused(GrantRow::Capability),
-        form.capability_about(),
-    );
     lines.grid(
         model,
         at(GrantRow::Tools),
         "Tools",
-        &form.tool_items(),
+        &form.tool_groups(),
         focused(GrantRow::Tools).then_some(form.tool),
     );
     // Everything the profile sees, or the tables checked from what Dexo last read.
-    let sees = form.sees();
     let options = form.tables_options();
     let options: Vec<&str> = options.iter().map(String::as_str).collect();
-    let after = if !form.everything {
-        String::new()
-    } else if sees.is_empty() {
-        "nothing yet: dexo mcp allow".to_string()
-    } else {
-        sees.join(", ")
-    };
     lines.segmented(
         model,
         at(GrantRow::Tables),
@@ -1094,8 +1078,16 @@ fn grant_form(
         &options,
         usize::from(!form.everything),
         focused(GrantRow::Tables),
-        &after,
+        "",
     );
+    if form.everything {
+        let sees = form.sees();
+        if sees.is_empty() {
+            lines.aside("it sees nothing yet: dexo mcp allow", style(Role::Warning));
+        } else {
+            lines.aside(sees.join(", "), style(Role::Muted));
+        }
+    }
     if !form.everything {
         use crate::screens::mcp_profiles::TableState;
         let connection = form
@@ -1107,7 +1099,7 @@ fn grant_form(
                 model,
                 at(GrantRow::TablePick),
                 "",
-                &form.table_items(),
+                &[(String::new(), form.table_items())],
                 focused(GrantRow::TablePick).then_some(form.table),
             ),
             Some(TableState::Read(_)) => lines.aside(
@@ -1194,6 +1186,10 @@ fn grant_form(
     if matches!(form.focus, GrantRow::Cancel | GrantRow::Create) {
         lines.focus_end();
     }
+    let create = match form.grants() {
+        0 | 1 => "Create grant".to_string(),
+        count => format!("Create {count} grants"),
+    };
     panel::draw(
         frame,
         area,
@@ -1210,7 +1206,7 @@ fn grant_form(
                 target: HitTarget::FooterCancel,
             },
             Button {
-                label: "Create grant",
+                label: &create,
                 focused: focused(GrantRow::Create),
                 tone: Role::Focus,
                 primary: true,

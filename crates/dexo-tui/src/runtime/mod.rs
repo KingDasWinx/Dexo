@@ -966,10 +966,10 @@ impl WorkbenchRuntime {
             crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
             crate::Effect::DeleteMcpProfile { name } => self.delete_mcp_profile(name).await,
             crate::Effect::RevokeAllMcpGrants => self.revoke_all_mcp().await,
-            crate::Effect::CreateMcpGrant { profile, request } => {
+            crate::Effect::CreateMcpGrants { profile, requests } => {
                 let action_tx = self.action_tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    let action = match create_mcp_grant(&profile, &request) {
+                    let action = match create_mcp_grants(&profile, &requests) {
                         Ok(message) => Action::McpGrantCreated { message },
                         Err(message) => Action::McpGrantFailed { message },
                     };
@@ -3168,9 +3168,12 @@ fn set_up_mcp_client(
     Ok(lines)
 }
 
-fn create_mcp_grant(
+/// New grant: the grants `dexo mcp grant create` would make with the same answers, one
+/// for each kind of tool checked. Every one is issued before any is saved: all of them
+/// are made, or none.
+fn create_mcp_grants(
     profile: &str,
-    request: &dexo_app::mcp::GrantRequest,
+    requests: &[dexo_app::mcp::GrantRequest],
 ) -> Result<String, String> {
     use dexo_app::mcp::GrantLedger;
     let paths = AppPaths::discover().map_err(|error| error.to_string())?;
@@ -3179,40 +3182,59 @@ fn create_mcp_grant(
         .get_by_name(profile)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("unknown MCP profile '{profile}'"))?;
-    let saved = ConnectionRepository::new(db.connection())
-        .get_by_name(&request.connection)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("unknown connection '{}'", request.connection))?;
-    let grant = request
-        .issue(&loaded, &saved, unix_seconds())
-        .map_err(|error| error.to_string())?;
-    let lasts = if grant.until_revoked() {
-        "lasts until it is revoked".to_string()
-    } else {
-        format!(
-            "ends in {}",
-            crate::screens::mcp_profiles::duration_words(grant.expires_at - unix_seconds())
-        )
+    let now = unix_seconds();
+    let mut grants = Vec::new();
+    for request in requests {
+        let saved = ConnectionRepository::new(db.connection())
+            .get_by_name(&request.connection)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("unknown connection '{}'", request.connection))?;
+        grants.push(
+            request
+                .issue(&loaded, &saved, now)
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    let Some(first) = grants.first() else {
+        return Err("tools: pick at least one".into());
     };
-    let objects = request.selectors.join(", ");
-    let message = if grant.asks() {
+    let one = grants.len() == 1;
+    let lasts = match (first.until_revoked(), one) {
+        (true, true) => "lasts until it is revoked".to_string(),
+        (true, false) => "last until they are revoked".to_string(),
+        (false, one) => format!(
+            "{} in {}",
+            if one { "ends" } else { "end" },
+            crate::screens::mcp_profiles::duration_words(first.expires_at - now)
+        ),
+    };
+    let tools = grants
+        .iter()
+        .map(|grant| grant.tools.join(", "))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let objects = requests[0].selectors.join(", ");
+    let connection = &requests[0].connection;
+    let what = if one {
+        "the grant".to_string()
+    } else {
+        format!("the {} grants", grants.len())
+    };
+    let message = if first.asks() {
         format!(
-            "Granted {} on {objects} ({}): each write waits up to {} for you under Agents, Approvals; the grant {lasts}.",
-            grant.tools.join(", "),
-            request.connection,
-            crate::screens::mcp_profiles::duration_words(i64::from(grant.ask_secs)),
+            "Granted {tools} on {objects} ({connection}): each write waits up to {} for you under Agents, Approvals; {what} {lasts}.",
+            crate::screens::mcp_profiles::duration_words(i64::from(first.ask_secs)),
         )
     } else {
-        format!(
-            "Granted {} on {objects} ({}) for one write; the grant {lasts}.",
-            grant.tools.join(", "),
-            request.connection,
-        )
+        format!("Granted {tools} on {objects} ({connection}), one write each; {what} {lasts}.")
     };
-    dexo_storage::SqliteGrantLedger::open(&paths.database)
-        .map_err(|error| error.to_string())?
-        .insert_grant(grant)
+    let ledger = dexo_storage::SqliteGrantLedger::open(&paths.database)
         .map_err(|error| error.to_string())?;
+    for grant in grants {
+        ledger
+            .insert_grant(grant)
+            .map_err(|error| error.to_string())?;
+    }
     Ok(message)
 }
 

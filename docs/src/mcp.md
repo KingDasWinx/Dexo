@@ -80,7 +80,7 @@ dexo mcp grant create --profile assistant --connection local --capability data_w
 
 `--selector` repeats for several tables. `--expires never` makes a grant that lasts until it is revoked.
 
-The TUI makes the same grants: on the Agents screen's Profiles view, `g` (or **New MCP Grant…** in the palette) opens a form for the selected profile. Its tables are everything the profile sees, or only the ones checked from what Dexo last read of the connection's catalog. "Ask before each write" is there too, and the connection's name is typed again to confirm. Connections MCP never writes to are not offered; the form says which and why.
+The TUI makes the same grants: on the Agents screen's Profiles view, `g` (or **New MCP Grant…** in the palette) opens a form for the selected profile. It lists every tool, grouped by capability; checking tools of two capabilities makes two grants, both issued before either is saved. Its tables are everything the profile sees, or only the ones checked from what Dexo last read of the connection's catalog. "Ask before each write" is there too, and the connection's name is typed again to confirm. Connections MCP never writes to are not offered; the form says which and why.
 
 - Capabilities are `data_write`, `ddl` and `admin`; each allows only its own tools.
 - A grant is used once and expires after `--expires`: 15 minutes by default, 24 hours at most, or `never`, until it is revoked. A grant that asks before each write is not spent by one, so with `never` it lasts until it is revoked. `dexo mcp grant list`, `revoke --id` and `revoke-all` manage them; revoking hides the tools at once.

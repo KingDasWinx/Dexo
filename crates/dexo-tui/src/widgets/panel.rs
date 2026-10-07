@@ -136,9 +136,12 @@ impl Lines {
         self.push(Line::styled(format!(" {title}"), bold(model, Role::Border)));
     }
 
-    /// A line of plain text under the label column.
+    /// Plain text under the label column, wrapped to the form.
     pub fn note(&mut self, text: impl Into<String>, style: Style) {
-        self.push(Line::styled(format!("   {}", text.into()), style));
+        let room = (VALUE + self.width).saturating_sub(3).max(8);
+        for part in crate::model::wrap_words(&text.into(), room) {
+            self.push(Line::styled(format!("   {part}"), style));
+        }
     }
 
     /// Plain text in the value column, under the row it is about, wrapped to it.
@@ -280,66 +283,80 @@ impl Lines {
         }
     }
 
-    /// Several values from a small set, two to a row; `cursor` is the cell the focus is
-    /// on.
+    /// Several values from small sets, two to a row, each set under its title (none
+    /// for ""); `cursor` is the box the focus is on, counted across the sets.
     pub fn grid(
         &mut self,
         model: &Model,
         field: usize,
         label: &str,
-        items: &[(String, bool)],
+        groups: &[(String, Vec<(String, bool)>)],
         cursor: Option<usize>,
     ) {
         // Wide enough for a tool's or a connection's name, not half the form.
         let cell = (self.width / 2).clamp(8, 30);
-        let first = self.lines.len();
-        if let Some(at) = cursor {
-            self.focus_line = first + at / 2;
-        }
-        for (row, pair) in items.chunks(2).enumerate() {
-            let mut spans = if row == 0 {
-                let mut spans = Self::label(model, cursor.is_some(), label);
+        let focused = cursor.is_some();
+        let lead = |model: &Model, first: bool| {
+            if first {
+                let mut spans = Self::label(model, focused, label);
                 spans.push(Span::raw(" "));
                 spans
             } else {
                 vec![Span::raw(" ".repeat(VALUE + 1))]
-            };
-            let line = first + row;
-            for (column, (name, checked)) in pair.iter().enumerate() {
-                let index = row * 2 + column;
-                let picked = cursor == Some(index);
-                let style = if picked {
-                    on(model, Role::OnSelection, Role::Selection)
-                } else {
-                    fg(model, Role::Foreground)
-                };
-                let room = cell.saturating_sub(5);
-                let name = crate::model::truncate_cell(name, room);
-                spans.push(Span::styled("[", style));
-                spans.push(Span::styled(
-                    if *checked { "x" } else { " " },
-                    if picked {
-                        style
-                    } else {
-                        bold(model, Role::Focus)
-                    },
-                ));
-                spans.push(Span::styled(format!("] {name:<room$}"), style));
-                spans.push(Span::raw(" "));
-                self.target(
-                    line,
-                    VALUE + 1 + column * cell,
-                    cell,
-                    HitTarget::FormOption {
-                        field,
-                        option: index,
-                    },
-                );
             }
-            self.push(Line::from(spans));
+        };
+        let mut first = true;
+        let mut index = 0;
+        for (title, items) in groups {
+            if !title.is_empty() {
+                let mut spans = lead(model, first);
+                spans.push(Span::styled(title.clone(), fg(model, Role::Muted)));
+                self.push(Line::from(spans));
+                first = false;
+            }
+            for pair in items.chunks(2) {
+                let line = self.lines.len();
+                let mut spans = lead(model, first);
+                first = false;
+                for (column, (name, checked)) in pair.iter().enumerate() {
+                    let picked = cursor == Some(index);
+                    if picked {
+                        self.focus_line = line;
+                    }
+                    let style = if picked {
+                        on(model, Role::OnSelection, Role::Selection)
+                    } else {
+                        fg(model, Role::Foreground)
+                    };
+                    let room = cell.saturating_sub(5);
+                    let name = crate::model::truncate_cell(name, room);
+                    spans.push(Span::styled("[", style));
+                    spans.push(Span::styled(
+                        if *checked { "x" } else { " " },
+                        if picked {
+                            style
+                        } else {
+                            bold(model, Role::Focus)
+                        },
+                    ));
+                    spans.push(Span::styled(format!("] {name:<room$}"), style));
+                    spans.push(Span::raw(" "));
+                    self.target(
+                        line,
+                        VALUE + 1 + column * cell,
+                        cell,
+                        HitTarget::FormOption {
+                            field,
+                            option: index,
+                        },
+                    );
+                    index += 1;
+                }
+                self.push(Line::from(spans));
+            }
         }
-        if items.is_empty() {
-            let mut spans = Self::label(model, cursor.is_some(), label);
+        if index == 0 {
+            let mut spans = Self::label(model, focused, label);
             spans.push(Span::styled(" none", fg(model, Role::Muted)));
             self.push(Line::from(spans));
         }
@@ -473,6 +490,48 @@ impl Lines {
             ));
         }
     }
+}
+
+/// A grid's rows as drawn: sets of `sizes` boxes, two to a row, each set starting a row;
+/// each row the indexes of its boxes, counted across the sets.
+pub fn grid_rows(sizes: &[usize]) -> Vec<Vec<usize>> {
+    let mut rows = Vec::new();
+    let mut start = 0;
+    for size in sizes {
+        for row in (start..start + size).collect::<Vec<_>>().chunks(2) {
+            rows.push(row.to_vec());
+        }
+        start += size;
+    }
+    rows
+}
+
+/// The box a grid's cursor goes to from `at` with Up (`up`) or Down: the row above or
+/// below, in the same column or the last there is; `None` past the first or last row,
+/// where the focus leaves the grid.
+pub fn grid_step(rows: &[Vec<usize>], at: usize, up: bool) -> Option<usize> {
+    let (row, column) = rows
+        .iter()
+        .enumerate()
+        .find_map(|(row, boxes)| boxes.iter().position(|b| *b == at).map(|c| (row, c)))?;
+    let target = if up { row.checked_sub(1)? } else { row + 1 };
+    let boxes = rows.get(target)?;
+    Some(boxes[column.min(boxes.len() - 1)])
+}
+
+/// Where a grid's cursor lands as the focus comes in: its first row, or its last coming
+/// from below, in the column it was in.
+pub fn grid_enter(rows: &[Vec<usize>], at: usize, from_below: bool) -> usize {
+    let column = rows
+        .iter()
+        .find_map(|boxes| boxes.iter().position(|b| *b == at))
+        .unwrap_or(0);
+    let boxes = if from_below {
+        rows.last()
+    } else {
+        rows.first()
+    };
+    boxes.map_or(0, |boxes| boxes[column.min(boxes.len() - 1)])
 }
 
 /// A button: `[   Label ]`, or `[ > Label ]` focused, the marker's room kept either way.

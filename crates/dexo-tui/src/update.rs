@@ -4278,12 +4278,12 @@ fn submit_grant_form(model: &mut Model) -> Vec<Effect> {
     let Some(form) = model.mcp_profiles.grant_form.as_mut() else {
         return Vec::new();
     };
-    match form.request() {
-        Ok(request) => {
+    match form.requests() {
+        Ok(requests) => {
             form.error = None;
-            vec![Effect::CreateMcpGrant {
+            vec![Effect::CreateMcpGrants {
                 profile: form.profile_name(),
-                request,
+                requests,
             }]
         }
         Err(error) => {
@@ -16044,8 +16044,7 @@ mod tests {
                 update(model, key(KeyCode::Char(ch)));
             }
         };
-        // Profile, connection and capability are already what this grant is.
-        tab(&mut model);
+        // Profile and connection are already what this grant is.
         tab(&mut model);
         tab(&mut model);
         // The first tool; the tables are everything the profile sees.
@@ -16080,8 +16079,8 @@ mod tests {
         assert!(
             matches!(
                 effects.as_slice(),
-                [Effect::CreateMcpGrant { profile, request }]
-                    if profile == "assistant" && *request == expected
+                [Effect::CreateMcpGrants { profile, requests }]
+                    if profile == "assistant" && *requests == [expected.clone()]
             ),
             "{effects:?}"
         );
