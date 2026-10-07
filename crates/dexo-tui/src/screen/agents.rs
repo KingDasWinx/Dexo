@@ -756,16 +756,12 @@ pub fn profile_buttons(model: &Model) -> Vec<Button> {
 
 fn profiles(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     let screen = &model.mcp_profiles;
-    // A form has the whole view until it is done.
-    if let Some(form) = &screen.grant_form {
-        grant_form(frame, area, model, form, hits);
-        return;
-    }
-    if let Some(checklist) = &screen.checklist {
-        checklist_form(frame, area, model, checklist, hits);
-        return;
-    }
     if screen.profiles.is_empty() {
+        // No list to sit beside: the form has the view.
+        if let Some(form) = &screen.grant_form {
+            grant_form(frame, area, model, form, hits);
+            return;
+        }
         let mut lines: Vec<String> = McpProfilesScreen::EMPTY
             .iter()
             .map(|line| line.trim().to_string())
@@ -779,6 +775,15 @@ fn profiles(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
     let (list, detail) = super::list_and_detail(model, hits, area, screen.profiles.len());
     profiles_list(frame, list, model, hits);
+    // A form takes the pane the profile's details were in, until it is done.
+    if let Some(form) = &screen.grant_form {
+        grant_form(frame, detail, model, form, hits);
+        return;
+    }
+    if let Some(checklist) = &screen.checklist {
+        checklist_form(frame, detail, model, checklist, hits);
+        return;
+    }
     let width = detail.width.saturating_sub(2);
     let mut footer = Vec::new();
     if let Some(confirm) = &screen.confirm {
@@ -926,7 +931,6 @@ fn checklist_form(
 ) {
     use crate::screens::mcp_profiles::ChecklistFocus;
     use crate::widgets::panel::{self, Button, Lines};
-    let area = panel::area(area);
     let mut lines = Lines::new(panel::value_width(area));
     let on_grid = checklist.focus == ChecklistFocus::Grid;
     lines.section(model, "MAY USE");
@@ -951,12 +955,15 @@ fn checklist_form(
             panel::fg(model, Role::Foreground),
         );
     }
+    if !on_grid {
+        lines.focus_end();
+    }
     panel::draw(
         frame,
         area,
         model,
         hits,
-        &format!("CONNECTIONS · {}", checklist.profile),
+        &format!("Connections of {}", checklist.profile),
         lines,
         &[
             Button {
@@ -978,7 +985,8 @@ fn checklist_form(
     );
 }
 
-/// New grant, over the whole view: the form every form follows (`docs/design.md`).
+/// New grant, in the pane the profile's details were in: the form every form follows
+/// (`docs/design.md`).
 fn grant_form(
     frame: &mut Frame,
     area: Rect,
@@ -988,7 +996,6 @@ fn grant_form(
 ) {
     use crate::screens::mcp_profiles::{GrantForm, GrantRow};
     use crate::widgets::panel::{self, Button, Lines};
-    let area = panel::area(area);
     let mut lines = Lines::new(panel::value_width(area));
     let focused = |row: GrantRow| form.focus == row;
     let invalid = |row: GrantRow| form.error.as_ref().is_some_and(|(at, _)| *at == row);
@@ -1184,12 +1191,15 @@ fn grant_form(
         );
     }
 
+    if matches!(form.focus, GrantRow::Cancel | GrantRow::Create) {
+        lines.focus_end();
+    }
     panel::draw(
         frame,
         area,
         model,
         hits,
-        "NEW GRANT",
+        "New grant",
         lines,
         &[
             Button {

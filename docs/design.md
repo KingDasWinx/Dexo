@@ -13,7 +13,7 @@ cargo run -p dexo-tui --example grant_styles    # F4 is this pattern
 ## The whole form
 
 ```
-╭ NEW GRANT ────────────────────────────────────────────────────────────────╮
+┌▸ New grant────────────────────────────────────────────────────────────────┐
 │                                                                            │
 │ WHO                                                                        │
 │                   ┌──────────────────────────────────────────┐             │
@@ -48,13 +48,13 @@ cargo run -p dexo-tui --example grant_styles    # F4 is this pattern
 │                                                                            │
 │                       [   Cancel ]  [   Create grant ]                     │
 │ Enter open   ←/→ change   Tab next   Esc cancel                            │
-╰────────────────────────────────────────────────────────────────────────────╯
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Layout
 
-- **Frame.** A rounded border in `Focus`, with the title in uppercase, bold `Focus`: ` NEW GRANT `. Centred, at most 96 columns wide.
-- **Height.** The frame is as tall as what it holds, so the buttons follow the last field rather than the foot of the screen. On a short terminal the fields scroll to keep the focused row, and all of its box, in view. The buttons and the hint row never scroll.
+- **Where.** A form takes the pane it is about -- New grant takes the profile's details, next to the list of profiles -- and is drawn in that pane's own frame, focused: `┌▸ New grant`. It is never a window over the screen.
+- **Height.** The frame fills the pane; the buttons follow the last field, not the pane's foot. On a short pane the fields scroll to keep the focused row, and all of its box, in view; with the focus on the buttons, the end of the form is what shows. The buttons and the hint row never scroll.
 - **Sections.** The fields are grouped by the question they answer: WHO, WHAT, HOW LONG, CONFIRM, then RESULT. Section titles are uppercase, bold, in `Border`, one column in from the frame.
 - **Label column.** Every row starts with ` › ` (the `›` only on the focused row, in bold `Focus`), then the label padded to 16 columns. The focused label is bold `Focus`; the others are `Muted`. Values start at column 19.
 - **One field per row.** No two fields side by side: the eye goes down one column.
@@ -533,22 +533,20 @@ fn key(&mut self, key: KeyEvent, grant: &mut Grant) -> Outcome {
 }
 ```
 
-### Drawing: fit the height, scroll to the focus
+### Drawing: in the pane, the buttons after the last row, scroll to the focus
 
 ```rust
 // Build every line first, noting the focused row's line and the cursor.
-let area = Rect { height: (lines.len() as u16 + 5).min(area.height), ..area };
-let block = Block::bordered()
-    .border_type(BorderType::Rounded)
-    .border_style(ui.fg(Role::Focus))
-    .title(Span::styled(" NEW GRANT ", ui.bold(Role::Focus)));
+let block = crate::render::pane_block(model, "New grant", true); // the pane's own frame
 let inner = block.inner(area);
 frame.render_widget(block, area);
-let [body, _, buttons, hints_row] = Layout::vertical([
+let rows = (lines.len() as u16).min(inner.height.saturating_sub(3));
+let [body, _, buttons, hints_row, _] = Layout::vertical([
+    Constraint::Length(rows),
+    Constraint::Length(1),
+    Constraint::Length(1),
+    Constraint::Length(1),
     Constraint::Min(0),
-    Constraint::Length(1),
-    Constraint::Length(1),
-    Constraint::Length(1),
 ])
 .areas(inner);
 // Keep the focused row, and the box under it, in view.

@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::model::Model;
 use crate::mouse::{HitMap, HitTarget};
@@ -20,8 +20,6 @@ pub const LABEL: usize = 16;
 pub const VALUE: usize = 3 + LABEL;
 /// A dropdown, and the box a confirmation is typed in, are at most this wide.
 pub const NARROW: usize = 44;
-/// The widest a form is.
-const WIDEST: u16 = 96;
 
 pub fn fg(model: &Model, role: Role) -> Style {
     model.theme.style(role, model.capabilities)
@@ -47,16 +45,6 @@ pub fn border(focused: bool, invalid: bool) -> Role {
         Role::Focus
     } else {
         Role::Border
-    }
-}
-
-/// Where a form goes in `area`: centred, at most [`WIDEST`] columns.
-pub fn area(area: Rect) -> Rect {
-    let width = area.width.min(WIDEST);
-    Rect {
-        x: area.x + (area.width - width) / 2,
-        width,
-        ..area
     }
 }
 
@@ -134,6 +122,11 @@ impl Lines {
         ]
     }
 
+    /// The focus is on the buttons: what is kept in view is the end, next to them.
+    pub fn focus_end(&mut self) {
+        self.focus_line = self.lines.len().saturating_sub(1);
+    }
+
     pub fn blank(&mut self) {
         self.push(Line::raw(""));
     }
@@ -148,12 +141,14 @@ impl Lines {
         self.push(Line::styled(format!("   {}", text.into()), style));
     }
 
-    /// A line of plain text in the value column, under the row it is about.
+    /// Plain text in the value column, under the row it is about, wrapped to it.
     pub fn aside(&mut self, text: impl Into<String>, style: Style) {
-        self.push(Line::styled(
-            format!("{}{}", " ".repeat(VALUE + 1), text.into()),
-            style,
-        ));
+        for part in crate::model::wrap_words(&text.into(), self.width.max(8)) {
+            self.push(Line::styled(
+                format!("{}{part}", " ".repeat(VALUE + 1)),
+                style,
+            ));
+        }
     }
 
     /// A choice among a few short options, side by side, the chosen one filled; what it
@@ -517,8 +512,8 @@ pub fn hints(model: &Model, pairs: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The form in `area` ([`area`] of the screen's body): framed, as tall as its rows, the
-/// focused row kept in view, then a blank line, the buttons and the keys.
+/// The form in `area`, a screen's pane: framed, the focused row kept in view, then a
+/// blank line, the buttons and the keys.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
@@ -538,22 +533,18 @@ pub fn draw(
         input,
         dropdown,
     } = lines;
-    let area = Rect {
-        height: (lines.len() as u16 + 5).min(area.height),
-        ..area
-    };
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(fg(model, Role::Focus))
-        .title(Span::styled(format!(" {title} "), bold(model, Role::Focus)))
-        .style(model.theme.base(model.capabilities));
+    // The pane's own frame, focused: the form is where the keys go.
+    let block = crate::render::pane_block(model, title, true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let [body, _, row, keys_row] = Layout::vertical([
+    // The frame fills the pane; the buttons follow the last row, not the pane's foot.
+    let rows = (lines.len() as u16).min(inner.height.saturating_sub(3));
+    let [body, _, row, keys_row, _] = Layout::vertical([
+        Constraint::Length(rows),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Min(0),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
     ])
     .areas(inner);
     // Scrolled only as far as keeps the focused row, and the box under it, in view.
