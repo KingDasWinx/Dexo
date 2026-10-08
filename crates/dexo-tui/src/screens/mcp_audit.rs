@@ -1,5 +1,5 @@
-//! Agents' Approvals and Activity: the writes agents are waiting to make under asking grants, to approve
-//! or deny, and the latest tool calls from the MCP audit log as they arrive.
+//! Agents' Approvals and Activity: the writes agents are waiting to make, to approve or
+//! deny, and the latest tool calls from the MCP audit log as they arrive.
 
 use dexo_app::mcp::Approval;
 
@@ -128,6 +128,25 @@ fn push_wrapped(lines: &mut Vec<String>, first: &str, rest: &str, text: &str, wi
     }
 }
 
+/// What a request asks to do, in words: `update a row in app.public.orders`.
+pub fn wants(request: &Approval) -> String {
+    let (verb, on) = match request.tool.as_str() {
+        "data_insert" => ("insert a row", "into"),
+        "data_update" => ("update a row", "in"),
+        "data_delete" => ("delete a row", "from"),
+        "data_execute_sql" => ("run SQL", "on"),
+        "schema_apply_ddl" => ("change the schema", "of"),
+        "admin_cancel_query" => ("cancel a query", "on"),
+        "admin_terminate_session" => ("end a session", "on"),
+        other => (other, "on"),
+    };
+    if request.targets.is_empty() {
+        verb.to_string()
+    } else {
+        format!("{verb} {on} {}", request.targets.join(", "))
+    }
+}
+
 /// What a request would do, for a person: its SQL as it is, a structured write as the
 /// fields it sets -- not the call's JSON.
 pub fn readable_statement(request: &Approval) -> String {
@@ -233,17 +252,17 @@ impl McpAuditScreen {
         gone
     }
 
-    /// A waiting request in one row of the list, ending with what it would do: only the
-    /// picked one said so, and the others had to be picked to be read.
+    /// A waiting request in one row of the list: the time it has left, who asks, what it
+    /// would do in words, and where -- the others had to be picked to be read.
     pub fn row(&self, request: &Approval) -> String {
-        let statement = readable_statement(request);
+        let left = request.seconds_left(self.now);
         format!(
-            "{}  {}  {}  {}  {}",
-            clock(request.created_at),
+            "{}:{:02}  {}  {} · {}",
+            left / 60,
+            left % 60,
             request.profile,
-            request.tool,
-            request.connection,
-            statement.lines().next().unwrap_or_default()
+            wants(request),
+            request.connection
         )
     }
 
@@ -362,7 +381,7 @@ mod tests {
         assert_eq!(picked.tool, "data_execute_sql");
         assert!(super::readable_statement(picked).contains("UPDATE b SET x = 1"));
         // The one not picked says what it is in its row; only the picked one in full.
-        assert!(screen.row(&c).contains("UPDATE c SET x = 1"));
+        assert!(screen.row(&c).contains("run SQL on db.public.orders"));
 
         assert!(
             screen.load(vec![c.clone()], 1003),
@@ -389,15 +408,17 @@ mod tests {
         assert_eq!(screen.scroll, 0);
     }
 
-    /// Every waiting request says what it would do, not only the picked one, and the
-    /// question that settles it has its buttons.
+    /// Every waiting request says what it would do and how long it has, not only the
+    /// picked one, and the question that settles it has its buttons.
     #[test]
     fn every_request_says_what_it_does_and_the_question_repeats_it() {
         let (a, b) = (request("UPDATE a SET x = 1"), request("UPDATE b SET x = 1"));
         let mut screen = McpAuditScreen::default();
         screen.load(vec![a.clone(), b.clone()], 1001);
-        assert!(screen.row(&a).contains("UPDATE a SET x = 1"));
-        assert!(screen.row(&b).contains("UPDATE b SET x = 1"));
+        assert_eq!(
+            screen.row(&a),
+            "1:59  assistant  run SQL on db.public.orders · local"
+        );
         let left = screen
             .current()
             .map(|request| request.seconds_left(screen.now));

@@ -913,24 +913,24 @@ impl WorkbenchRuntime {
                 self.admin_on_side_connection(session, Some(action)).await
             }
             crate::Effect::LoadMcpProfiles => self.load_mcp_profiles().await,
-            crate::Effect::LoadGrantTables {
+            crate::Effect::LoadProfileTables {
                 connection,
                 postgres,
-            } => self.load_grant_tables(connection, postgres),
+            } => self.load_profile_tables(connection, postgres),
             crate::Effect::LoadMcpClients => {
                 let action_tx = self.action_tx.clone();
                 tokio::task::spawn_blocking(move || {
                     let _ = action_tx.blocking_send(mcp_clients());
                 });
             }
-            crate::Effect::SetUpMcpClient {
+            crate::Effect::ConnectMcpAgent {
                 client,
                 profile,
                 skill,
             } => {
                 self.off_the_loop(move || {
-                    let result = set_up_mcp_client(client, profile, skill);
-                    [Action::McpClientSetUp { result }, mcp_clients()]
+                    let result = connect_mcp_agent(client, &profile, skill);
+                    [Action::McpFormDone { result }, mcp_clients()]
                         .into_iter()
                         .chain(mcp_profiles_loaded())
                         .collect()
@@ -950,30 +950,27 @@ impl WorkbenchRuntime {
             crate::Effect::SetMcpProfileEnabled { name, enabled } => {
                 self.set_mcp_profile_enabled(name, enabled).await
             }
-            crate::Effect::SaveMcpProfileAccess {
-                name,
-                connections,
-                reads,
-            } => {
+            crate::Effect::SaveMcpProfile(save) => {
                 self.off_the_loop(move || {
-                    let message = save_mcp_profile_access(&name, connections, reads)
-                        .unwrap_or_else(|error| error);
-                    std::iter::once(Action::McpProfileSaved { message })
+                    let result = save_mcp_profile(save);
+                    [Action::McpFormDone { result }, mcp_clients()]
+                        .into_iter()
                         .chain(mcp_profiles_loaded())
                         .collect()
                 });
             }
-            crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
+            crate::Effect::RevokeMcpWrites {
+                profile,
+                connection,
+            } => self.revoke_mcp(profile, connection).await,
             crate::Effect::DeleteMcpProfile { name } => self.delete_mcp_profile(name).await,
             crate::Effect::RevokeAllMcpGrants => self.revoke_all_mcp().await,
-            crate::Effect::CreateMcpGrants { profile, requests } => {
-                let action_tx = self.action_tx.clone();
-                tokio::task::spawn_blocking(move || {
-                    let action = match create_mcp_grants(&profile, &requests) {
-                        Ok(message) => Action::McpGrantCreated { message },
-                        Err(message) => Action::McpGrantFailed { message },
-                    };
-                    let _ = action_tx.blocking_send(action);
+            crate::Effect::CreateMcpGrant { profile, request } => {
+                self.off_the_loop(move || {
+                    let result = create_mcp_grant(&profile, &request).map(|message| vec![message]);
+                    std::iter::once(Action::McpFormDone { result })
+                        .chain(mcp_profiles_loaded())
+                        .collect()
                 });
             }
             crate::Effect::WriteDiagnostics { path, bundle } => {
@@ -2621,7 +2618,7 @@ impl WorkbenchRuntime {
 
     /// The tables of `connection` as Dexo last read them, each as the selector a grant
     /// names it by: `database.schema.table` on PostgreSQL, `database.table` on MySQL.
-    fn load_grant_tables(&self, connection: String, postgres: bool) {
+    fn load_profile_tables(&self, connection: String, postgres: bool) {
         self.off_the_loop(move || {
             let tables = AppPaths::discover()
                 .ok()
@@ -2654,7 +2651,7 @@ impl WorkbenchRuntime {
                     tables.dedup();
                     tables
                 });
-            vec![Action::GrantTablesLoaded { connection, tables }]
+            vec![Action::ProfileTablesLoaded { connection, tables }]
         });
     }
 
@@ -2770,11 +2767,11 @@ impl WorkbenchRuntime {
         });
     }
 
-    async fn revoke_mcp(&self, profile: String) {
+    async fn revoke_mcp(&self, profile: String, connection: String) {
         self.off_the_loop(move || {
             use dexo_app::mcp::GrantLedger;
             let unavailable = || {
-                vec![Action::McpRevokeFailed {
+                vec![Action::McpStatus {
                     message: "storage unavailable".into(),
                 }]
             };
@@ -2784,12 +2781,16 @@ impl WorkbenchRuntime {
             let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
                 return unavailable();
             };
-            match ledger.revoke_profile(&profile) {
-                Ok(count) => std::iter::once(Action::McpGrantsRevoked { count })
-                    .chain(mcp_audit_loaded())
-                    .chain(mcp_profiles_loaded())
-                    .collect(),
-                Err(error) => vec![Action::McpRevokeFailed {
+            match ledger.revoke_connection(&profile, &connection) {
+                Ok(_) => std::iter::once(Action::McpStatus {
+                    message: format!(
+                        "{profile} may no longer write on {connection}: a write waiting there is refused."
+                    ),
+                })
+                .chain(mcp_audit_loaded())
+                .chain(mcp_profiles_loaded())
+                .collect(),
+                Err(error) => vec![Action::McpStatus {
                     message: error.to_string(),
                 }],
             }
@@ -2813,7 +2814,7 @@ impl WorkbenchRuntime {
                 Ok(_) => std::iter::once(Action::McpProfileDeleted { name })
                     .chain(mcp_profiles_loaded())
                     .collect(),
-                Err(error) => vec![Action::McpRevokeFailed {
+                Err(error) => vec![Action::McpStatus {
                     message: error.to_string(),
                 }],
             }
@@ -2823,7 +2824,7 @@ impl WorkbenchRuntime {
     async fn revoke_all_mcp(&self) {
         self.off_the_loop(|| {
             let unavailable = || {
-                vec![Action::McpRevokeFailed {
+                vec![Action::McpStatus {
                     message: "storage unavailable".into(),
                 }]
             };
@@ -2838,7 +2839,7 @@ impl WorkbenchRuntime {
                     .chain(mcp_audit_loaded())
                     .chain(mcp_profiles_loaded())
                     .collect(),
-                Err(error) => vec![Action::McpRevokeFailed {
+                Err(error) => vec![Action::McpStatus {
                     message: error.to_string(),
                 }],
             }
@@ -2908,75 +2909,115 @@ fn unix_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-/// A profile's live grants, shaped for the profiles screen.
-fn grant_lines(
-    ledger: &dexo_storage::SqliteGrantLedger,
-    profile: &str,
-    now: i64,
-) -> Vec<crate::screens::mcp_profiles::GrantLine> {
-    use dexo_app::mcp::GrantLedger;
-    ledger
-        .active_grants(profile, now)
+/// The saved connections MCP serves, each with what the forms show of it: its
+/// environment, why MCP never writes to it, and whether it is PostgreSQL.
+fn mcp_connection_lines(
+    db: &Database,
+) -> Vec<(String, crate::screens::mcp_profiles::ConnectionLine)> {
+    ConnectionRepository::new(db.connection())
+        .list()
+        .unwrap_or_default()
         .into_iter()
-        .map(|grant| crate::screens::mcp_profiles::GrantLine {
-            id: grant.id.to_string(),
-            capability: grant
-                .kinds()
-                .iter()
-                .map(|kind| kind.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
-            tools: grant.tools.join(","),
-            expires_in_secs: grant.expires_at.saturating_sub(now),
-            connection: grant.connection.clone(),
-            selectors: String::new(),
-            ask_secs: grant.ask_secs,
-            until_revoked: grant.until_revoked(),
+        .filter_map(|saved| {
+            let meta = dexo_app::mcp::McpConnection::from_profile(&saved).ok()?;
+            let refused = if meta.environment == dexo_app::Environment::Production {
+                Some("production never takes agents' writes".to_string())
+            } else if meta.read_only {
+                Some("its policy keeps it read-only".to_string())
+            } else {
+                meta.accepts_writes().err().map(|error| error.to_string())
+            };
+            Some((
+                saved.name.clone(),
+                crate::screens::mcp_profiles::ConnectionLine {
+                    name: saved.name,
+                    environment: saved.environment,
+                    refused,
+                    postgres: meta.dialect == dexo_sql::Dialect::Postgres,
+                    access: None,
+                },
+            ))
         })
         .collect()
 }
 
-/// New MCP Grant: the grant `dexo mcp grant create` would make with the same answers,
-/// written where the MCP server reads it. Says what was made, or why not.
-/// The MCP profiles as the Agents screen lists them, with their live grants.
+/// A profile's write access on `connection`: its live grants there as one -- older
+/// ones, made several to a connection, joined.
+fn access_on(
+    grants: &[dexo_app::mcp::Grant],
+    connection: &str,
+    now: i64,
+) -> Option<crate::screens::mcp_profiles::Access> {
+    let there: Vec<&dexo_app::mcp::Grant> = grants
+        .iter()
+        .filter(|grant| grant.connection == connection)
+        .collect();
+    let last = there.iter().max_by_key(|grant| grant.expires_at)?;
+    let kinds = dexo_app::mcp::WriteKind::ALL
+        .into_iter()
+        .filter(|kind| there.iter().any(|grant| grant.kinds().contains(kind)))
+        .collect();
+    Some(crate::screens::mcp_profiles::Access {
+        kinds,
+        expires_in_secs: last.expires_at.saturating_sub(now),
+        until_revoked: last.until_revoked(),
+    })
+}
+
+/// The MCP profiles as Agents' Profiles shows them: each connection with what the
+/// profile may write there.
 fn mcp_profiles_loaded() -> Option<Action> {
+    use dexo_app::mcp::GrantLedger;
     let paths = AppPaths::discover().ok()?;
     let db = Database::open(&paths.database).ok()?;
     let profiles = dexo_storage::McpProfileRepository::new(db.connection())
         .list()
         .ok()?;
-    // The grants list used to be fixture-only: nothing read the ledger, so the
-    // screen showed a permanently empty section.
     let ledger = dexo_storage::SqliteGrantLedger::open(&paths.database).ok();
+    let served = mcp_connection_lines(&db);
     let now = unix_seconds();
     let profiles = profiles
         .into_iter()
-        .map(|profile| crate::screens::mcp_profiles::McpProfileSummary {
-            connections: profile.connections.clone(),
-            raw_read: profile.query_mode == dexo_app::mcp::QueryMode::RawReadSql,
-            scopes: profile.selectors.iter().map(ToString::to_string).collect(),
-            tools: profile
-                .tool_rules
-                .iter()
-                .map(|rule| rule.tool.clone())
-                .collect(),
-            grantable: dexo_app::mcp::grantable_tools(&profile)
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            withheld: dexo_app::mcp::WRITE_TOOLS
-                .iter()
-                .filter_map(|tool| {
-                    dexo_app::mcp::why_not_grantable(&profile, tool)
-                        .map(|why| (tool.to_string(), why))
-                })
-                .collect(),
-            grants: ledger
+        .map(|profile| {
+            let grants = ledger
                 .as_ref()
-                .map(|ledger| grant_lines(ledger, &profile.name, now))
-                .unwrap_or_default(),
-            name: profile.name,
-            enabled: profile.enabled,
+                .map(|ledger| ledger.active_grants(&profile.name, now))
+                .unwrap_or_default();
+            let any = profile.connections.is_empty();
+            let names: Vec<String> = if any {
+                served.iter().map(|(name, _)| name.clone()).collect()
+            } else {
+                profile.connections.clone()
+            };
+            let connections = names
+                .into_iter()
+                .map(|name| {
+                    let mut line = served
+                        .iter()
+                        .find(|(served, _)| *served == name)
+                        .map(|(_, line)| line.clone())
+                        .unwrap_or_else(|| crate::screens::mcp_profiles::ConnectionLine {
+                            refused: Some("it is not a saved connection MCP serves".into()),
+                            name: name.clone(),
+                            ..Default::default()
+                        });
+                    line.access = access_on(&grants, &name, now);
+                    line
+                })
+                .collect();
+            let grantable = dexo_app::mcp::grantable_tools(&profile);
+            crate::screens::mcp_profiles::McpProfileSummary {
+                raw_read: profile.query_mode == dexo_app::mcp::QueryMode::RawReadSql,
+                scopes: profile.selectors.iter().map(ToString::to_string).collect(),
+                any,
+                connections,
+                kinds: dexo_app::mcp::WriteKind::ALL
+                    .into_iter()
+                    .filter(|kind| kind.tools().iter().any(|tool| grantable.contains(tool)))
+                    .collect(),
+                name: profile.name,
+                enabled: profile.enabled,
+            }
         })
         .collect();
     Some(Action::McpProfilesLoaded { profiles })
@@ -3013,7 +3054,7 @@ fn mcp_clients() -> Action {
     };
     let clients = McpClient::ALL
         .into_iter()
-        .map(|client| crate::screens::mcp_setup::ClientRow {
+        .map(|client| crate::screens::mcp_clients::ClientRow {
             client,
             path: home_relative(&client.config_path(&places), &places.home),
             skill: client
@@ -3040,13 +3081,102 @@ pub(crate) fn home_relative(path: &std::path::Path, home: &std::path::Path) -> S
     }
 }
 
-/// A profile's connections or SQL reading changed and saved, as `dexo mcp profile set`
-/// would: what it now allows, or why not.
-fn save_mcp_profile_access(
+/// New profile or Edit, saved as `dexo mcp profile create`, `set` and `allow` would: a
+/// new one made enabled and its agent's config written; one changed losing the writes
+/// on the connections it no longer uses. What was done comes back in lines.
+fn save_mcp_profile(
+    save: crate::screens::mcp_profiles::ProfileSave,
+) -> Result<Vec<String>, String> {
+    use dexo_app::mcp::{Effect, GrantLedger, SelectorRule};
+    let text = |error: dexo_app::AppError| error.to_string();
+    let paths = AppPaths::discover().map_err(|error| error.to_string())?;
+    let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
+    let repo = dexo_storage::McpProfileRepository::new(db.connection());
+    let saved = ConnectionRepository::new(db.connection());
+    for connection in &save.connections {
+        let found = saved
+            .get_by_name(connection)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("{connection} is not a saved connection"))?;
+        dexo_app::mcp::McpConnection::from_profile(&found)
+            .map_err(|error| format!("{connection}: {error}"))?;
+    }
+    let mut profile = if save.new {
+        if repo
+            .get_by_name(&save.name)
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return Err(format!("{} is a profile already", save.name));
+        }
+        let mut made = dexo_app::mcp::McpProfile::new(&save.name);
+        // Made here for an agent, by a person: it is used at once.
+        made.enabled = true;
+        made
+    } else {
+        repo.get_by_name(&save.name)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("{} is not a profile any more", save.name))?
+    };
+    let dropped: Vec<String> = profile
+        .connections
+        .iter()
+        .filter(|name| !save.connections.contains(name))
+        .cloned()
+        .collect();
+    profile.connections = save.connections.clone();
+    profile.query_mode = if save.reads {
+        dexo_app::mcp::QueryMode::RawReadSql
+    } else {
+        dexo_app::mcp::QueryMode::StructuredOnly
+    };
+    let rule = |effect: Effect, selector: &String| {
+        SelectorRule::parse(effect, selector).map_err(|error| format!("{selector}: {error}"))
+    };
+    profile.selectors = save
+        .allow
+        .iter()
+        .map(|selector| rule(Effect::Allow, selector))
+        .chain(
+            save.deny
+                .iter()
+                .map(|selector| rule(Effect::Deny, selector)),
+        )
+        .collect::<Result<Vec<_>, _>>()?;
+    profile.validate().map_err(text)?;
+    repo.save(&profile).map_err(|error| error.to_string())?;
+    let mut lines = vec![format!(
+        "✓ {} {}, on {}",
+        save.name,
+        if save.new { "made, enabled" } else { "saved" },
+        save.connections.join(", ")
+    )];
+    if !dropped.is_empty()
+        && let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database)
+    {
+        for connection in dropped {
+            if ledger
+                .revoke_connection(&save.name, &connection)
+                .map_err(text)?
+                > 0
+            {
+                lines.push(format!("✓ it may no longer write on {connection}"));
+            }
+        }
+    }
+    if let Some((client, skill)) = save.agent {
+        lines.extend(write_agent_config(client, &save.name, skill)?);
+    }
+    Ok(lines)
+}
+
+/// Connect agent: the agent's config written to start Dexo with `name`, enabled, as
+/// `dexo mcp setup` would.
+fn connect_mcp_agent(
+    client: dexo_app::mcp::clients::McpClient,
     name: &str,
-    connections: Option<Vec<String>>,
-    reads: Option<bool>,
-) -> Result<String, String> {
+    skill: bool,
+) -> Result<Vec<String>, String> {
     let paths = AppPaths::discover().map_err(|error| error.to_string())?;
     let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
     let repo = dexo_storage::McpProfileRepository::new(db.connection());
@@ -3054,105 +3184,28 @@ fn save_mcp_profile_access(
         .get_by_name(name)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("{name} is not a profile any more"))?;
-    if let Some(connections) = connections {
-        let saved = ConnectionRepository::new(db.connection());
-        for connection in &connections {
-            let found = saved
-                .get_by_name(connection)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| format!("{connection} is not a saved connection"))?;
-            dexo_app::mcp::McpConnection::from_profile(&found)
-                .map_err(|error| format!("{connection}: {error}"))?;
-        }
-        profile.connections = connections;
+    let mut lines = Vec::new();
+    if !profile.enabled {
+        profile.enabled = true;
+        repo.save(&profile).map_err(|error| error.to_string())?;
+        lines.push(format!("✓ {name} enabled"));
     }
-    if let Some(reads) = reads {
-        profile.query_mode = if reads {
-            dexo_app::mcp::QueryMode::RawReadSql
-        } else {
-            dexo_app::mcp::QueryMode::StructuredOnly
-        };
-    }
-    profile.validate().map_err(|error| error.to_string())?;
-    repo.save(&profile).map_err(|error| error.to_string())?;
-    Ok(format!(
-        "{name} uses {}, and {}.",
-        profile.connections.join(", "),
-        if profile.query_mode == dexo_app::mcp::QueryMode::RawReadSql {
-            "reads SQL"
-        } else {
-            "browses only"
-        }
-    ))
+    lines.extend(write_agent_config(client, name, skill)?);
+    Ok(lines)
 }
 
-/// The profile made -- or the one picked, enabled -- and the agent's config written, as
-/// `dexo mcp profile create`, `set`, `allow`, `enable` and `setup` would. What was done
-/// comes back in lines.
-fn set_up_mcp_client(
+/// The agent's config, and its skill file, written to start Dexo with `profile`.
+fn write_agent_config(
     client: dexo_app::mcp::clients::McpClient,
-    profile: crate::screens::mcp_setup::SetupProfile,
+    profile: &str,
     skill: bool,
 ) -> Result<Vec<String>, String> {
-    use crate::screens::mcp_setup::SetupProfile;
     use dexo_app::mcp::clients::{McpClient, Places, dexo_command};
     let text = |error: dexo_app::AppError| error.to_string();
-    let paths = AppPaths::discover().map_err(|error| error.to_string())?;
-    let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
-    let repo = dexo_storage::McpProfileRepository::new(db.connection());
-    let (name, connections) = match profile {
-        SetupProfile::New {
-            name,
-            connections,
-            reads,
-        } => {
-            let saved = ConnectionRepository::new(db.connection());
-            for connection in &connections {
-                let found = saved
-                    .get_by_name(connection)
-                    .map_err(|error| error.to_string())?
-                    .ok_or_else(|| format!("{connection} is not a saved connection"))?;
-                dexo_app::mcp::McpConnection::from_profile(&found)
-                    .map_err(|error| format!("{connection}: {error}"))?;
-            }
-            let mut made = dexo_app::mcp::McpProfile::new(&name);
-            made.connections = connections.clone();
-            made.query_mode = if reads {
-                dexo_app::mcp::QueryMode::RawReadSql
-            } else {
-                dexo_app::mcp::QueryMode::StructuredOnly
-            };
-            // The connections are the limit; every object in them may be seen.
-            made.selectors = vec![
-                dexo_app::mcp::SelectorRule::parse(dexo_app::mcp::Effect::Allow, "*")
-                    .map_err(text)?,
-            ];
-            made.enabled = true;
-            made.validate().map_err(text)?;
-            repo.save(&made).map_err(|error| error.to_string())?;
-            (name, connections)
-        }
-        SetupProfile::Existing(name) => {
-            let mut found = repo
-                .get_by_name(&name)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| format!("{name} is not a profile any more"))?;
-            if found.connections.is_empty() {
-                return Err(format!(
-                    "{name} uses no connection yet: make a new profile here, or give it one with `dexo mcp profile set --name {name} --connection NAME`."
-                ));
-            }
-            if !found.enabled {
-                found.enabled = true;
-                repo.save(&found).map_err(|error| error.to_string())?;
-            }
-            (name, found.connections)
-        }
-    };
     let places = Places::discover().map_err(text)?;
     let command = dexo_command().map_err(|error| error.to_string())?;
     let done = client
-        .set_up(&places, &command, &name, skill)
+        .set_up(&places, &command, profile, skill)
         .map_err(text)?;
     let shown = |path: &std::path::Path| home_relative(path, &places.home);
     let mut lines = vec![match &done.backup {
@@ -3166,25 +3219,19 @@ fn set_up_mcp_client(
     if let Some(skill) = &done.skill {
         lines.push(format!("✓ {} written", shown(skill)));
     }
-    lines.push(format!(
-        "✓ {name} enabled, on {}, read-only",
-        connections.join(", ")
-    ));
     lines.push(if client == McpClient::ClaudeCode {
         "→ restart Claude Code here, and approve the project's servers".to_string()
     } else {
         format!("→ restart {}", client.name())
     });
-    lines.push("→ a write needs a grant: Profiles, then g".into());
     Ok(lines)
 }
 
-/// New grant: the grants `dexo mcp grant create` would make with the same answers, one
-/// for each kind of tool checked. Every one is issued before any is saved: all of them
-/// are made, or none.
-fn create_mcp_grants(
+/// Writes: the write access `dexo mcp grant create` would make with the same answers,
+/// in place of what the profile had on that connection.
+fn create_mcp_grant(
     profile: &str,
-    requests: &[dexo_app::mcp::GrantRequest],
+    request: &dexo_app::mcp::GrantRequest,
 ) -> Result<String, String> {
     use dexo_app::mcp::GrantLedger;
     let paths = AppPaths::discover().map_err(|error| error.to_string())?;
@@ -3193,43 +3240,37 @@ fn create_mcp_grants(
         .get_by_name(profile)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("unknown MCP profile '{profile}'"))?;
+    let saved = ConnectionRepository::new(db.connection())
+        .get_by_name(&request.connection)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("unknown connection '{}'", request.connection))?;
     let now = unix_seconds();
-    let mut grants = Vec::new();
-    for request in requests {
-        let saved = ConnectionRepository::new(db.connection())
-            .get_by_name(&request.connection)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("unknown connection '{}'", request.connection))?;
-        grants.push(
-            request
-                .issue(&loaded, &saved, now)
-                .map_err(|error| error.to_string())?,
-        );
-    }
-    let Some(first) = grants.first() else {
-        return Err("tools: pick at least one".into());
-    };
-    let lasts = if first.until_revoked() {
-        "until it is revoked".to_string()
+    let grant = request
+        .issue(&loaded, &saved, now)
+        .map_err(|error| error.to_string())?;
+    let lasts = if grant.until_revoked() {
+        "until you revoke it".to_string()
     } else {
         format!(
             "for {}",
-            crate::screens::mcp_profiles::duration_words(first.expires_at - now)
+            crate::screens::mcp_profiles::duration_words(grant.expires_at - now)
         )
     };
     let message = format!(
-        "{profile} may write {} on {}, {lasts}: each write waits up to {} for you under Agents, Approvals.",
-        first.tools.join(", "),
-        first.connection,
-        crate::screens::mcp_profiles::duration_words(i64::from(first.ask_secs)),
+        "✓ {profile} may change {} on {}, {lasts}: each write waits up to {} for you on Approvals",
+        grant
+            .kinds()
+            .iter()
+            .map(|kind| kind.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        grant.connection,
+        crate::screens::mcp_profiles::duration_words(i64::from(grant.ask_secs)),
     );
-    let ledger = dexo_storage::SqliteGrantLedger::open(&paths.database)
+    dexo_storage::SqliteGrantLedger::open(&paths.database)
+        .map_err(|error| error.to_string())?
+        .insert_grant(grant)
         .map_err(|error| error.to_string())?;
-    for grant in grants {
-        ledger
-            .insert_grant(grant)
-            .map_err(|error| error.to_string())?;
-    }
     Ok(message)
 }
 

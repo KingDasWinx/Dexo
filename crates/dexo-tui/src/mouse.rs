@@ -86,7 +86,6 @@ pub enum HitButton {
     Discard,
     Apply,
     Export,
-    Revoke,
     ConfirmDirty,
     ToggleConnections,
     ConfirmDelete,
@@ -169,7 +168,6 @@ pub enum ScrollArea {
     Review,
     Messages,
     DdlPreview,
-    McpProfiles,
     Sessions,
     SchemaDiff,
     /// Whatever detail pane a screen shows.

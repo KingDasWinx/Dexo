@@ -724,12 +724,12 @@ fn command_spec_list() -> Vec<CommandSpec> {
             ],
             shortcut: None,
             requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::OpenMcpSetup),
+            invocation: PaletteInvocation::Dispatch(Action::OpenMcpAgentForm),
         },
         CommandSpec {
             id: "mcp.profiles",
             title: "MCP Profiles",
-            keywords: &["mcp", "allowlist", "policy", "grant"],
+            keywords: &["mcp", "allowlist", "policy", "grant", "write", "access"],
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenMcpProfiles),
@@ -1430,7 +1430,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "mcp.grant",
-            title: "New MCP Grant…",
+            title: "Allow an Agent to Write…",
             keywords: &[
                 "mcp",
                 "agent",
@@ -1441,16 +1441,16 @@ fn command_spec_list() -> Vec<CommandSpec> {
                 "approval",
                 "permission",
             ],
-            // `g` works only inside MCP Profiles, which says so itself; a key listed here
+            // `w` works only inside MCP Profiles, which says so itself; a key listed here
             // is one that does the action wherever the palette is.
             shortcut: None,
             requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::OpenMcpGrantForm),
+            invocation: PaletteInvocation::Dispatch(Action::OpenMcpWritesForm),
         },
         CommandSpec {
             id: "mcp.revoke_all",
-            title: "Revoke All MCP Grants",
-            keywords: &["mcp", "grant"],
+            title: "Stop All Agent Writes",
+            keywords: &["mcp", "grant", "revoke", "write"],
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::OpenFlow(FlowIntent::McpRevokeAll),

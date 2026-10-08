@@ -500,29 +500,22 @@ pub enum Action {
     RunExplainAnalyze,
     OpenAdmin,
     OpenMcpProfiles,
-    /// Agents' Setup view: an agent pointed at Dexo's MCP server.
-    OpenMcpSetup,
+    /// An agent pointed at Dexo's MCP server: Connect agent on the picked profile, or New
+    /// profile when there is none.
+    OpenMcpAgentForm,
     ToggleMcpProfile,
     RevokeAllMcpGrants,
-    RevokeProfileGrants,
     McpGrantsRevoked {
         count: usize,
     },
-    /// What saving a profile's access came to.
-    McpProfileSaved {
+    McpStatus {
         message: String,
     },
-    McpRevokeFailed {
-        message: String,
-    },
-    /// `g` in MCP Profiles: a new grant for the selected profile.
-    OpenMcpGrantForm,
-    /// The grant was made: what to say about it.
-    McpGrantCreated {
-        message: String,
-    },
-    McpGrantFailed {
-        message: String,
+    /// Writes for the picked profile.
+    OpenMcpWritesForm,
+    /// What one of Profiles' forms came to: what was done, line by line, or why not.
+    McpFormDone {
+        result: Result<Vec<String>, String>,
     },
     OpenSettings,
     ConfirmResetSettings,
@@ -690,21 +683,17 @@ pub enum Action {
     McpProfilesLoaded {
         profiles: Vec<crate::screens::mcp_profiles::McpProfileSummary>,
     },
-    /// A connection's tables for New grant, each as its selector; `None`, Dexo never read
-    /// its catalog.
-    GrantTablesLoaded {
+    /// A connection's tables for a profile's form, each as its selector; `None`, Dexo never
+    /// read its catalog.
+    ProfileTablesLoaded {
         connection: String,
         tables: Option<Vec<String>>,
     },
     /// What each agent's config says of Dexo, and what an entry would run.
     McpClientsLoaded {
-        clients: Vec<crate::screens::mcp_setup::ClientRow>,
+        clients: Vec<crate::screens::mcp_clients::ClientRow>,
         command: String,
         project: String,
-    },
-    /// What Set up wrote, or why it could not.
-    McpClientSetUp {
-        result: Result<Vec<String>, String>,
     },
     McpAuditLoaded {
         events: Vec<crate::screens::mcp_audit::AuditLine>,
@@ -1149,17 +1138,17 @@ pub enum Effect {
         target: String,
     },
     LoadMcpProfiles,
-    /// Reads a connection's tables, as Dexo last read its catalog, for New grant.
-    LoadGrantTables {
+    /// Reads a connection's tables, as Dexo last read its catalog, for a profile's form.
+    LoadProfileTables {
         connection: String,
         postgres: bool,
     },
     /// Reads each agent's config for Dexo's entry.
     LoadMcpClients,
-    /// Makes or enables the profile, then writes the agent's config.
-    SetUpMcpClient {
+    /// Writes an agent's config to start Dexo with `profile`, enabling it.
+    ConnectMcpAgent {
         client: dexo_app::mcp::clients::McpClient,
-        profile: crate::screens::mcp_setup::SetupProfile,
+        profile: String,
         skill: bool,
     },
     LoadConnectionProfiles,
@@ -1168,23 +1157,21 @@ pub enum Effect {
         name: String,
         enabled: bool,
     },
-    /// A profile's connections, or whether it reads SQL, changed; what is `None` stays.
-    SaveMcpProfileAccess {
-        name: String,
-        connections: Option<Vec<String>>,
-        reads: Option<bool>,
-    },
+    /// New profile or Edit, saved: the profile, and the agent's config for a new one.
+    SaveMcpProfile(crate::screens::mcp_profiles::ProfileSave),
     DeleteMcpProfile {
         name: String,
     },
-    RevokeMcpGrants {
+    /// Takes back a profile's writes on one connection.
+    RevokeMcpWrites {
         profile: String,
+        connection: String,
     },
     RevokeAllMcpGrants,
-    /// New grant's grants, one for each kind of tool checked: all made, or none.
-    CreateMcpGrants {
+    /// Writes, saved: in place of what the profile had on that connection.
+    CreateMcpGrant {
         profile: String,
-        requests: Vec<dexo_app::mcp::GrantRequest>,
+        request: dexo_app::mcp::GrantRequest,
     },
     WriteDiagnostics {
         path: std::path::PathBuf,

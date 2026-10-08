@@ -8,6 +8,7 @@ use crate::action::{Action, Effect, FocusTarget};
 use crate::layout::LayoutPlan;
 use crate::model::{DragKind, DragState, Focus, Model};
 use crate::mouse::{HitButton, HitTarget, OverlayKind, PaneEdge, note_click, top_overlay};
+use crate::screens::mcp_profiles::WhenLoaded;
 use ratatui::layout::{Position, Rect};
 
 /// The grid's pane depends on which document is active: a table document draws it in
@@ -898,16 +899,15 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if model.shown_screen() != crate::model::Screen::Workbench
                 && crate::mouse::top_overlay(model).is_none()
             {
-                // New grant takes a paste in its text boxes, not on a choice, where a
-                // space would flip it.
+                // New profile takes a paste in its name, not on a choice, where a space
+                // would flip it.
                 if model.shown_screen() == crate::model::Screen::Agents
-                    && let Some(form) = model.mcp_profiles.grant_form.as_mut()
+                    && let Some(crate::screens::mcp_profiles::Form::Profile(form)) =
+                        model.mcp_profiles.form.as_mut()
                 {
                     match form.focused_input() {
                         Some(input) => input.insert_text(&text),
-                        None => model
-                            .messages
-                            .info("Paste into Objects, Wait up to or the confirmation.".into()),
+                        None => model.messages.info("Paste into the name.".into()),
                     }
                     return Vec::new();
                 }
@@ -2064,68 +2064,78 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             let screen = &mut model.mcp_profiles;
             screen.status.clear();
             screen.confirm = None;
-            screen.detail_scroll = 0;
             model.agents_view = crate::screen::agents::AgentsView::Profiles;
             go_to_screen(model, crate::model::Screen::Agents)
         }
-        Action::OpenMcpGrantForm => {
+        Action::OpenMcpWritesForm => {
             model.agents_view = crate::screen::agents::AgentsView::Profiles;
             // Asked for from elsewhere, the profiles are read again first, and the form
             // opens when they arrive.
             if model.screen != crate::model::Screen::Agents {
-                model.mcp_profiles.grant_when_loaded = true;
+                model.mcp_profiles.when_loaded = Some(WhenLoaded::Writes);
                 return go_to_screen(model, crate::model::Screen::Agents);
             }
-            open_grant_form(model);
+            open_writes_form(model);
             Vec::new()
         }
-        Action::McpGrantCreated { message } => {
-            model.mcp_profiles.grant_form = None;
-            model.mcp_profiles.status = message.clone();
-            model.messages.info(message);
-            vec![Effect::LoadMcpProfiles]
+        Action::OpenMcpAgentForm => {
+            model.agents_view = crate::screen::agents::AgentsView::Profiles;
+            model.mcp_profiles.when_loaded = Some(WhenLoaded::Agent);
+            go_to_screen(model, crate::model::Screen::Agents)
         }
-        Action::GrantTablesLoaded { connection, tables } => {
-            if let Some(form) = model.mcp_profiles.grant_form.as_mut() {
-                form.take_tables(&connection, tables);
+        Action::McpFormDone { result } => {
+            use crate::screens::mcp_profiles::Form;
+            match result {
+                Ok(lines) => {
+                    let screen = &mut model.mcp_profiles;
+                    // One just made is the one picked once the profiles are read again.
+                    if let Some(Form::Profile(form)) = &screen.form
+                        && !form.editing
+                    {
+                        screen.pick = Some(form.name.trim().to_string());
+                    }
+                    screen.form = None;
+                    screen.status = lines.join("\n");
+                }
+                Err(message) => match model.mcp_profiles.form.as_mut() {
+                    Some(form) => form.fail(message),
+                    None => model.messages.error(message),
+                },
             }
             Vec::new()
         }
-        Action::McpGrantFailed { message } => {
-            match model.mcp_profiles.grant_form.as_mut() {
-                Some(form) => form.fail(message),
-                None => model.messages.error(message),
+        Action::ProfileTablesLoaded { connection, tables } => {
+            if let Some(crate::screens::mcp_profiles::Form::Profile(form)) =
+                model.mcp_profiles.form.as_mut()
+            {
+                form.take_tables(&connection, tables);
             }
             Vec::new()
         }
         Action::ToggleMcpProfile => match model.mcp_profiles.toggle_selected() {
             Some(enabled) => vec![Effect::SetMcpProfileEnabled {
-                name: model.mcp_profiles.name.clone(),
+                name: model.mcp_profiles.name().unwrap_or_default(),
                 enabled,
             }],
             None => Vec::new(),
         },
-        Action::RevokeProfileGrants => {
-            model.mcp_profiles.ask_revoke_profile();
-            Vec::new()
-        }
         Action::RevokeAllMcpGrants => {
-            // From the palette or the approvals: the profiles, read again, with the
-            // question of how many grants go.
+            // From the palette: the profiles, read again, with the question of how many
+            // writes stop.
             model.agents_view = crate::screen::agents::AgentsView::Profiles;
-            model.mcp_profiles.revoke_all_when_loaded = true;
+            model.mcp_profiles.when_loaded = Some(WhenLoaded::RevokeAll);
             go_to_screen(model, crate::model::Screen::Agents)
         }
         Action::McpGrantsRevoked { count } => {
             model.mcp_profiles.confirm = None;
             model.mcp_profiles.status = match count {
-                0 => "There was nothing to revoke.".to_string(),
-                1 => "Revoked 1 grant.".to_string(),
-                n => format!("Revoked {n} grants."),
+                0 => "No agent could write: nothing stopped.".to_string(),
+                1 => "Stopped 1 agent's writes on one connection.".to_string(),
+                n => format!("Stopped the writes on {n} connections."),
             };
             Vec::new()
         }
-        Action::McpRevokeFailed { message } | Action::McpProfileSaved { message } => {
+        Action::McpStatus { message } => {
             model.mcp_profiles.status = message;
             Vec::new()
         }
@@ -2644,41 +2654,32 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             command,
             project,
         } => {
-            let setup = &mut model.mcp_setup;
-            setup.clients = clients;
-            setup.command = command;
-            setup.project = project;
-            setup.selected = setup.selected.min(setup.clients.len().saturating_sub(1));
-            prepare_mcp_setup(model);
+            let agents = &mut model.mcp_clients;
+            agents.clients = clients;
+            agents.command = command;
+            agents.project = project;
             Vec::new()
-        }
-        Action::McpClientSetUp { result } => {
-            model.mcp_setup.busy = false;
-            model.mcp_setup.outcome = Some(result);
-            Vec::new()
-        }
-        Action::OpenMcpSetup => {
-            model.agents_view = crate::screen::agents::AgentsView::Setup;
-            go_to_screen(model, crate::model::Screen::Agents)
         }
         Action::McpProfilesLoaded { profiles } => {
-            // With no profile yet, the Agents screen opens on setting one up, not on an
-            // empty list of approvals.
+            // With no profile yet, the Agents screen opens on making one, not on an empty
+            // list of approvals.
             let first_time = profiles.is_empty()
                 && model.mcp_profiles.profiles.is_empty()
                 && model.screen == crate::model::Screen::Agents
                 && model.agents_view == crate::screen::agents::AgentsView::Approvals
                 && model.mcp_audit.pending.is_empty();
             model.mcp_profiles.load_profiles(profiles);
-            prepare_mcp_setup(model);
             if first_time {
-                model.agents_view = crate::screen::agents::AgentsView::Setup;
+                model.agents_view = crate::screen::agents::AgentsView::Profiles;
             }
-            if std::mem::take(&mut model.mcp_profiles.grant_when_loaded) {
-                open_grant_form(model);
-            }
-            if std::mem::take(&mut model.mcp_profiles.revoke_all_when_loaded) {
-                model.mcp_profiles.ask_revoke_all();
+            match model.mcp_profiles.when_loaded.take() {
+                Some(WhenLoaded::Writes) => open_writes_form(model),
+                Some(WhenLoaded::Agent) if model.mcp_profiles.profiles.is_empty() => {
+                    open_new_profile(model)
+                }
+                Some(WhenLoaded::Agent) => open_agent_form(model, None),
+                Some(WhenLoaded::RevokeAll) => model.mcp_profiles.ask_revoke_all(),
+                None => {}
             }
             Vec::new()
         }
@@ -2722,9 +2723,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             let profiles = &model.mcp_profiles;
             if model.screen == crate::model::Screen::Agents
                 && model.agents_view == crate::screen::agents::AgentsView::Profiles
-                && profiles.grant_form.is_none()
+                && profiles.form.is_none()
                 && profiles.confirm.is_none()
-                && profiles.checklist.is_none()
             {
                 effects.push(Effect::LoadMcpProfiles);
             }
@@ -4238,113 +4238,186 @@ fn review_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
-/// New grant's keys: the form's own (`docs/design.md`); Enter creates only on Create.
-fn grant_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    use crate::screens::mcp_profiles::FormKey;
-    let Some(form) = model.mcp_profiles.grant_form.as_mut() else {
+/// Profiles' forms' keys: each form's own (`docs/design.md`); Enter saves only on its
+/// button. Saving, a form waits for its answer: only Esc closes it.
+fn profiles_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::screens::mcp_profiles::{Form, FormKey};
+    // Connect agent's y copies the agent's own command for it.
+    if key.code == KeyCode::Char('y')
+        && let Some(Form::Agent(form)) = &model.mcp_profiles.form
+        && let Some(choice) = form.choice()
+    {
+        let (client, profile) = (choice.client, form.profile.clone());
+        return copy_agent_command(model, client, &profile);
+    }
+    let Some(form) = model.mcp_profiles.form.as_mut() else {
         return Vec::new();
     };
-    match form.key(key) {
-        FormKey::Stay => read_grant_tables(model),
-        FormKey::Submit => submit_grant_form(model),
+    if *form.busy() && key.code != KeyCode::Esc {
+        return Vec::new();
+    }
+    let outcome = match form {
+        Form::Profile(form) => form.key(key),
+        Form::Writes(form) => form.key(key),
+        Form::Agent(form) => form.key(key),
+    };
+    match outcome {
+        FormKey::Stay => read_profile_tables(model),
+        FormKey::Submit => submit_profiles_form(model),
         FormKey::Cancel => {
-            close_grant_form(model);
+            model.mcp_profiles.form = None;
             Vec::new()
         }
     }
 }
 
-/// New grant wants only some tables of a connection whose tables it has not read: they
-/// are read, from what Dexo last saw of its catalog.
-fn read_grant_tables(model: &mut Model) -> Vec<Effect> {
-    use crate::screens::mcp_profiles::{TableList, TableState};
-    let Some(form) = model.mcp_profiles.grant_form.as_mut() else {
+/// A profile that sees only some tables wants its connections' tables: they are read,
+/// from what Dexo last saw of each catalog.
+fn read_profile_tables(model: &mut Model) -> Vec<Effect> {
+    let Some(crate::screens::mcp_profiles::Form::Profile(form)) = model.mcp_profiles.form.as_mut()
+    else {
         return Vec::new();
     };
-    let Some((connection, postgres)) = form.wants_tables() else {
-        return Vec::new();
-    };
-    form.tables = Some(TableList {
-        connection: connection.clone(),
-        state: TableState::Reading,
-    });
-    vec![Effect::LoadGrantTables {
-        connection,
-        postgres,
-    }]
+    form.wants_tables()
+        .into_iter()
+        .map(|(connection, postgres)| Effect::LoadProfileTables {
+            connection,
+            postgres,
+        })
+        .collect()
 }
 
-fn submit_grant_form(model: &mut Model) -> Vec<Effect> {
-    let Some(form) = model.mcp_profiles.grant_form.as_mut() else {
+/// The form's button: what it saves, or the row that stops it.
+fn submit_profiles_form(model: &mut Model) -> Vec<Effect> {
+    use crate::screens::mcp_profiles::Form;
+    let taken = mcp_profile_names(model);
+    let Some(form) = model.mcp_profiles.form.as_mut() else {
         return Vec::new();
     };
-    match form.requests() {
-        Ok(requests) => {
-            form.error = None;
-            vec![Effect::CreateMcpGrants {
-                profile: form.profile_name(),
-                requests,
-            }]
+    match form {
+        Form::Profile(form) => match form.request(&taken) {
+            Ok(save) => {
+                form.error = None;
+                form.busy = true;
+                vec![Effect::SaveMcpProfile(save)]
+            }
+            Err((row, message)) => {
+                form.focus = row;
+                form.error = Some((row, message));
+                Vec::new()
+            }
+        },
+        Form::Writes(form) => match form.request() {
+            Ok(request) => {
+                form.error = None;
+                form.busy = true;
+                vec![Effect::CreateMcpGrant {
+                    profile: form.profile.clone(),
+                    request,
+                }]
+            }
+            Err((row, message)) => {
+                form.focus = row;
+                form.error = Some((row, message));
+                Vec::new()
+            }
+        },
+        Form::Agent(form) => match form.request() {
+            Ok((client, skill)) => {
+                form.error = None;
+                form.busy = true;
+                vec![Effect::ConnectMcpAgent {
+                    client,
+                    profile: form.profile.clone(),
+                    skill,
+                }]
+            }
+            Err(message) => {
+                form.error = Some(message);
+                Vec::new()
+            }
+        },
+    }
+}
+
+/// An agent's own command to start Dexo with `profile`, copied; or why it has none.
+fn copy_agent_command(
+    model: &mut Model,
+    client: dexo_app::mcp::clients::McpClient,
+    profile: &str,
+) -> Vec<Effect> {
+    match client.by_hand(&model.mcp_clients.command, profile) {
+        Some(text) => {
+            model.messages.info("Copied the command.".into());
+            vec![Effect::CopyToClipboard { text }]
         }
-        Err(error) => {
-            form.fail(error);
+        None => {
+            model.messages.info(format!(
+                "{} has no command of its own for it: a connects it.",
+                client.name()
+            ));
             Vec::new()
         }
     }
 }
 
 fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
-    if let Some(form) = model.mcp_profiles.grant_form.as_mut() {
-        let row = |form: &crate::screens::mcp_profiles::GrantForm, index: usize| {
-            form.rows().get(index).copied()
-        };
-        return match hit {
+    use crate::screens::mcp_profiles::{AgentRow, Form, ProfileRow, WritesRow};
+    if let Some(form) = model.mcp_profiles.form.as_mut() {
+        match hit {
             // A click on a row focuses it; on a dropdown, it opens it too.
-            Some(HitTarget::FormField(index)) => {
-                if let Some(row) = row(form, index) {
-                    let again = form.focus == row && form.open.is_some();
-                    form.focus = row;
-                    form.open = None;
-                    if !again {
-                        form.open_dropdown();
+            Some(HitTarget::FormField(index)) => match form {
+                Form::Profile(form) => {
+                    if let Some(row) = form.rows().get(index).copied() {
+                        let open = row == ProfileRow::Agent && form.open.is_none();
+                        form.focus = row;
+                        form.open = open.then_some(form.agent);
                     }
                 }
-                Vec::new()
-            }
-            Some(HitTarget::FormOption { field, option }) => {
-                if let Some(row) = row(form, field) {
-                    form.pick(row, option);
+                Form::Writes(form) => {
+                    if let Some(row) = form.rows().get(index).copied() {
+                        let open = row == WritesRow::Connection && form.open.is_none();
+                        form.focus = row;
+                        form.open = open.then_some(form.connection);
+                    }
                 }
-                read_grant_tables(model)
-            }
-            Some(HitTarget::FooterSubmit) => submit_grant_form(model),
-            Some(HitTarget::FooterCancel) => {
-                close_grant_form(model);
-                Vec::new()
-            }
-            _ => {
-                form.open = None;
-                Vec::new()
-            }
-        };
-    }
-    if model.mcp_profiles.checklist.is_some() {
-        return match hit {
-            Some(HitTarget::FormOption { option, .. }) => {
-                if let Some(checklist) = model.mcp_profiles.checklist.as_mut() {
-                    checklist.focus = crate::screens::mcp_profiles::ChecklistFocus::Grid;
-                    checklist.error = None;
-                    checklist.toggle(option);
+                Form::Agent(form) => {
+                    if let Some(row) = form.rows().get(index).copied() {
+                        let open = row == AgentRow::Agent && form.open.is_none();
+                        form.focus = row;
+                        form.open = open.then_some(form.agent);
+                    }
                 }
-                Vec::new()
-            }
-            Some(HitTarget::FooterSubmit) => save_mcp_checklist(model),
+            },
+            Some(HitTarget::FormOption { field, option }) => match form {
+                Form::Profile(form) => {
+                    if let Some(row) = form.rows().get(field).copied() {
+                        form.pick(row, option);
+                    }
+                }
+                Form::Writes(form) => {
+                    if let Some(row) = form.rows().get(field).copied() {
+                        form.pick(row, option);
+                    }
+                }
+                Form::Agent(form) => {
+                    if let Some(row) = form.rows().get(field).copied() {
+                        form.pick(row, option);
+                    }
+                }
+            },
+            Some(HitTarget::FooterSubmit) => return submit_profiles_form(model),
             Some(HitTarget::FooterCancel) => {
-                model.mcp_profiles.checklist = None;
-                Vec::new()
+                model.mcp_profiles.form = None;
+                return Vec::new();
             }
-            _ => Vec::new(),
-        };
+            _ => match form {
+                Form::Profile(form) => form.open = None,
+                Form::Writes(form) => form.open = None,
+                Form::Agent(form) => form.open = None,
+            },
+        }
+        return read_profile_tables(model);
     }
     if model.mcp_profiles.confirm.is_some() {
         return match hit {
@@ -4357,74 +4430,98 @@ fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> 
         };
     }
     match hit {
-        Some(HitTarget::ListRow(index)) => {
-            model.mcp_profiles.select_index(index);
-            Vec::new()
+        Some(HitTarget::ListRow(index)) => model.mcp_profiles.select_index(index),
+        // A connection or an agent of the sheet: the keys are on it.
+        Some(HitTarget::FormField(row)) => {
+            model.mcp_profiles.row = row;
+            model.sections[crate::model::Screen::Agents.index()] = crate::screen::Section::Detail;
         }
-        _ => Vec::new(),
+        _ => {}
     }
+    Vec::new()
 }
 
-/// The New MCP Grant form, for the profile picked -- or the first, from the palette.
-fn open_grant_form(model: &mut Model) {
-    let screen = &mut model.mcp_profiles;
-    if screen.profiles.is_empty() {
-        // A form for nobody cannot succeed; the screen says how to make a profile.
-        screen.status = "Create a profile first: dexo mcp profile create --name NAME.".into();
-        return;
-    }
-    let choices = screen
+/// The saved connections MCP serves, as Profiles' forms offer them: with their
+/// environment, and why MCP never writes to one -- production, or a policy that keeps it
+/// read-only.
+fn mcp_connection_choices(model: &Model) -> Vec<crate::screens::mcp_profiles::ConnectionChoice> {
+    model
+        .connections
         .profiles
         .iter()
-        .map(|profile| crate::screens::mcp_profiles::ProfileChoice {
-            name: profile.name.clone(),
-            connections: profile.connections.clone(),
-            grantable: profile.grantable.clone(),
-            withheld: profile.withheld.clone(),
-            sees: profile
-                .scopes
-                .iter()
-                .filter_map(|scope| scope.strip_prefix("allow ").map(str::to_string))
-                .collect(),
-        })
-        .collect();
-    let selected = screen.selected;
-    // The connections agents can use, with the environment each is marked with, and why
-    // MCP never writes to one: production, or a policy that keeps it read-only.
-    let saved = mcp_connections(model)
-        .into_iter()
-        .filter_map(|name| {
-            let row = model
-                .connections
-                .profiles
-                .iter()
-                .find(|row| row.profile.name == name)?;
-            let meta = dexo_app::mcp::McpConnection::from_profile(&row.profile);
+        .filter(|row| !row.temporary)
+        .filter_map(|row| {
+            let meta = dexo_app::mcp::McpConnection::from_profile(&row.profile).ok()?;
             Some(crate::screens::mcp_profiles::ConnectionChoice {
+                name: row.profile.name.clone(),
                 environment: row.profile.environment.clone(),
-                refused: match &meta {
-                    Ok(meta) if meta.environment == dexo_app::Environment::Production => {
-                        Some("MCP never writes to production".to_string())
-                    }
-                    Ok(meta) if meta.read_only => Some("its policy keeps it read-only".to_string()),
-                    Ok(meta) => meta.accepts_writes().err().map(|error| error.to_string()),
-                    Err(error) => Some(error.to_string()),
+                refused: if meta.environment == dexo_app::Environment::Production {
+                    Some("production never takes agents' writes".to_string())
+                } else if meta.read_only {
+                    Some("its policy keeps it read-only".to_string())
+                } else {
+                    meta.accepts_writes().err().map(|error| error.to_string())
                 },
-                postgres: meta
-                    .as_ref()
-                    .is_ok_and(|meta| meta.dialect == dexo_sql::Dialect::Postgres),
-                name,
+                postgres: meta.dialect == dexo_sql::Dialect::Postgres,
             })
         })
-        .collect();
-    model.mcp_profiles.grant_form = Some(crate::screens::mcp_profiles::GrantForm::new(
-        choices, saved, selected,
-    ));
+        .collect()
 }
 
-/// Cancel or Esc on the grant form: back to the profiles, or out, when the palette asked.
-fn close_grant_form(model: &mut Model) {
-    model.mcp_profiles.grant_form = None;
+/// New profile, on the connection in use, for the first agent here no profile starts.
+fn open_new_profile(model: &mut Model) {
+    let form = crate::screens::mcp_profiles::ProfileForm::new(
+        &mcp_profile_names(model),
+        mcp_connection_choices(model),
+        &model.connection.name,
+        crate::screens::mcp_profiles::AgentChoice::from_clients(&model.mcp_clients),
+    );
+    model.mcp_profiles.confirm = None;
+    model.mcp_profiles.form = Some(crate::screens::mcp_profiles::Form::Profile(form));
+}
+
+/// Edit, on the picked profile; the tables of its connections read when it sees only
+/// some.
+fn open_edit_profile(model: &mut Model) -> Vec<Effect> {
+    let Some(profile) = model.mcp_profiles.selected_profile() else {
+        return Vec::new();
+    };
+    let form =
+        crate::screens::mcp_profiles::ProfileForm::edit(profile, mcp_connection_choices(model));
+    model.mcp_profiles.form = Some(crate::screens::mcp_profiles::Form::Profile(form));
+    read_profile_tables(model)
+}
+
+/// Writes, for the picked profile, on the connection walked to; or why there is none.
+fn open_writes_form(model: &mut Model) {
+    let walking = crate::screen::section(model) == crate::screen::Section::Detail;
+    let screen = &mut model.mcp_profiles;
+    let on = walking
+        .then(|| screen.walked_connection(&model.mcp_clients))
+        .flatten()
+        .map(|line| line.name.clone());
+    let Some(profile) = screen.selected_profile() else {
+        screen.status = "Make a profile first: n.".into();
+        return;
+    };
+    match crate::screens::mcp_profiles::WritesForm::new(profile, on.as_deref()) {
+        Ok(form) => screen.form = Some(crate::screens::mcp_profiles::Form::Writes(form)),
+        Err(why) => screen.status = why,
+    }
+}
+
+/// Connect agent, for the picked profile, on `agent` or one it does not use yet.
+fn open_agent_form(model: &mut Model, agent: Option<dexo_app::mcp::clients::McpClient>) {
+    if model.mcp_clients.clients.is_empty() {
+        model.mcp_profiles.status = "Reading the agents' configs: a again in a moment.".into();
+        return;
+    }
+    let agents = crate::screens::mcp_profiles::AgentChoice::from_clients(&model.mcp_clients);
+    let Some(profile) = model.mcp_profiles.selected_profile() else {
+        return;
+    };
+    let form = crate::screens::mcp_profiles::AgentForm::new(profile, agents, agent);
+    model.mcp_profiles.form = Some(crate::screens::mcp_profiles::Form::Agent(form));
 }
 
 /// What the confirmation asked is done.
@@ -4435,15 +4532,11 @@ fn commit_mcp_confirm(model: &mut Model) -> Vec<Effect> {
     };
     match confirm.kind {
         McpConfirmKind::Enable(name) => {
-            model.mcp_profiles.status =
-                format!("Enabled {name}: agents can now use what it allows.");
+            model.mcp_profiles.status = format!("Enabled {name}: agents can now connect.");
             vec![Effect::SetMcpProfileEnabled {
                 name,
                 enabled: true,
             }]
-        }
-        McpConfirmKind::RevokeProfile { name, .. } => {
-            vec![Effect::RevokeMcpGrants { profile: name }]
         }
         McpConfirmKind::RevokeAll { .. } => vec![Effect::RevokeAllMcpGrants],
         McpConfirmKind::DeleteProfile(name) => vec![Effect::DeleteMcpProfile { name }],
@@ -4517,10 +4610,6 @@ fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec
     crate::screen::stop_typing(model);
     // A button: its key, pressed. A form or a question holding the keys keeps them.
     if let Some(HitTarget::Press(code, shift)) = hit {
-        // Setup's form keeps what was typed into it; its buttons act from the list.
-        if crate::screen::detail_is_form(model) {
-            model.sections[model.shown_screen().index()] = crate::screen::Section::List;
-        }
         if crate::screen::held(model).is_some() {
             return Vec::new();
         }
@@ -4565,8 +4654,7 @@ fn mouse_agents(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     {
         model.agents_view = view;
         return match view {
-            AgentsView::Profiles => vec![Effect::LoadMcpProfiles],
-            AgentsView::Setup => vec![Effect::LoadMcpClients],
+            AgentsView::Profiles => vec![Effect::LoadMcpProfiles, Effect::LoadMcpClients],
             _ => Vec::new(),
         };
     }
@@ -4579,36 +4667,7 @@ fn mouse_agents(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             Vec::new()
         }
         AgentsView::Profiles => mouse_mcp_profiles(model, hit),
-        AgentsView::Setup => mouse_mcp_setup(model, hit),
     }
-}
-
-/// A client picked from the list; a row of the form focused, or changed by its arrows;
-/// the buttons.
-fn mouse_mcp_setup(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
-    use crate::widgets::form::FooterFocus;
-    let profiles = mcp_profile_names(model);
-    let setup = &mut model.mcp_setup;
-    match hit {
-        Some(HitTarget::ListRow(index)) if index != setup.selected => {
-            setup.select(index as isize - setup.selected as isize);
-        }
-        Some(HitTarget::FormField(row)) => {
-            setup.row = row;
-            setup.footer = FooterFocus::Input;
-        }
-        Some(HitTarget::FormChoice { index, step }) => {
-            setup.row = index;
-            setup.footer = FooterFocus::Input;
-            setup.change(isize::from(step), &profiles);
-        }
-        Some(HitTarget::FooterSubmit) => return submit_mcp_setup(model),
-        Some(HitTarget::FooterCancel) => {
-            model.sections[crate::model::Screen::Agents.index()] = crate::screen::Section::List;
-        }
-        _ => {}
-    }
-    Vec::new()
 }
 
 fn mouse_mcp_audit(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
@@ -4627,7 +4686,6 @@ fn mouse_mcp_audit(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Some(HitTarget::Button(HitButton::Revoke)) => update(model, Action::RevokeAllMcpGrants),
         Some(HitTarget::FooterSubmit) => match model.mcp_audit.deciding.take() {
             Some(deciding) => vec![Effect::SettleApproval {
                 id: deciding.id,
@@ -5037,7 +5095,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
     if overlay.is_none()
         && model.screen != crate::model::Screen::Workbench
         && crate::screen::held(model).is_none()
-        && !crate::screen::detail_is_form(model)
+        && !crate::screen::detail_walks(model)
         && matches!(
             model.hits.at(mouse.column, mouse.row),
             Some(HitTarget::ScreenDetail)
@@ -5175,7 +5233,6 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             Some(HitTarget::ScreenDetail)
         );
         match model.agents_view {
-            AgentsView::Setup => model.mcp_setup.select(delta.signum() as isize),
             // The wheel over the list picks; over the request it reads on.
             AgentsView::Approvals if over_list => model.mcp_audit.select(delta.signum() as isize),
             AgentsView::Approvals => {
@@ -5186,22 +5243,16 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
                 );
             }
             AgentsView::Activity => model.mcp_audit.select_event(delta.signum() as isize),
-            // The new grant is for the profile picked when it was opened.
-            AgentsView::Profiles if model.mcp_profiles.grant_form.is_some() => {}
+            // A form is for the profile picked when it was opened.
+            AgentsView::Profiles if model.mcp_profiles.form.is_some() => {}
             AgentsView::Profiles if over_list => {
-                if delta < 0 {
-                    model.mcp_profiles.select_previous();
-                } else {
-                    model.mcp_profiles.select_next();
-                }
+                model.mcp_profiles.select(delta.signum() as isize);
             }
+            // Over the sheet it walks its connections and agents.
             AgentsView::Profiles => {
-                let scroll = u16::try_from(model.mcp_profiles.detail_scroll).unwrap_or(u16::MAX);
-                model.mcp_profiles.detail_scroll = usize::from(model.hits.scroll(
-                    crate::mouse::ScrollArea::McpProfiles,
-                    scroll,
-                    delta,
-                ));
+                model
+                    .mcp_profiles
+                    .walk(delta.signum() as isize, &model.mcp_clients);
             }
         }
         return Vec::new();
@@ -5304,7 +5355,6 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         && model.hits.folded()
         && key.modifiers.is_empty()
         && crate::screen::held(model).is_none()
-        && !crate::screen::detail_is_form(model)
         && !(model.shown_screen() == crate::model::Screen::Compare
             && model.schema_diff.source_prompt)
     {
@@ -5327,7 +5377,6 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         // On the detail Left and Right walk its buttons and Enter presses the one walked
         // to; Up and Down still read it.
         if let Some(focus) = crate::screen::button_focus(model)
-            && !crate::screen::detail_is_form(model)
             && key.modifiers.is_empty()
         {
             let buttons = crate::screen::buttons(model);
@@ -5354,7 +5403,7 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         if crate::screen::section(model) == crate::screen::Section::Detail
             && crate::screen::held(model).is_none()
-            && !crate::screen::detail_is_form(model)
+            && !crate::screen::detail_walks(model)
             && model.hits.has(HitTarget::ScreenDetail)
             && key.modifiers.is_empty()
             && let Some(delta) = reading_delta(model, key.code)
@@ -5546,6 +5595,7 @@ fn focus_section(model: &mut Model, index: usize) -> Vec<Effect> {
 /// The Agents screen's keys. None leaves the key to the keymap and Esc to going back.
 fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     use crate::screen::agents::AgentsView;
+    use crate::screens::mcp_profiles::Row;
     use crate::widgets::form::{FooterFocus, FooterKey};
     model.mcp_audit.notice = None;
     // A statement taller than its pane is read page by page, the question open or not.
@@ -5574,8 +5624,15 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     // cancels, and no letter answers, so typing at the screen cannot enable, revoke or
     // approve anything.
     match model.agents_view {
-        AgentsView::Profiles if model.mcp_profiles.grant_form.is_some() => {
-            return Some(grant_form_key(model, key));
+        AgentsView::Profiles if model.mcp_profiles.form.is_some() => {
+            if key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && !crate::widgets::text_input::TextInput::owns(&key)
+            {
+                return None;
+            }
+            return Some(profiles_form_key(model, key));
         }
         AgentsView::Profiles if model.mcp_profiles.confirm.is_some() => {
             let confirm = model.mcp_profiles.confirm.as_mut()?;
@@ -5616,19 +5673,6 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         }
         _ => {}
     }
-    // Setup's form takes the keys while it has them: its name is typed into.
-    if model.agents_view == AgentsView::Setup
-        && crate::screen::section(model) == crate::screen::Section::Detail
-    {
-        if key
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            && !crate::widgets::text_input::TextInput::owns(&key)
-        {
-            return None;
-        }
-        return Some(mcp_setup_form_key(model, key));
-    }
     // Ctrl and Alt chords are the keymap's: Ctrl+G and Ctrl+P work here too.
     if key
         .modifiers
@@ -5638,7 +5682,7 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     }
     // The views: their digits, and the brackets to step through them.
     let view = match key.code {
-        KeyCode::Char(digit @ '1'..='4') => Some(AgentsView::ALL[usize::from(digit as u8 - b'1')]),
+        KeyCode::Char(digit @ '1'..='3') => Some(AgentsView::ALL[usize::from(digit as u8 - b'1')]),
         KeyCode::Char(']') => Some(model.agents_view.step(1)),
         KeyCode::Char('[') => Some(model.agents_view.step(-1)),
         _ => None,
@@ -5646,42 +5690,12 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     if let Some(view) = view {
         model.agents_view = view;
         return Some(match view {
-            AgentsView::Profiles => vec![Effect::LoadMcpProfiles],
-            AgentsView::Setup => vec![Effect::LoadMcpClients],
+            AgentsView::Profiles => vec![Effect::LoadMcpProfiles, Effect::LoadMcpClients],
             _ => Vec::new(),
         });
     }
     let page = (model.height / 3).max(1);
     match model.agents_view {
-        AgentsView::Setup => {
-            let setup = &mut model.mcp_setup;
-            match key.code {
-                KeyCode::Up => setup.select(-1),
-                KeyCode::Down => setup.select(1),
-                KeyCode::Home => setup.select(-(setup.clients.len() as isize)),
-                KeyCode::End => setup.select(setup.clients.len() as isize),
-                // The form beside the list, from its first row.
-                KeyCode::Enter => {
-                    setup.row = 0;
-                    setup.footer = crate::widgets::form::FooterFocus::Input;
-                    model.sections[crate::model::Screen::Agents.index()] =
-                        crate::screen::Section::Detail;
-                }
-                KeyCode::Char('s') => return Some(submit_mcp_setup(model)),
-                KeyCode::Char('y') => {
-                    let Some(text) = setup
-                        .current()
-                        .and_then(|row| row.client.by_hand(&setup.command, &setup.profile_name()))
-                    else {
-                        return Some(Vec::new());
-                    };
-                    model.messages.info("Copied the command.".into());
-                    return Some(vec![Effect::CopyToClipboard { text }]);
-                }
-                _ => return None,
-            }
-            Some(Vec::new())
-        }
         AgentsView::Approvals => {
             let screen = &mut model.mcp_audit;
             match key.code {
@@ -5689,23 +5703,25 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
                 KeyCode::Down => screen.select(1),
                 KeyCode::Home => screen.select(-(screen.pending.len() as isize)),
                 KeyCode::End => screen.select(screen.pending.len() as isize),
-                // Approving runs a write: Cancel holds the focus, so an Enter out of habit
-                // decides nothing. Denying is safe, and is one Enter away.
-                KeyCode::Char(answer @ ('a' | 'd')) => {
+                // Approving runs a write: it is asked once more, a, then Enter. Denying is
+                // safe, and is done at once.
+                KeyCode::Char('a') => {
                     if let Some(request) = screen.current() {
-                        let approve = answer == 'a';
                         screen.deciding = Some(crate::screens::mcp_audit::Deciding {
                             id: request.id,
-                            approve,
-                            focus: if approve {
-                                FooterFocus::Cancel
-                            } else {
-                                FooterFocus::Submit
-                            },
+                            approve: true,
+                            focus: FooterFocus::Submit,
                         });
                     }
                 }
-                KeyCode::Char('R') => return Some(update(model, Action::RevokeAllMcpGrants)),
+                KeyCode::Char('d') => {
+                    if let Some(request) = screen.current() {
+                        return Some(vec![Effect::SettleApproval {
+                            id: request.id,
+                            approve: false,
+                        }]);
+                    }
+                }
                 _ => return None,
             }
             Some(Vec::new())
@@ -5761,66 +5777,82 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
             }
             Some(Vec::new())
         }
-        AgentsView::Profiles if model.mcp_profiles.checklist.is_some() => {
-            Some(mcp_checklist_key(model, key))
-        }
         AgentsView::Profiles => {
-            let screen = &mut model.mcp_profiles;
-            let page = usize::from(page);
+            use crate::screen::Section;
+            let at = crate::model::Screen::Agents.index();
+            let detail = crate::screen::section(model) == Section::Detail;
+            let walked = if detail {
+                model.mcp_profiles.current(&model.mcp_clients)
+            } else {
+                None
+            };
+            let empty = model.mcp_profiles.profiles.is_empty();
             match key.code {
-                KeyCode::Char('g') => return Some(update(model, Action::OpenMcpGrantForm)),
-                KeyCode::Char('c') if !screen.name.is_empty() => {
-                    let available = mcp_connections(model);
-                    let screen = &mut model.mcp_profiles;
-                    screen.checklist = Some(crate::screens::mcp_profiles::Checklist::new(
-                        &screen.name,
-                        available,
-                        &screen.connections,
-                    ));
-                    screen.status.clear();
-                }
-                KeyCode::Char('q') if !screen.name.is_empty() => {
-                    return Some(vec![Effect::SaveMcpProfileAccess {
-                        name: screen.name.clone(),
-                        connections: None,
-                        reads: Some(!screen.raw_read),
-                    }]);
-                }
-                // A new profile is made where an agent is set up with it.
-                KeyCode::Char('n') => {
-                    model.agents_view = AgentsView::Setup;
-                    model.mcp_setup.profile = None;
-                    model.mcp_setup.row = 1;
-                    model.mcp_setup.footer = crate::widgets::form::FooterFocus::Input;
-                    model.sections[crate::model::Screen::Agents.index()] =
-                        crate::screen::Section::Detail;
-                    return Some(vec![Effect::LoadMcpClients]);
-                }
-                KeyCode::Char('e') => return Some(update(model, Action::ToggleMcpProfile)),
-                KeyCode::Char('r') => return Some(update(model, Action::RevokeProfileGrants)),
-                KeyCode::Char('R') => screen.ask_revoke_all(),
-                KeyCode::Char('x') => screen.ask_delete(),
-                KeyCode::Up => screen.select_previous(),
-                KeyCode::Down => screen.select_next(),
-                KeyCode::Home => screen.select_index(0),
-                KeyCode::End => screen.select_index(usize::MAX),
-                KeyCode::PageDown | KeyCode::PageUp => {
-                    let page = i32::from(model.hits.page(
-                        crate::mouse::ScrollArea::McpProfiles,
-                        u16::try_from(page).unwrap_or(1),
-                    ));
-                    let delta = if key.code == KeyCode::PageDown {
-                        page
-                    } else {
-                        -page
+                KeyCode::Char('n') => open_new_profile(model),
+                KeyCode::Char('w') if !empty => open_writes_form(model),
+                KeyCode::Char('a') if !empty => {
+                    let agent = match walked {
+                        Some(Row::Agent(agent)) => Some(agent),
+                        _ => None,
                     };
-                    let scroll = u16::try_from(screen.detail_scroll).unwrap_or(u16::MAX);
-                    screen.detail_scroll = usize::from(model.hits.scroll(
-                        crate::mouse::ScrollArea::McpProfiles,
-                        scroll,
-                        delta,
-                    ));
+                    open_agent_form(model, agent);
                 }
+                KeyCode::Enter if !empty => return Some(open_edit_profile(model)),
+                KeyCode::Char('e') if !empty => {
+                    return Some(update(model, Action::ToggleMcpProfile));
+                }
+                KeyCode::Char('x') if !empty => model.mcp_profiles.ask_delete(),
+                KeyCode::Char('R') => model.mcp_profiles.ask_revoke_all(),
+                // r takes back the walked connection's writes, at once: taking access
+                // away needs no question.
+                KeyCode::Char('r') => {
+                    let screen = &mut model.mcp_profiles;
+                    match (walked, screen.selected_profile()) {
+                        (Some(Row::Connection(index)), Some(profile)) => {
+                            let line = &profile.connections[index];
+                            if line.access.is_some() {
+                                return Some(vec![Effect::RevokeMcpWrites {
+                                    profile: profile.name.clone(),
+                                    connection: line.name.clone(),
+                                }]);
+                            }
+                            screen.status =
+                                format!("{} may not write on {} already.", profile.name, line.name);
+                        }
+                        _ => {
+                            model
+                                .messages
+                                .info("Walk to the connection first: Tab, then r.".into());
+                        }
+                    }
+                }
+                KeyCode::Char('y') => match (walked, model.mcp_profiles.name()) {
+                    (Some(Row::Agent(agent)), Some(profile)) => {
+                        return Some(copy_agent_command(model, agent, &profile));
+                    }
+                    _ => model
+                        .messages
+                        .info("Walk to the agent first: Tab, then y.".into()),
+                },
+                KeyCode::Tab if !empty => {
+                    model.sections[at] = if detail {
+                        Section::List
+                    } else {
+                        Section::Detail
+                    };
+                }
+                KeyCode::Right if !detail && !empty => model.sections[at] = Section::Detail,
+                KeyCode::Left | KeyCode::Esc if detail => model.sections[at] = Section::List,
+                KeyCode::Up if detail => model.mcp_profiles.walk(-1, &model.mcp_clients),
+                KeyCode::Down if detail => model.mcp_profiles.walk(1, &model.mcp_clients),
+                KeyCode::Home if detail => model.mcp_profiles.row = 0,
+                KeyCode::End if detail => {
+                    model.mcp_profiles.walk(isize::MAX, &model.mcp_clients);
+                }
+                KeyCode::Up => model.mcp_profiles.select(-1),
+                KeyCode::Down => model.mcp_profiles.select(1),
+                KeyCode::Home => model.mcp_profiles.select_index(0),
+                KeyCode::End => model.mcp_profiles.select_index(usize::MAX),
                 _ => return None,
             }
             Some(Vec::new())
@@ -5836,139 +5868,6 @@ fn mcp_profile_names(model: &Model) -> Vec<String> {
         .iter()
         .map(|profile| profile.name.clone())
         .collect()
-}
-
-/// The saved connections MCP serves: Postgres and MySQL.
-fn mcp_connections(model: &Model) -> Vec<String> {
-    model
-        .connections
-        .profiles
-        .iter()
-        .filter(|row| !row.temporary)
-        .filter(|row| {
-            matches!(
-                dexo_driver_api::DriverDescriptor::family(&row.profile.driver),
-                "postgres" | "mysql"
-            )
-        })
-        .map(|row| row.profile.name.clone())
-        .collect()
-}
-
-/// The Setup form's defaults, from the profiles and the saved connections MCP serves.
-fn prepare_mcp_setup(model: &mut Model) {
-    let profiles = mcp_profile_names(model);
-    let connections = mcp_connections(model);
-    let in_use = model.connection.name.clone();
-    model.mcp_setup.prepare(&profiles, connections, &in_use);
-}
-
-/// The connections checklist: Space checks, Enter saves, Esc keeps them as they were.
-fn mcp_checklist_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    use crate::screens::mcp_profiles::FormKey;
-    let Some(checklist) = model.mcp_profiles.checklist.as_mut() else {
-        return Vec::new();
-    };
-    match checklist.key(key) {
-        FormKey::Stay => Vec::new(),
-        FormKey::Submit => save_mcp_checklist(model),
-        FormKey::Cancel => {
-            model.mcp_profiles.checklist = None;
-            Vec::new()
-        }
-    }
-}
-
-/// Saves the checked connections to the profile the form was opened on, whatever the
-/// list moved to since.
-fn save_mcp_checklist(model: &mut Model) -> Vec<Effect> {
-    let screen = &mut model.mcp_profiles;
-    let Some(checklist) = screen.checklist.as_mut() else {
-        return Vec::new();
-    };
-    let connections = checklist.checked();
-    if connections.is_empty() {
-        checklist.error = Some("check at least one connection for the agent to use".into());
-        return Vec::new();
-    }
-    let name = checklist.profile.clone();
-    screen.checklist = None;
-    vec![Effect::SaveMcpProfileAccess {
-        name,
-        connections: Some(connections),
-        reads: None,
-    }]
-}
-
-/// The Setup form's keys: Up and Down walk it, Left, Right and Space change a row, Enter
-/// goes on and sets up on [Set up]; Esc goes back to the list.
-fn mcp_setup_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    use crate::screens::mcp_setup::Row;
-    use crate::widgets::form::FooterFocus;
-    let profiles = mcp_profile_names(model);
-    let back = |model: &mut Model| {
-        model.sections[crate::model::Screen::Agents.index()] = crate::screen::Section::List;
-        model.mcp_setup.footer = FooterFocus::Input;
-    };
-    let setup = &mut model.mcp_setup;
-    let on_name = setup.focused() == Some(Row::Name);
-    match key.code {
-        KeyCode::Esc => back(model),
-        KeyCode::Up | KeyCode::BackTab => setup.move_focus(-1),
-        KeyCode::Down | KeyCode::Tab => setup.move_focus(1),
-        KeyCode::Enter if setup.footer == FooterFocus::Submit => return submit_mcp_setup(model),
-        KeyCode::Enter if setup.footer == FooterFocus::Cancel => back(model),
-        KeyCode::Enter => setup.move_focus(1),
-        KeyCode::Left | KeyCode::Right if setup.footer != FooterFocus::Input => {
-            setup.footer = if setup.footer == FooterFocus::Submit {
-                FooterFocus::Cancel
-            } else {
-                FooterFocus::Submit
-            };
-        }
-        KeyCode::Left if !on_name => setup.change(-1, &profiles),
-        KeyCode::Right | KeyCode::Char(' ') if !on_name => setup.change(1, &profiles),
-        _ if on_name => {
-            setup.name.handle_key(key);
-            setup.outcome = None;
-        }
-        _ => {}
-    }
-    Vec::new()
-}
-
-/// [Set up]: the profile and the agent's config, or why not yet.
-fn submit_mcp_setup(model: &mut Model) -> Vec<Effect> {
-    let profiles = mcp_profile_names(model);
-    let setup = &mut model.mcp_setup;
-    if setup.busy {
-        return Vec::new();
-    }
-    let Some(row) = setup.current().cloned() else {
-        return Vec::new();
-    };
-    if let dexo_app::mcp::clients::ClientState::Unusable(why) = &row.state {
-        setup.outcome = Some(Err(format!(
-            "{} is left as it is: {why}. Fix it or move it away, then set up again.",
-            row.path
-        )));
-        return Vec::new();
-    }
-    match setup.request(&profiles) {
-        Err(message) => {
-            setup.outcome = Some(Err(message));
-            Vec::new()
-        }
-        Ok(profile) => {
-            setup.busy = true;
-            setup.outcome = None;
-            vec![Effect::SetUpMcpClient {
-                client: row.client,
-                profile,
-                skill: setup.skill && row.skill.is_some(),
-            }]
-        }
-    }
 }
 
 /// The context a pending chord's next key is looked up in.
@@ -15996,20 +15895,21 @@ mod tests {
             "{screen}"
         );
         assert!(screen.contains("Left        2 min"), "{screen}");
+        // Enter alone approves nothing: a asks first, with Approve focused.
+        assert!(update(&mut model, key(KeyCode::Enter)).is_empty());
         update(&mut model, key(KeyCode::Char('a')));
-        assert!(
-            update(&mut model, key(KeyCode::Enter)).is_empty(),
-            "Enter alone approved"
-        );
-        update(&mut model, key(KeyCode::Char('a')));
-        update(&mut model, key(KeyCode::Left));
+        assert!(model.mcp_audit.deciding.is_some());
         assert!(matches!(
             update(&mut model, key(KeyCode::Enter)).as_slice(),
             [Effect::SettleApproval { id, approve: true }] if *id == request.id
         ));
-        update(&mut model, key(KeyCode::Char('d')));
+        // Esc on the question approves nothing either.
+        update(&mut model, key(KeyCode::Char('a')));
+        assert!(update(&mut model, key(KeyCode::Esc)).is_empty());
+        assert!(model.mcp_audit.deciding.is_none());
+        // Denying is safe, and is done at once.
         assert!(matches!(
-            update(&mut model, key(KeyCode::Enter)).as_slice(),
+            update(&mut model, key(KeyCode::Char('d'))).as_slice(),
             [Effect::SettleApproval { approve: false, .. }]
         ));
         assert!(matches!(
@@ -16018,10 +15918,11 @@ mod tests {
         ));
     }
 
-    /// MCP Profiles makes a grant the way `dexo mcp grant create` does, "ask before each
-    /// write" included: the form asks for the request the CLI's `--ask` makes.
+    /// Profiles' Writes makes the request `dexo mcp grant create` makes, every write asking;
+    /// Enter on a row moves on, and only the button saves; a refusal lands on its row.
     #[test]
-    fn a_grant_that_asks_is_made_from_mcp_profiles() {
+    fn writes_are_given_from_mcp_profiles() {
+        use crate::screens::mcp_profiles::{ConnectionLine, Form, McpProfileSummary, WritesRow};
         let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
         let mut model = Model::default();
         model.connection.name = "local".into();
@@ -16029,82 +15930,61 @@ mod tests {
         update(
             &mut model,
             Action::McpProfilesLoaded {
-                profiles: vec![crate::screens::mcp_profiles::McpProfileSummary {
+                profiles: vec![McpProfileSummary {
                     name: "assistant".into(),
                     enabled: true,
-                    connections: vec!["local".into()],
-                    scopes: vec!["allow db.public.*".into()],
-                    grantable: vec!["data_insert".into(), "data_update".into()],
+                    connections: vec![ConnectionLine {
+                        name: "local".into(),
+                        ..ConnectionLine::default()
+                    }],
+                    scopes: vec!["allow *".into()],
+                    kinds: dexo_app::mcp::WriteKind::ALL.to_vec(),
                     ..Default::default()
                 }],
             },
         );
-        update(&mut model, key(KeyCode::Char('g')));
-        assert!(model.mcp_profiles.grant_form.is_some());
-        let tab = |model: &mut Model| update(model, key(KeyCode::Tab));
-        let typed = |model: &mut Model, text: &str| {
-            for ch in text.chars() {
-                update(model, key(KeyCode::Char(ch)));
-            }
-        };
-        // Profile and connection are already what this grant is.
-        tab(&mut model);
-        tab(&mut model);
-        // The first tool; the tables are everything the profile sees.
-        update(&mut model, key(KeyCode::Char(' ')));
-        tab(&mut model);
-        tab(&mut model);
-        tab(&mut model);
-        // "ask before each write", then its timeout, then the confirmation.
-        update(&mut model, key(KeyCode::Char(' ')));
-        tab(&mut model);
-        for _ in 0..3 {
-            update(&mut model, key(KeyCode::Backspace));
-        }
-        typed(&mut model, "90");
-        tab(&mut model);
-        typed(&mut model, "local");
-        // Enter on a field moves on; it creates only on Create.
+        update(&mut model, key(KeyCode::Char('w')));
+        assert!(matches!(model.mcp_profiles.form, Some(Form::Writes(_))));
+        // Rows are checked; on to how long, then past Cancel to the button.
+        update(&mut model, key(KeyCode::Tab));
         assert!(update(&mut model, key(KeyCode::Enter)).is_empty());
-        tab(&mut model);
-        let form = model.mcp_profiles.grant_form.as_ref().unwrap();
-        assert!(form.ask && form.how().contains("each write waits for you"));
+        update(&mut model, key(KeyCode::Tab));
         let effects = update(&mut model, key(KeyCode::Enter));
         let expected = dexo_app::mcp::GrantRequest {
             connection: "local".into(),
             kinds: vec![dexo_app::mcp::WriteKind::Rows],
-            expires: "15m".into(),
-            ask_secs: Some(90),
+            expires: "1h".into(),
+            ask_secs: None,
         };
         assert!(
             matches!(
                 effects.as_slice(),
-                [Effect::CreateMcpGrants { profile, requests }]
-                    if profile == "assistant" && *requests == [expected.clone()]
+                [Effect::CreateMcpGrant { profile, request }]
+                    if profile == "assistant" && *request == expected
             ),
             "{effects:?}"
         );
         update(
             &mut model,
-            Action::McpGrantFailed {
-                message: "connection is not allowed for this profile".into(),
+            Action::McpFormDone {
+                result: Err("the profile does not use the connection local".into()),
             },
         );
-        let form = model.mcp_profiles.grant_form.as_ref().expect("stays open");
-        assert!(form.error.as_ref().is_some_and(|(row, message)| *row
-            == crate::screens::mcp_profiles::GrantRow::Connection
-            && message.contains("not allowed")));
+        let Some(Form::Writes(form)) = &model.mcp_profiles.form else {
+            panic!("stays open");
+        };
+        assert!(form.error.as_ref().is_some_and(
+            |(row, message)| *row == WritesRow::Connection && message.contains("does not use")
+        ));
         update(&mut model, key(KeyCode::Esc));
-        assert!(
-            model.mcp_profiles.grant_form.is_none() && model.screen == crate::model::Screen::Agents
-        );
+        assert!(model.mcp_profiles.form.is_none() && model.screen == crate::model::Screen::Agents);
         let entry = crate::palette::palette_entries(&model)
             .into_iter()
             .find(|entry| entry.id == "mcp.grant")
             .expect("in the palette");
         assert_eq!(
             entry.shortcut, None,
-            "`g` is not a key outside MCP Profiles"
+            "`w` is not a key outside MCP Profiles"
         );
     }
 

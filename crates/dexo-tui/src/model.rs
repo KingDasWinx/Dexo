@@ -2127,8 +2127,8 @@ pub struct Model {
     pub security: SecurityScreen,
     pub admin: AdminScreen,
     pub mcp_profiles: McpProfilesScreen,
-    /// Agents' Setup view: an agent pointed at Dexo's MCP server.
-    pub mcp_setup: crate::screens::mcp_setup::McpSetup,
+    /// The agents Dexo can start for, as their configs say.
+    pub mcp_clients: crate::screens::mcp_clients::McpClients,
     pub connection_form: ConnectionForm,
     pub connections: ConnectionsScreen,
     pub projects: ProjectsScreen,
@@ -2299,7 +2299,7 @@ impl Default for Model {
             security: SecurityScreen::default(),
             admin: AdminScreen::default(),
             mcp_profiles: McpProfilesScreen::default(),
-            mcp_setup: Default::default(),
+            mcp_clients: Default::default(),
             connection_form: ConnectionForm::default(),
             connections: ConnectionsScreen::default(),
             projects: ProjectsScreen::default(),

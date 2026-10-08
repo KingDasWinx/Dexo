@@ -3,25 +3,7 @@ source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
  Workbench  Connections [Agents] Server  History  Plugins   default  no connection  —                                                                           
-[1 Approvals]  2 Activity   3 Profiles   4 Setup                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                                                                                                                                
-                                                            No agent's write is waiting for approval.                                                           
-                                           An agent writing under a grant that asks first waits here for your answer.                                           
-                                                                                                                                                                
-                                                                      [R Revoke all grants]                                                                     
+[1 Approvals]  2 Activity   3 Profiles                                                                                                                          
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 
@@ -37,6 +19,8 @@ expression: "render_to_string(&model, 160, 50)"
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 
+                                                                      No write is waiting.                                                                      
+                                                           assistant may write on local, 15 min left.                                                           
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 
@@ -51,4 +35,20 @@ expression: "render_to_string(&model, 160, 50)"
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 
-Agents  Up/Down pick  PgUp/PgDn read  1-4 views  Esc back                                                                                             Ctrl+P  F1
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+                                                                                                                                                                
+Agents  Up/Down pick  PgUp/PgDn read  1-3 views  Esc back                                                                                             Ctrl+P  F1
