@@ -34,10 +34,15 @@ impl DexoMcpServer {
         input: &impl Serialize,
         cancel: CancellationToken,
     ) -> CallToolResult {
-        let arguments = serde_json::to_value(input)
+        let mut arguments = serde_json::to_value(input)
             .ok()
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
+        if name == "data_execute_sql"
+            && let Err(error) = take_script_file(&mut arguments)
+        {
+            return crate::error::app_error(&error);
+        }
         // A write waits for a person first, before the connection is taken: the session
         // stays free for other calls while it waits.
         let approved = match self.inner.router.resolve(connection.as_deref()) {
@@ -310,6 +315,72 @@ fn confirmed(name: &str, arguments: &Map<String, Value>) -> Result<(), AppError>
         "admin_terminate_session" => session_confirmed(arguments),
         _ => Ok(()),
     }
+}
+
+/// The most a script file may hold.
+const MAX_SCRIPT_FILE_BYTES: u64 = 1024 * 1024;
+
+/// A script given as `file` becomes its `sql`, read once: what the person approves, and
+/// what an operation id is held to, is what runs, not the file as it is by then.
+fn take_script_file(arguments: &mut Map<String, Value>) -> Result<(), AppError> {
+    let invalid = |why: &str| AppError::new(ErrorCategory::Configuration, why);
+    let sql = arguments.get("sql").and_then(Value::as_str);
+    let file = arguments.get("file").and_then(Value::as_str);
+    match (sql, file) {
+        (Some(_), Some(_)) => Err(invalid("pass sql or file, not both")),
+        (None, None) => Err(invalid(
+            "pass sql, or file: a .sql file in the project folder",
+        )),
+        (Some(_), None) => Ok(()),
+        (None, Some(file)) => {
+            let places = dexo_app::mcp::clients::Places::discover()?;
+            let script = read_script(&places.project, &places.home, file)?;
+            arguments.insert("sql".into(), Value::String(script));
+            Ok(())
+        }
+    }
+}
+
+/// A `.sql` file inside the folder the server was started in -- the project an agent
+/// works in -- so the errors a script's parse reports are no way to read the rest of the
+/// disk. A server started in `/` or the home folder has no project folder to read from.
+fn read_script(
+    project: &std::path::Path,
+    home: &std::path::Path,
+    file: &str,
+) -> Result<String, AppError> {
+    let invalid = |why: String| AppError::new(ErrorCategory::Configuration, why);
+    let refused = || {
+        invalid(format!(
+            "{file} is not a .sql file in the project folder {}",
+            project.display()
+        ))
+    };
+    let root = std::fs::canonicalize(project).map_err(|_| refused())?;
+    if root.parent().is_none() || std::fs::canonicalize(home).is_ok_and(|home| home == root) {
+        return Err(invalid(format!(
+            "the server was started in {}, not in a project folder: pass the statements as sql",
+            root.display()
+        )));
+    }
+    // Resolved first, links and `..` included, so the checks are on the file that is read.
+    let real = std::fs::canonicalize(root.join(file)).map_err(|_| refused())?;
+    let is_sql = real
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("sql"));
+    if !real.starts_with(&root) || !is_sql || !real.is_file() {
+        return Err(refused());
+    }
+    let size = std::fs::metadata(&real).map_err(|_| refused())?.len();
+    if size > MAX_SCRIPT_FILE_BYTES {
+        return Err(invalid(format!(
+            "{file} holds {size} bytes; a script file holds 1 MiB at most"
+        )));
+    }
+    let bytes = std::fs::read(&real)
+        .map_err(|error| AppError::new(ErrorCategory::Storage, format!("{file}: {error}")))?;
+    String::from_utf8(bytes).map_err(|_| invalid(format!("{file} is not UTF-8 text")))
 }
 
 /// What the audit names a write by: its `target`, or for a script that gave none, the
@@ -1419,6 +1490,62 @@ mod tests {
             payload_hash(&json!({"values":{"id":7,"name":"x"},"target":"t"})),
             payload_hash(&json!({"target":"t","values":{"name":"x","id":7}}))
         );
+    }
+
+    /// A script file is read from the project folder only: not through `..`, not through
+    /// a link out of it, not one that is not .sql, and not at all when the server runs in
+    /// the home folder, where everything would be "the project".
+    #[test]
+    fn a_script_file_comes_from_the_project_folder_only() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("shop");
+        std::fs::create_dir_all(project.join("db")).unwrap();
+        std::fs::write(project.join("db/seed.sql"), "insert into items values (1);").unwrap();
+        std::fs::write(project.join("notes.txt"), "not sql").unwrap();
+        std::fs::write(home.path().join("secret.sql"), "select 1").unwrap();
+        let read = |file: &str| super::read_script(&project, home.path(), file);
+        assert_eq!(
+            read("db/seed.sql").unwrap(),
+            "insert into items values (1);"
+        );
+        for file in ["../secret.sql", "notes.txt", "db/missing.sql", "db"] {
+            let error = read(file).unwrap_err().to_string();
+            assert!(
+                error.contains("is not a .sql file in the project folder"),
+                "{file}: {error}"
+            );
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(home.path().join("secret.sql"), project.join("link.sql"))
+                .unwrap();
+            assert!(read("link.sql").is_err());
+        }
+        std::fs::write(project.join("big.sql"), vec![b' '; 1024 * 1024 + 1]).unwrap();
+        assert!(
+            read("big.sql")
+                .unwrap_err()
+                .to_string()
+                .contains("1 MiB at most")
+        );
+        let at_home = super::read_script(home.path(), home.path(), "secret.sql");
+        assert!(
+            at_home
+                .unwrap_err()
+                .to_string()
+                .contains("not in a project folder")
+        );
+        // One of the two, never both, never neither.
+        for arguments in [
+            json!({"sql": "delete from items", "file": "db/seed.sql"}),
+            json!({"sql": null, "file": null}),
+        ] {
+            let mut arguments = arguments.as_object().cloned().unwrap();
+            assert!(
+                super::take_script_file(&mut arguments).is_err(),
+                "{arguments:?}"
+            );
+        }
     }
 
     /// A seed is one call: every statement in one transaction, committed once.

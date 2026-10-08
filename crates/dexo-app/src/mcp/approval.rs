@@ -169,7 +169,11 @@ pub fn answer(
 /// The SQL a call carries, or its arguments in one line when it carries none.
 fn statement_of(arguments: &serde_json::Map<String, serde_json::Value>) -> String {
     if let Some(sql) = arguments.get("sql").and_then(serde_json::Value::as_str) {
-        return sql.trim().to_string();
+        // A script read from a file says which, above what it read.
+        return match arguments.get("file").and_then(serde_json::Value::as_str) {
+            Some(file) => format!("-- {file}\n{}", sql.trim()),
+            None => sql.trim().to_string(),
+        };
     }
     let shown: serde_json::Map<String, serde_json::Value> = arguments
         .iter()

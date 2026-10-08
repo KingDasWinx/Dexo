@@ -69,8 +69,10 @@ pub struct DataSqlInput {
     pub operation_id: String,
     /// What the audit names this change by; the tables it touches when left out. Every table the SQL touches must be one the profile sees.
     pub target: Option<String>,
-    /// One or more INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements separated by `;`, run as one transaction: all of them, or none if one fails. One approval covers the whole script.
-    pub sql: String,
+    /// One or more INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements separated by `;`, run as one transaction: all of them, or none if one fails. One approval covers the whole script. Pass this or `file`.
+    pub sql: Option<String>,
+    /// A .sql file to run instead of `sql`, by its path inside the project folder the server was started in, at most 1 MiB. It is read once: what is approved is what runs.
+    pub file: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
