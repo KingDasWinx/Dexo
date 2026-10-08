@@ -50,12 +50,13 @@ Every database tool takes an optional `connection`; it is required only when the
 | `object_relationships` | What the object depends on and what depends on it | Always |
 | `data_read` | One page of a table or view, without SQL | Always |
 | `schema_diff` | Differences between two snapshots saved with `dexo schema snapshot` of the connection named | Always |
+| `schema_overview` | Every table and view of a schema at once: columns with type, nullability and default, keys, foreign keys and checks, and the estimated row count -- or the exact one with `exact_counts` (200 tables at most) | Always |
 | `query_validate` | Whether `query_execute_read` would accept a statement, and why not | Raw-read profiles |
 | `query_explain` | Estimated plan of one read, without ANALYZE; `hypothetical_indexes` plans as if those indexes were built (Postgres with hypopg), each on a table the profile may read | Raw-read profiles |
 | `query_execute_read` | One read-only statement, returned as a table | Raw-read profiles |
 | `admin_list_sessions` | Server sessions, without their query text | With `--allow-tool admin_list_sessions`, or while the profile may end `sessions` |
 | `data_insert`, `data_update`, `data_delete` | One row, identified by the table's real key | While the profile may change `rows` |
-| `data_execute_sql` | One INSERT, UPDATE or DELETE | While the profile may change `rows` |
+| `data_execute_sql` | A script of INSERT, UPDATE, DELETE and, on Postgres, TRUNCATE statements, as one transaction -- given as `sql`, or as `file`, a .sql file in the project folder | While the profile may change `rows` |
 | `schema_apply_ddl` | One CREATE TABLE, ALTER TABLE, DROP, CREATE INDEX or CREATE VIEW | While the profile may change the `schema` |
 | `admin_cancel_query`, `admin_terminate_session` | Cancel or end one server session | While the profile may end `sessions` |
 
@@ -103,6 +104,9 @@ The TUI gives the same access on the Agents screen's Profiles view: `w` on one o
 - Write access is given on a connection the profile uses, and covers everything the profile sees there; it can never reach an object the profile denies. A SQL write or DDL statement has every table it touches held to the profile -- a DDL that adds a foreign key, the table it references too.
 - A profile has at most one write access per connection: a new one replaces the old, and the writes waiting under the old one are denied.
 - It lasts `--expires`: 15 minutes by default, 24 hours at most, or `never`, until it is revoked. Revoking hides the tools at once and denies the writes waiting under it.
+- `data_execute_sql` runs a script -- a whole seed -- in one call: its statements run between BEGIN and COMMIT, each as it was written and checked, and one that fails rolls back all of them and is named by number, so nothing is left half written. A transaction never stays open between calls. One approval covers the whole script, and Approvals shows every statement of it.
+- `file` names a `.sql` file inside the folder the server was started in (the project folder, where an agent such as Claude Code starts it), at most 1 MiB, instead of `sql`. It is read once, and Approvals shows it under its name: what is approved is what runs. A path out of the folder, by `..` or by a link, and a server started in `/` or the home folder, are refused.
+- `TRUNCATE` is a change of `rows` on Postgres, where the script's transaction rolls it back, with every table it names held to the profile; `CASCADE` is refused, since it empties tables the statement does not name. On MySQL it commits on its own and is refused: use `DELETE FROM`.
 - Every write waits for a person. The server records the request -- the SQL or DDL, or the call's arguments, and the tables -- and waits, without holding the connection, until it is approved or denied on the TUI's Agents screen (`Ctrl+G a` or `Ctrl+Alt+A`), or until `--approval-timeout` seconds (120 by default, 1 to 3600) pass, which refuses it. On Approvals, `a` then Enter approves, and `d` denies at once. Once decided, the request keeps no SQL, and it is deleted after a day. A request is withdrawn when its agent stops waiting -- the call is cancelled, or the server stops or is killed -- and the Agents screen says so instead of approving it. The TUI says when a request arrives while you are on another screen, and counts the waiting ones beside Agents on its top line.
 - Production connections, and connections whose own policy is read-only, never accept an MCP write, write access or not. An unknown environment label counts as production.
 - Destructive DDL needs `confirm_target` equal to `target`, and ending a session `confirm_target` equal to `session_id`, typed by the client; without it the write is refused before anyone is asked to approve it. MySQL commits DDL implicitly, and the result says so.
@@ -118,7 +122,7 @@ Every tool call writes one event: the tool, decision, status code, duration, row
 - The grant commands changed: `grant create` takes `--allow rows,schema,sessions`, and `grant revoke` takes `--connection`. Write access needs a connection the profile lists.
 - Write access given before the redesign is revoked when the new version first opens the database; give it again where it is still wanted.
 - An older `dexo` refuses a database a newer one wrote, and leaves it as it is, instead of moving it aside. `dexo doctor` names any copy an earlier version moved aside (`dexo.db.unsupported-v*`).
-- The tool schema is v4: `catalog_list` has an `id` column, and `schema_diff` takes `connection`.
+- The tool schema is v4: `catalog_list` has an `id` column, `schema_diff` takes `connection`, `schema_overview` is new, and `data_execute_sql` takes a script as `sql` or `file`, with `target` optional.
 
 ## Limits of the allowlist
 
