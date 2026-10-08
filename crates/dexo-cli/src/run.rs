@@ -2082,11 +2082,7 @@ async fn mcp_serve(registry: DriverRegistry, name: String) -> anyhow::Result<()>
         })?;
         connections.push(McpConnection::from_profile(&found)?);
     }
-    drop(db);
-    let backend = std::sync::Arc::new(crate::mcp_backend::CliMcpBackend::new(
-        registry,
-        paths.database.clone(),
-    ));
+    let backend = std::sync::Arc::new(crate::mcp_backend::CliMcpBackend::new(registry, db));
     let ledger = std::sync::Arc::new(SqliteGrantLedger::open(&paths.database)?);
     dexo_mcp::serve_stdio(McpService::new(profile), connections, backend, ledger).await
 }

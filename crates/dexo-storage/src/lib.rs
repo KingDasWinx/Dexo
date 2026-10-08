@@ -24,7 +24,7 @@ pub use connection::{
     ConnectionRepository, ImportPreview, ImportReport, ImportResolution, commands_of,
     export_portable, import_portable, import_portable_resolved, preview_import,
 };
-pub use database::{AppPaths, Database};
+pub use database::{AppPaths, Database, leftover_archives};
 pub use document::{DocumentRepository, FileFingerprint, StoredDocument, has_external_conflict};
 pub use explain_plan::{ExplainPlanRepository, SavedExplainPlan};
 pub use history::{HistoryOutcome, HistoryRepository, HistoryRow, NewHistoryEntry};

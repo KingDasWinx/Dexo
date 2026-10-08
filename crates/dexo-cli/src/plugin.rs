@@ -350,10 +350,20 @@ pub fn summary(json: bool) -> anyhow::Result<()> {
         .iter()
         .filter(|checkup| !checkup.problems.is_empty())
         .count();
+    // Copies an earlier Dexo moved aside when it met a newer database: the person's data,
+    // named so they can be looked at and deleted, never deleted here.
+    let archives: Vec<String> = dexo_storage::leftover_archives(&data_dir)
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
     if json {
         println!(
             "{}",
-            json!({"status": "ok", "plugins": {"installed": checkups.len(), "problems": problems}})
+            json!({
+                "status": "ok",
+                "plugins": {"installed": checkups.len(), "problems": problems},
+                "database_archives": archives,
+            })
         );
     } else {
         println!("Dexo: ok");
@@ -364,6 +374,12 @@ pub fn summary(json: bool) -> anyhow::Result<()> {
             );
         } else {
             println!("Plugins: {} installed", checkups.len());
+        }
+        if !archives.is_empty() {
+            println!(
+                "Old copies of the database, moved aside by an earlier Dexo: {}. Each holds what was written before it was moved; delete them once nothing in them is needed.",
+                archives.join(", ")
+            );
         }
     }
     Ok(())
