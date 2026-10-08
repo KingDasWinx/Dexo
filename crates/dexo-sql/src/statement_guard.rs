@@ -1,8 +1,8 @@
 use std::ops::ControlFlow;
 
 use sqlparser::ast::{
-    BinaryOperator, Expr, ObjectName, ObjectNamePart, Query, Select, Statement, TableFactor, Visit,
-    Visitor,
+    AlterTableOperation, BinaryOperator, ColumnDef, ColumnOption, Expr, ObjectName, ObjectNamePart,
+    Query, Select, Statement, TableConstraint, TableFactor, Visit, Visitor,
 };
 use sqlparser::dialect::{DuckDbDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
@@ -39,6 +39,8 @@ pub enum GuardRejection {
     Function(String),
     #[error("assigning a variable (:=) is not a read")]
     Assignment,
+    #[error("Unicode-escaped identifiers (U&\"...\") are not allowed")]
+    UnicodeEscape,
 }
 
 /// Functions with side effects, or that run SQL passed as text and so would slip past the
@@ -107,6 +109,7 @@ const DENIED_FUNCTIONS: &[&str] = &[
     "pg_sleep_for",
     "pg_sleep_until",
     "nextval",
+    "currval",
     "setval",
     "pg_notify",
     "dblink",
@@ -190,15 +193,53 @@ pub fn inspect_data_write(sql: &str, dialect: Dialect) -> Result<Inspection, Gua
     guard.finish(Vec::new())
 }
 
+/// The tables a table's constraints and columns point at: sqlparser visits no foreign
+/// key's `REFERENCES` name as a relation, so a schema write is held to the tables it
+/// couples to by naming them here.
+fn referenced_tables<'a>(
+    constraints: impl IntoIterator<Item = &'a TableConstraint>,
+    columns: impl IntoIterator<Item = &'a ColumnDef>,
+) -> Vec<ObjectName> {
+    let from_constraints = constraints
+        .into_iter()
+        .filter_map(|constraint| match constraint {
+            TableConstraint::ForeignKey(key) => Some(key.foreign_table.clone()),
+            _ => None,
+        });
+    let from_columns = columns
+        .into_iter()
+        .flat_map(|column| &column.options)
+        .filter_map(|option| match &option.option {
+            ColumnOption::ForeignKey(key) => Some(key.foreign_table.clone()),
+            _ => None,
+        });
+    from_constraints.chain(from_columns).collect()
+}
+
 /// A single `CREATE TABLE`, `ALTER TABLE`, `DROP`, `CREATE INDEX` or `CREATE VIEW`.
-/// sqlparser does not visit `DROP` names or a view's own name as relations, so those are
-/// added here explicitly.
+/// sqlparser does not visit `DROP` names, a view's own name or the table a foreign key
+/// references as relations, so those are added here explicitly.
 pub fn inspect_schema_write(sql: &str, dialect: Dialect) -> Result<Inspection, GuardRejection> {
     let statement = parse_one(sql, dialect)?;
     let named: Vec<ObjectName> = match &statement {
-        Statement::CreateTable(_) | Statement::AlterTable(_) | Statement::CreateIndex(_) => {
-            Vec::new()
-        }
+        Statement::CreateTable(table) => referenced_tables(&table.constraints, &table.columns),
+        Statement::AlterTable(alter) => referenced_tables(
+            alter
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    AlterTableOperation::AddConstraint { constraint, .. } => Some(constraint),
+                    _ => None,
+                }),
+            alter
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    AlterTableOperation::AddColumn { column_def, .. } => Some(column_def),
+                    _ => None,
+                }),
+        ),
+        Statement::CreateIndex(_) => Vec::new(),
         Statement::Drop { names, .. } => names.clone(),
         Statement::CreateView(view) => vec![view.name.clone()],
         _ => return Err(GuardRejection::WrongKind),
@@ -566,7 +607,41 @@ fn executable_comment(text: &str) -> bool {
     text.contains("/*!") || text.to_ascii_lowercase().contains("/*m!")
 }
 
+/// Whether `sql` holds a Postgres Unicode-escaped identifier or string, `U&"..."` or
+/// `U&'...'`, in any case, outside an ordinary quote. sqlparser keeps the raw spelling --
+/// it reads `U&"f"(x)` as `U & f(x)` -- while the server decodes it, so a denied name
+/// written that way slipped every list.
+// ponytail: refuses every U& escape rather than decoding one; decode in `path()` if an
+// agent ever needs to name an object that way.
+fn has_unicode_escape(sql: &str) -> bool {
+    let bytes = sql.as_bytes();
+    let mut quote: Option<u8> = None;
+    for (index, &byte) in bytes.iter().enumerate() {
+        match quote {
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None => match byte {
+                b'\'' | b'"' | b'`' => quote = Some(byte),
+                b'U' | b'u'
+                    if bytes.get(index + 1) == Some(&b'&')
+                        && matches!(bytes.get(index + 2), Some(b'"' | b'\''))
+                        && !index.checked_sub(1).is_some_and(|before| {
+                            bytes[before].is_ascii_alphanumeric() || bytes[before] == b'_'
+                        }) =>
+                {
+                    return true;
+                }
+                _ => {}
+            },
+        }
+    }
+    false
+}
+
 fn parse_one(sql: &str, dialect: Dialect) -> Result<Statement, GuardRejection> {
+    if matches!(dialect, Dialect::Postgres | Dialect::Duckdb) && has_unicode_escape(sql) {
+        return Err(GuardRejection::UnicodeEscape);
+    }
     let sql = &*crate::statement::line_ends(sql, dialect);
     let mut statements = match dialect {
         Dialect::Postgres => Parser::parse_sql(&PostgreSqlDialect {}, sql),
@@ -960,6 +1035,60 @@ mod tests {
         assert_eq!(
             reads("explain select * from stores"),
             vec![path(&["stores"])]
+        );
+    }
+
+    #[test]
+    fn unicode_escaped_identifiers_are_refused() {
+        // sqlparser reads `U&"f"(x)` as `U & f(x)` and keeps the name raw; Postgres
+        // decodes it, so every denied function was one escape away.
+        for sql in [
+            r#"select U&"pg\005fread\005ffile"('/etc/hostname')"#,
+            r#"select u&"pg_sleep"(1)"#,
+            r#"select U&'\0041' as a"#,
+            r#"select * from U&"stores""#,
+        ] {
+            assert_eq!(refused(sql), GuardRejection::UnicodeEscape, "{sql}");
+            assert_eq!(
+                inspect_data_write(sql, Dialect::Postgres).unwrap_err(),
+                GuardRejection::UnicodeEscape,
+                "{sql}"
+            );
+        }
+        // Inside a string or a quoted name it is text, not an escape.
+        assert!(inspect_read("select 'U&\"x\"' from stores", Dialect::Postgres).is_ok());
+        assert_eq!(
+            refused(r#"select "PG_READ_FILE"('/etc/hostname')"#),
+            GuardRejection::Function("pg_read_file".into())
+        );
+        assert_eq!(
+            refused("select currval('s')"),
+            GuardRejection::Function("currval".into())
+        );
+    }
+
+    /// A foreign key couples a table to the one it references: a schema write is held to
+    /// the referenced table too.
+    #[test]
+    fn foreign_key_targets_are_schema_write_targets() {
+        let ddl = |sql: &str| {
+            inspect_schema_write(sql, Dialect::Postgres)
+                .unwrap()
+                .relations
+        };
+        assert_eq!(
+            ddl("alter table a add constraint fk foreign key (x) references secret(id)"),
+            vec![path(&["a"]), path(&["secret"])]
+        );
+        assert_eq!(
+            ddl("alter table a add column y int references secret(id)"),
+            vec![path(&["a"]), path(&["secret"])]
+        );
+        assert_eq!(
+            ddl(
+                "create table a (x int references secret(id), y int, constraint fk2 foreign key (y) references other(id))"
+            ),
+            vec![path(&["a"]), path(&["other"]), path(&["secret"])]
         );
     }
 
