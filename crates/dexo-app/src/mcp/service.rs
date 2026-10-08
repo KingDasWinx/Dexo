@@ -4,7 +4,7 @@ use dexo_driver_api::{
     CatalogObject, DataRequest, ExplainPlan, ExplainRequest, ObjectKind, Page, QueryEvent,
     QueryRequest, Session, TransactionMode,
 };
-use dexo_sql::{GuardRejection, inspect_data_write, inspect_read, inspect_schema_write};
+use dexo_sql::{GuardRejection, inspect_data_script, inspect_read, inspect_schema_write};
 use futures_util::StreamExt;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -50,13 +50,21 @@ impl McpService {
         })
     }
 
+    /// Every table a script of data writes touches, each held to the profile.
     pub fn data_write_targets(
         &self,
         connection: &McpConnection,
         sql: &str,
     ) -> Result<Vec<ObjectRef>, AppError> {
-        let inspection = inspect_data_write(sql, connection.dialect).map_err(guard_error)?;
-        self.authorize_relations(connection, &inspection.relations)
+        let relations: Vec<Vec<String>> = inspect_data_script(sql, connection.dialect)
+            .map_err(guard_error)?
+            .into_iter()
+            .flat_map(|statement| statement.inspection.relations)
+            .collect();
+        let mut targets = self.authorize_relations(connection, &relations)?;
+        targets.sort_by_key(ToString::to_string);
+        targets.dedup();
+        Ok(targets)
     }
 
     pub fn schema_write_targets(
@@ -68,15 +76,68 @@ impl McpService {
         self.authorize_relations(connection, &inspection.relations)
     }
 
-    /// Runs one authorized INSERT/UPDATE/DELETE to completion. The old adapter dropped
-    /// the stream unread, so a constraint violation was reported as "sql applied".
-    pub async fn execute_write(
+    /// Runs an authorized script of data writes as one transaction: every statement, or
+    /// none -- a seed that failed on its tenth table left nine filled. Each statement runs
+    /// as it was written and inspected, to completion, and `stop` is asked between them:
+    /// write access taken back while it runs rolls the whole script back. The rows each
+    /// statement changed, in order.
+    pub async fn execute_script(
         &self,
         session: &dyn Session,
         connection: &McpConnection,
         sql: &str,
-    ) -> Result<u64, AppError> {
-        self.data_write_targets(connection, sql)?;
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<u64>, AppError> {
+        let statements = inspect_data_script(sql, connection.dialect).map_err(guard_error)?;
+        let relations: Vec<Vec<String>> = statements
+            .iter()
+            .flat_map(|statement| statement.inspection.relations.clone())
+            .collect();
+        self.authorize_relations(connection, &relations)?;
+        let transactions = session.transactions().ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Capability,
+                "this connection cannot run a script as one transaction",
+            )
+        })?;
+        transactions
+            .begin(TransactionMode::ReadWrite)
+            .await
+            .map_err(map_driver_error)?;
+        let total = statements.len();
+        let mut affected = Vec::with_capacity(total);
+        for (at, statement) in statements.iter().enumerate() {
+            let outcome = if stop() {
+                Err(AppError::new(
+                    ErrorCategory::McpPolicy,
+                    "write access was taken back while it ran",
+                ))
+            } else {
+                self.run_write(session, &statement.sql).await
+            };
+            match outcome {
+                Ok(rows) => affected.push(rows),
+                Err(error) => {
+                    let _ = transactions.rollback().await;
+                    let place = if total == 1 {
+                        String::new()
+                    } else {
+                        format!("statement {} of {total}: ", at + 1)
+                    };
+                    return Err(AppError::new(
+                        error.category(),
+                        format!("{place}{error}; nothing was written"),
+                    ));
+                }
+            }
+        }
+        transactions.commit().await.map_err(map_driver_error)?;
+        Ok(affected)
+    }
+
+    /// One statement, to completion: the old adapter dropped the stream unread, so a
+    /// constraint violation was reported as "sql applied".
+    async fn run_write(&self, session: &dyn Session, sql: &str) -> Result<u64, AppError> {
         let mut request = QueryRequest::write(sql);
         request.timeout = Duration::from_secs(self.profile.limits.timeout_secs);
         let mut stream = session.execute(request).await.map_err(map_driver_error)?;
@@ -429,8 +490,11 @@ fn hidden() -> AppError {
 /// SQL that does not parse, or is not one statement, is the agent's to fix; the rest is
 /// the policy saying no.
 fn guard_error(rejection: GuardRejection) -> AppError {
-    let category = match rejection {
-        GuardRejection::Unparsed(_) | GuardRejection::NotSingleStatement => ErrorCategory::Syntax,
+    let category = match rejection.cause() {
+        GuardRejection::Unparsed(_)
+        | GuardRejection::NotSingleStatement
+        | GuardRejection::NoStatement
+        | GuardRejection::TooManyStatements => ErrorCategory::Syntax,
         _ => ErrorCategory::McpPolicy,
     };
     AppError::new(category, rejection.to_string())

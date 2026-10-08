@@ -168,10 +168,7 @@ impl DexoMcpServer {
             id: approval.id,
         };
         let mut beat = now;
-        let target = arguments
-            .get("target")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let target = &audit_target(arguments, &targets);
         let grant_id = grant.id.to_string();
         let operation = arguments.get("operation_id").and_then(Value::as_str);
         audit(
@@ -315,6 +312,19 @@ fn confirmed(name: &str, arguments: &Map<String, Value>) -> Result<(), AppError>
     }
 }
 
+/// What the audit names a write by: its `target`, or for a script that gave none, the
+/// tables it touches.
+fn audit_target(arguments: &Map<String, Value>, targets: &[ObjectRef]) -> String {
+    match arguments.get("target").and_then(Value::as_str) {
+        Some(target) if !target.is_empty() => target.to_string(),
+        _ => targets
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+}
+
 /// The tables a write touches: those its SQL or DDL names, or the one it targets.
 fn write_targets(
     service: &McpService,
@@ -391,7 +401,7 @@ impl DexoMcpServer {
             .await
     }
 
-    /// Run one INSERT, UPDATE or DELETE. Appears while a person has let this profile change rows; every table it touches must be one the profile sees, and every call waits for their approval.
+    /// Run a script of INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements as one transaction -- a whole seed in one call, all of it or none of it. Appears while a person has let this profile change rows; every table it touches must be one the profile sees, and the call waits for one approval of the whole script.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
     async fn data_execute_sql(
         &self,
@@ -491,10 +501,7 @@ pub async fn call_write_tool(
         .get("operation_id")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::new(ErrorCategory::Configuration, "operation_id is required"))?;
-    let target_name = arguments
-        .get("target")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let mut target_name = audit_target(&arguments, &[]);
     if let Some(existing) = ledger.lookup_operation(&service.profile.name, session_id, operation_id)
     {
         let replayed =
@@ -504,7 +511,7 @@ pub async fn call_write_tool(
             service,
             name,
             Some(operation_id),
-            target_name,
+            &target_name,
             "replay",
             None,
             &replayed.result,
@@ -514,6 +521,7 @@ pub async fn call_write_tool(
         return Ok(replayed.result);
     }
     let targets = write_targets(service, connection, name, &arguments)?;
+    target_name = audit_target(&arguments, &targets);
     let grants = ledger.active_grants(&service.profile.name, now);
     let grant =
         covering_grant(&grants, name, connection, &targets, service, now).ok_or_else(|| {
@@ -522,7 +530,7 @@ pub async fn call_write_tool(
                 service,
                 name,
                 Some(operation_id),
-                target_name,
+                &target_name,
                 "deny",
                 None,
                 "not found",
@@ -544,7 +552,7 @@ pub async fn call_write_tool(
             service,
             name,
             Some(operation_id),
-            target_name,
+            &target_name,
             "deny",
             Some(&grant.id.to_string()),
             "the approval no longer stands",
@@ -564,7 +572,7 @@ pub async fn call_write_tool(
             service,
             name,
             Some(operation_id),
-            target_name,
+            &target_name,
             "deny",
             Some(&grant.id.to_string()),
             "waits for approval",
@@ -593,7 +601,7 @@ pub async fn call_write_tool(
             service,
             name,
             Some(operation_id),
-            target_name,
+            &target_name,
             "replay",
             Some(&grant.id.to_string()),
             &reserved.result,
@@ -640,7 +648,7 @@ pub async fn call_write_tool(
         service,
         name,
         Some(operation_id),
-        target_name,
+        &target_name,
         "allow",
         Some(&grant.id.to_string()),
         &result,
@@ -708,7 +716,7 @@ async fn execute(
     value: &Value,
     session: &dyn Session,
     connection: &McpConnection,
-    cancelled: impl Fn() -> bool,
+    cancelled: impl Fn() -> bool + Sync,
 ) -> Result<(SideEffect, String), AppError> {
     match name {
         "data_insert" | "data_update" | "data_delete" => {
@@ -723,13 +731,25 @@ async fn execute(
                 return Ok((SideEffect::RolledBack, "rolled_back".into()));
             }
             let sql = value.get("sql").and_then(Value::as_str).unwrap_or_default();
-            let affected = service.execute_write(session, connection, sql).await?;
+            let affected = service
+                .execute_script(session, connection, sql, &cancelled)
+                .await?;
+            let rows: u64 = affected.iter().sum();
+            let plural = |count: u64| if count == 1 { "" } else { "s" };
             Ok((
                 SideEffect::Committed,
-                format!(
-                    "{affected} row{} affected",
-                    if affected == 1 { "" } else { "s" }
-                ),
+                match affected.len() {
+                    1 => format!("{rows} row{} affected", plural(rows)),
+                    statements => format!(
+                        "{statements} statements in one transaction, {rows} row{} affected ({})",
+                        plural(rows),
+                        affected
+                            .iter()
+                            .map(u64::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                },
             ))
         }
         "schema_apply_ddl" => apply_ddl(value, session, connection, cancelled()).await,
@@ -1399,6 +1419,80 @@ mod tests {
             payload_hash(&json!({"values":{"id":7,"name":"x"},"target":"t"})),
             payload_hash(&json!({"target":"t","values":{"name":"x","id":7}}))
         );
+    }
+
+    /// A seed is one call: every statement in one transaction, committed once.
+    #[tokio::test]
+    async fn a_script_runs_as_one_transaction() {
+        let ledger = MemoryGrantLedger::default();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
+        let session = FakeSession::default();
+        let result = call_on(
+            &ledger,
+            &session,
+            "local",
+            "data_execute_sql",
+            json!({"operation_id":"op-seed","sql":"insert into items values (1);\ninsert into items values (2);\ntruncate orders"}),
+        )
+        .await
+        .unwrap();
+        assert!(
+            result.contains("3 statements in one transaction"),
+            "{result}"
+        );
+        assert_eq!(
+            session.log(),
+            [
+                "begin ReadWrite",
+                "execute insert into items values (1)",
+                "execute insert into items values (2)",
+                "execute truncate orders",
+                "commit"
+            ]
+        );
+    }
+
+    /// One statement that fails rolls back every one before it: the seed is all there or
+    /// not at all, and the agent is told which statement it was.
+    #[tokio::test]
+    async fn a_failed_statement_rolls_the_whole_script_back() {
+        let ledger = MemoryGrantLedger::default();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
+        let session = FakeSession::default().failing_on("values (2)");
+        let error = call_on(
+            &ledger,
+            &session,
+            "local",
+            "data_execute_sql",
+            json!({"operation_id":"op-half","sql":"insert into items values (1); insert into items values (2); insert into items values (3)"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().starts_with("statement 2 of 3:")
+                && error.to_string().ends_with("nothing was written"),
+            "{error}"
+        );
+        let log = session.log();
+        assert_eq!(log.last().map(String::as_str), Some("rollback"), "{log:?}");
+        assert!(!log.iter().any(|entry| entry == "commit"), "{log:?}");
+        assert!(
+            !log.iter().any(|entry| entry.contains("values (3)")),
+            "{log:?}"
+        );
+        // One statement on a hidden table hides the whole script, before anything runs.
+        let hidden = FakeSession::default();
+        let error = call_on(
+            &ledger,
+            &hidden,
+            "local",
+            "data_execute_sql",
+            json!({"operation_id":"op-hidden","sql":"insert into items values (1); delete from secrets"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "not found");
+        assert!(hidden.log().is_empty());
     }
 
     #[tokio::test]

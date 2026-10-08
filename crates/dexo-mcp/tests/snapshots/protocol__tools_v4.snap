@@ -210,7 +210,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Run one INSERT, UPDATE or DELETE. Appears while a person has let this profile change rows; every table it touches must be one the profile sees, and every call waits for their approval.",
+    "description": "Run a script of INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements as one transaction -- a whole seed in one call, all of it or none of it. Appears while a person has let this profile change rows; every table it touches must be one the profile sees, and the call waits for one approval of the whole script.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -226,17 +226,19 @@ expression: client.tools().await
           "type": "string"
         },
         "sql": {
-          "description": "One INSERT, UPDATE or DELETE.",
+          "description": "One or more INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements separated by `;`, run as one transaction: all of them, or none if one fails. One approval covers the whole script.",
           "type": "string"
         },
         "target": {
-          "description": "The table the grant was issued for. Every table the statement touches must be inside the grant.",
-          "type": "string"
+          "description": "What the audit names this change by; the tables it touches when left out. Every table the SQL touches must be one the profile sees.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "operation_id",
-        "target",
         "sql"
       ],
       "type": "object"

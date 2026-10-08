@@ -67,9 +67,9 @@ pub struct DataSqlInput {
     pub connection: Option<String>,
     /// Unique id for this change. Retrying with the same id and payload returns the first result instead of writing twice.
     pub operation_id: String,
-    /// The table the grant was issued for. Every table the statement touches must be inside the grant.
-    pub target: String,
-    /// One INSERT, UPDATE or DELETE.
+    /// What the audit names this change by; the tables it touches when left out. Every table the SQL touches must be one the profile sees.
+    pub target: Option<String>,
+    /// One or more INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements separated by `;`, run as one transaction: all of them, or none if one fails. One approval covers the whole script.
     pub sql: String,
 }
 

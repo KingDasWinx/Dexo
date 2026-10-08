@@ -18,6 +18,7 @@ pub struct FakeSession {
     keys: Vec<ColumnKeyInfo>,
     catalog: Vec<CatalogObject>,
     hang: bool,
+    fail_on: Option<String>,
 }
 
 impl FakeSession {
@@ -35,6 +36,12 @@ impl FakeSession {
             hang: true,
             ..Self::default()
         }
+    }
+
+    /// `execute` refuses a statement holding `fragment`, as a server refusing it.
+    pub fn failing_on(mut self, fragment: &str) -> Self {
+        self.fail_on = Some(fragment.into());
+        self
     }
 
     pub fn with_keys(mut self, keys: Vec<ColumnKeyInfo>) -> Self {
@@ -78,6 +85,16 @@ impl Session for FakeSession {
 
     async fn execute(&self, request: QueryRequest) -> Result<QueryStream, DriverError> {
         self.record(format!("execute {}", request.sql));
+        if self
+            .fail_on
+            .as_deref()
+            .is_some_and(|fragment| request.sql.contains(fragment))
+        {
+            return Err(DriverError::new(
+                dexo_driver_api::DriverErrorCategory::Conflict,
+                "duplicate key value violates a unique constraint",
+            ));
+        }
         // A session setting answers; the query after it is the one that hangs.
         if self.hang && !request.sql.starts_with("SET ") {
             return Ok(Box::pin(futures_util::stream::pending::<
