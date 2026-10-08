@@ -1603,6 +1603,11 @@ fn mcp_allow(name: &str, selector: &str, deny: bool, remove: bool) -> anyhow::Re
     let mut profile = load_profile(&repo, name)?;
     let effect = if deny { Effect::Deny } else { Effect::Allow };
     let rule = SelectorRule::parse(effect, selector)?;
+    if selector.chars().any(|ch| ch.is_ascii_uppercase()) {
+        println!(
+            "note: a selector is matched exactly as written; Postgres keeps an unquoted name in lowercase, so {selector} matches only a name created with quotes"
+        );
+    }
     if remove {
         let before = profile.selectors.len();
         profile.selectors.retain(|existing| existing != &rule);
@@ -1915,11 +1920,11 @@ fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Re
                 "would write {}:
 {}",
                 skill_path.display(),
-                skill_text(client, name)
+                skill_text(client, &profile)
             );
         }
     } else {
-        let done = client.set_up(&places, &exe, name, skill)?;
+        let done = client.set_up(&places, &exe, &profile, skill)?;
         match done.written {
             Written::Unchanged => println!("already set up: {}", done.config.display()),
             Written::Created => println!("wrote {}", done.config.display()),

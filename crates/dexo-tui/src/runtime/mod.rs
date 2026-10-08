@@ -2809,7 +2809,13 @@ impl WorkbenchRuntime {
             ) else {
                 return Vec::new();
             };
-            let _ = ledger.revoke_profile(&name);
+            // Taken back through the ledger first, so the audit says who could write until
+            // when; the delete takes back anything left in its own transaction.
+            if let Err(error) = ledger.revoke_profile(&name) {
+                return vec![Action::McpStatus {
+                    message: error.to_string(),
+                }];
+            }
             match dexo_storage::McpProfileRepository::new(db.connection()).delete(&name) {
                 Ok(_) => std::iter::once(Action::McpProfileDeleted { name })
                     .chain(mcp_profiles_loaded())
@@ -3170,7 +3176,7 @@ fn save_mcp_profile(
         }
     }
     if let Some((client, skill)) = save.agent {
-        lines.extend(write_agent_config(client, &save.name, skill)?);
+        lines.extend(write_agent_config(client, &profile, skill)?);
     }
     Ok(lines)
 }
@@ -3195,14 +3201,14 @@ fn connect_mcp_agent(
         repo.save(&profile).map_err(|error| error.to_string())?;
         lines.push(format!("✓ {name} enabled"));
     }
-    lines.extend(write_agent_config(client, name, skill)?);
+    lines.extend(write_agent_config(client, &profile, skill)?);
     Ok(lines)
 }
 
 /// The agent's config, and its skill file, written to start Dexo with `profile`.
 fn write_agent_config(
     client: dexo_app::mcp::clients::McpClient,
-    profile: &str,
+    profile: &dexo_app::mcp::McpProfile,
     skill: bool,
 ) -> Result<Vec<String>, String> {
     use dexo_app::mcp::clients::{McpClient, Places, dexo_command};

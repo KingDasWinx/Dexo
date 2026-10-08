@@ -1,6 +1,6 @@
-mod approval_repo;
+pub(crate) mod approval_repo;
 mod audit_repo;
-mod grant_repo;
+pub(crate) mod grant_repo;
 mod operation_repo;
 
 use std::path::Path;

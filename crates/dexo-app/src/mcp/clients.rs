@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, ErrorCategory};
+use crate::mcp::profile::McpProfile;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum McpClient {
@@ -213,10 +214,10 @@ impl McpClient {
         self,
         places: &Places,
         command: &str,
-        profile: &str,
+        profile: &McpProfile,
         skill: bool,
     ) -> Result<SetUp, AppError> {
-        let args: Vec<String> = ["mcp", "serve", "--profile", profile]
+        let args: Vec<String> = ["mcp", "serve", "--profile", &profile.name]
             .map(String::from)
             .to_vec();
         let config = self.config_path(places);
@@ -336,6 +337,11 @@ impl McpClient {
             _ => {
                 let value = serde_json::from_str::<serde_json::Value>(contents)
                     .map_err(|error| unparsed(error.to_string()))?;
+                // Setup merges into an object only: anything else is left alone from the
+                // start, not offered as a file to set up and then refused.
+                if !value.is_object() {
+                    return Err(unparsed("its root is not an object".into()));
+                }
                 let key = if self == Self::VsCode {
                     "servers"
                 } else {
@@ -645,7 +651,31 @@ pub fn write_with_backup(path: &Path, contents: &str) -> Result<Written, AppErro
 }
 
 /// What an agent should know before it uses Dexo's tools.
-pub fn skill_text(client: McpClient, profile: &str) -> String {
+pub fn skill_text(client: McpClient, profile: &McpProfile) -> String {
+    let tools = crate::mcp::advertised_tools(profile);
+    let has = |tool: &str| tools.contains(&tool);
+    let mut reading = vec![
+        "- `list_connections` names the connections you may use; pass `connection` when there is
+  more than one.",
+        "- `catalog_search` and `catalog_list` find tables and columns; `object_describe` gives a
+  table's columns, keys and the notes people wrote about it -- read the notes, they say
+  what the data means. `object_get_ddl` and `object_relationships` give the rest.",
+    ];
+    if has("query_execute_read") {
+        reading.push(
+            "- `query_validate` checks a statement first; `query_execute_read` runs reads only, with a
+  row limit; `query_explain` shows a plan, and can try hypothetical indexes on Postgres.",
+        );
+    }
+    reading.push("- `data_read` pages through a table.");
+    if has("schema_diff") {
+        reading.push("- `schema_diff` compares two schema snapshots the person saved.");
+    }
+    if has("admin_list_sessions") {
+        reading.push("- `admin_list_sessions` lists the server's sessions.");
+    }
+    let reading = reading.join("\n");
+    let profile = &profile.name;
     let front = match client {
         McpClient::Cursor => "---\ndescription: Using Dexo's MCP tools on the user's databases\nalwaysApply: false\n---\n".to_string(),
         _ => "---\nname: dexo\ndescription: How to use Dexo's MCP tools on the user's databases -- read-only by default, writes only through grants a person makes.\n---\n".to_string(),
@@ -659,14 +689,7 @@ through the connections the profile `{profile}` allows, and nothing else.
 
 ## Reading
 
-- `list_connections` names the connections you may use; pass `connection` when there is
-  more than one.
-- `catalog_search` and `catalog_list` find tables and columns; `object_describe` gives a
-  table's columns, keys and the notes people wrote about it -- read the notes, they say
-  what the data means. `object_get_ddl` and `object_relationships` give the rest.
-- `query_validate` checks a statement first; `query_execute_read` runs reads only, with a
-  row limit; `query_explain` shows a plan, and can try hypothetical indexes on Postgres.
-- `data_read` pages through a table.
+{reading}
 
 ## Writing
 
@@ -1017,12 +1040,25 @@ mod tests {
     /// fixed time.
     #[test]
     fn the_skill_names_no_fixed_wait() {
-        let text = super::skill_text(McpClient::ClaudeCode, "agent");
+        let text = super::skill_text(McpClient::ClaudeCode, &crate::mcp::McpProfile::new("agent"));
         assert!(!text.contains("two minutes"), "{text}");
         assert!(
             text.contains("the wait the person set on the grant"),
             "{text}"
         );
+    }
+
+    /// The skill names the tools the profile is offered: a structured-only one is not told
+    /// to run SQL, and the snapshot diff is named.
+    #[test]
+    fn the_skill_names_the_profiles_own_tools() {
+        let mut profile = crate::mcp::McpProfile::new("agent");
+        let structured = super::skill_text(McpClient::ClaudeCode, &profile);
+        assert!(!structured.contains("query_execute_read"), "{structured}");
+        assert!(structured.contains("schema_diff"), "{structured}");
+        profile.query_mode = crate::mcp::QueryMode::RawReadSql;
+        let raw = super::skill_text(McpClient::ClaudeCode, &profile);
+        assert!(raw.contains("query_execute_read"), "{raw}");
     }
 
     /// A config names the `dexo` on PATH when it is the running binary through a link, as
@@ -1088,7 +1124,12 @@ mod tests {
         assert_eq!(McpClient::ClaudeCode.state(&places), ClientState::NotSetUp);
 
         let done = McpClient::ClaudeCode
-            .set_up(&places, "/bin/dexo", "assistant", true)
+            .set_up(
+                &places,
+                "/bin/dexo",
+                &crate::mcp::McpProfile::new("assistant"),
+                true,
+            )
             .unwrap();
 
         assert_eq!(done.config, places.project.join(".mcp.json"));
@@ -1112,7 +1153,12 @@ mod tests {
         ));
         assert!(
             McpClient::Codex
-                .set_up(&places, "/bin/dexo", "assistant", false)
+                .set_up(
+                    &places,
+                    "/bin/dexo",
+                    &crate::mcp::McpProfile::new("assistant"),
+                    false,
+                )
                 .is_err(),
             "a file it cannot read is left alone"
         );

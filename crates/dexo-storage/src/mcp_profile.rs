@@ -17,7 +17,9 @@ impl<'a> McpProfileRepository<'a> {
         profile
             .validate()
             .map_err(|error| anyhow::anyhow!("{error}"))?;
-        self.conn.execute(
+        // One transaction: a profile is never left with its row saved and its rules gone.
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO mcp_profiles (
                 id, name, enabled, persistent_access, max_rows, max_bytes, timeout_secs,
                 max_concurrency, query_mode, audit_retention_days, connections_json
@@ -48,17 +50,17 @@ impl<'a> McpProfileRepository<'a> {
                 serde_json::to_string(&profile.connections)?,
             ],
         )?;
-        self.conn.execute(
+        tx.execute(
             "DELETE FROM mcp_selectors WHERE profile_id = ?1",
             params![profile.id.to_string()],
         )?;
-        self.conn.execute(
+        tx.execute(
             "DELETE FROM mcp_tool_rules WHERE profile_id = ?1",
             params![profile.id.to_string()],
         )?;
         for rule in &profile.selectors {
             let pattern = rule.selector.to_string();
-            self.conn.execute(
+            tx.execute(
                 "INSERT INTO mcp_selectors (id, profile_id, effect, pattern) VALUES (?1, ?2, ?3, ?4)",
                 params![
                     Uuid::new_v4().to_string(),
@@ -72,7 +74,7 @@ impl<'a> McpProfileRepository<'a> {
             )?;
         }
         for rule in &profile.tool_rules {
-            self.conn.execute(
+            tx.execute(
                 "INSERT INTO mcp_tool_rules (id, profile_id, tool, allowed) VALUES (?1, ?2, ?3, ?4)",
                 params![
                     Uuid::new_v4().to_string(),
@@ -82,25 +84,31 @@ impl<'a> McpProfileRepository<'a> {
                 ],
             )?;
         }
+        tx.commit()?;
         Ok(())
     }
 
-    /// Removes a profile, its selectors and its tool rules. False when there was none.
+    /// Removes a profile, its selectors and its tool rules, and takes back its write access
+    /// and denies its waiting writes in the same transaction: a profile made later with the
+    /// name inherits none of them. False when there was none.
     pub fn delete(&self, name: &str) -> anyhow::Result<bool> {
         let Some(profile) = self.get_by_name(name)? else {
             return Ok(false);
         };
         let id = profile.id.to_string();
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        crate::mcp::grant_repo::revoke_profile(&tx, name)?;
+        crate::mcp::approval_repo::deny_revoked(&tx)?;
+        tx.execute(
             "DELETE FROM mcp_selectors WHERE profile_id = ?1",
             params![id],
         )?;
-        self.conn.execute(
+        tx.execute(
             "DELETE FROM mcp_tool_rules WHERE profile_id = ?1",
             params![id],
         )?;
-        self.conn
-            .execute("DELETE FROM mcp_profiles WHERE id = ?1", params![id])?;
+        tx.execute("DELETE FROM mcp_profiles WHERE id = ?1", params![id])?;
+        tx.commit()?;
         Ok(true)
     }
 
@@ -211,9 +219,27 @@ mod tests {
         let mut profile = McpProfile::new("assistant");
         profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
         repo.save(&profile).unwrap();
+        let mut granted = profile.clone();
+        granted.connections = vec!["local".into()];
+        let grant = dexo_app::mcp::Grant::new(
+            &granted,
+            "local",
+            &[dexo_app::mcp::WriteKind::Rows],
+            0,
+            dexo_app::mcp::grant::DEFAULT_TTL_SECS,
+            120,
+        )
+        .unwrap();
+        crate::mcp::grant_repo::insert(db.connection(), &grant).unwrap();
         assert!(repo.delete("assistant").unwrap());
         assert!(repo.get_by_name("assistant").unwrap().is_none());
         assert!(!repo.delete("assistant").unwrap());
+        // A profile made again with the name inherits no write access.
+        assert!(
+            crate::mcp::grant_repo::list_active(db.connection(), "assistant", 0)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
