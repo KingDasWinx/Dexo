@@ -2,6 +2,7 @@ use dexo_app::data::{ChangeSet, RowIdentity, TableMeta, mutations_for};
 use dexo_app::error::{AppError, ErrorCategory};
 use dexo_app::mcp::approval::{Approval, ApprovalDecision};
 use dexo_app::mcp::audit::{AuditEvent, SqlAuditMode};
+use dexo_app::mcp::bypass::{operations_of, operations_words};
 use dexo_app::mcp::grant::Grant;
 use dexo_app::mcp::ledger::GrantLedger;
 use dexo_app::mcp::operation::{OperationRecord, OperationState, SideEffect, payload_hash};
@@ -58,7 +59,7 @@ impl DexoMcpServer {
         // A call the agent cancelled does not run, approved or not: rmcp only cancels
         // the token, and the handler goes on unless it looks.
         if cancel.is_cancelled() {
-            if approved.is_some() {
+            if matches!(approved, Some(Clearance::Approved(_))) {
                 audit(
                     self.inner.ledger.as_ref(),
                     &self.inner.service,
@@ -123,7 +124,7 @@ impl DexoMcpServer {
         connection: &McpConnection,
         arguments: &Map<String, Value>,
         cancel: &CancellationToken,
-    ) -> Result<Option<uuid::Uuid>, AppError> {
+    ) -> Result<Option<Clearance>, AppError> {
         let service = &self.inner.service;
         let ledger = self.inner.ledger.as_ref();
         let now = now_secs();
@@ -151,6 +152,26 @@ impl DexoMcpServer {
         if confirmed(name, arguments).is_err() || connection.accepts_writes().is_err() {
             return Ok(None);
         }
+        let target = &audit_target(arguments, &targets);
+        let grant_id = grant.id.to_string();
+        let operation = arguments.get("operation_id").and_then(Value::as_str);
+        // What the person let run without asking runs; the rest is put to them.
+        let operations = operations_of(name, arguments, connection.dialect);
+        if grant.bypasses(&operations) {
+            audit(
+                ledger,
+                service,
+                name,
+                operation,
+                target,
+                "bypass",
+                Some(&grant_id),
+                &format!("ran without asking: {}", operations_words(&operations)),
+                now,
+                None,
+            );
+            return Ok(Some(Clearance::Bypassed));
+        }
         let mut approval = Approval::pending(
             &service.profile.name,
             &connection.name,
@@ -161,6 +182,20 @@ impl DexoMcpServer {
             grant.ask_secs,
         );
         approval.grant = grant.id;
+        // Some of it would have run without asking: the person sees what they are asked
+        // about.
+        let asked: Vec<_> = operations
+            .iter()
+            .copied()
+            .filter(|operation| !grant.bypass.contains(operation))
+            .collect();
+        if !grant.bypass.is_empty() && !asked.is_empty() {
+            approval.statement = format!(
+                "-- asks for: {} (the rest runs without asking)\n{}",
+                operations_words(&asked),
+                approval.statement
+            );
+        }
         // A request cannot outlive the grant that would run it.
         approval.deadline = approval.deadline.min(grant.expires_at);
         let waits = approval.deadline - approval.created_at;
@@ -173,9 +208,6 @@ impl DexoMcpServer {
             id: approval.id,
         };
         let mut beat = now;
-        let target = &audit_target(arguments, &targets);
-        let grant_id = grant.id.to_string();
-        let operation = arguments.get("operation_id").and_then(Value::as_str);
         audit(
             ledger,
             service,
@@ -232,7 +264,7 @@ impl DexoMcpServer {
                         now,
                         None,
                     );
-                    return Ok(Some(approval.id));
+                    return Ok(Some(Clearance::Approved(approval.id)));
                 }
                 ApprovalDecision::Pending if now < approval.deadline => continue,
                 // Past the deadline it is settled as expired -- unless a person decided
@@ -322,6 +354,14 @@ const MAX_SCRIPT_FILE_BYTES: u64 = 1024 * 1024;
 
 /// A script given as `file` becomes its `sql`, read once: what the person approves, and
 /// what an operation id is held to, is what runs, not the file as it is by then.
+/// Why a write may run: a person approved its request, or its write access lets its
+/// operations run without asking.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Clearance {
+    Approved(uuid::Uuid),
+    Bypassed,
+}
+
 fn take_script_file(arguments: &mut Map<String, Value>) -> Result<(), AppError> {
     let invalid = |why: &str| AppError::new(ErrorCategory::Configuration, why);
     let sql = arguments.get("sql").and_then(Value::as_str);
@@ -440,7 +480,7 @@ fn covering_grant(
 
 #[tool_router(router = write_tools, vis = "pub(crate)")]
 impl DexoMcpServer {
-    /// Insert one row. Appears while a person has let this profile change rows on a connection; every call waits for their approval on Dexo's Agents screen.
+    /// Insert one row. Appears while a person has let this profile change rows on a connection; each call waits for their approval on Dexo's Agents screen, unless they let it run without asking.
     #[tool(annotations(read_only_hint = false, destructive_hint = false))]
     async fn data_insert(
         &self,
@@ -451,7 +491,7 @@ impl DexoMcpServer {
             .await
     }
 
-    /// Update the one row named by `identity`. Appears while a person has let this profile change rows; every call waits for their approval.
+    /// Update the one row named by `identity`. Appears while a person has let this profile change rows; each call waits for their approval unless they let it run without asking.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
     async fn data_update(
         &self,
@@ -462,7 +502,7 @@ impl DexoMcpServer {
             .await
     }
 
-    /// Delete the one row named by `identity`. Appears while a person has let this profile change rows; every call waits for their approval.
+    /// Delete the one row named by `identity`. Appears while a person has let this profile change rows; each call waits for their approval unless they let it run without asking.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
     async fn data_delete(
         &self,
@@ -473,7 +513,7 @@ impl DexoMcpServer {
             .await
     }
 
-    /// Run a script of INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements as one transaction -- a whole seed in one call, all of it or none of it. Appears while a person has let this profile change rows; every table it touches must be one the profile sees, and the call waits for one approval of the whole script.
+    /// Run a script of INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements as one transaction -- a whole seed in one call, all of it or none of it. Appears while a person has let this profile change rows; every table it touches must be one the profile sees, and the call waits for one approval of the whole script, unless they let all of it run without asking.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
     async fn data_execute_sql(
         &self,
@@ -484,7 +524,7 @@ impl DexoMcpServer {
             .await
     }
 
-    /// Apply one DDL statement. Appears while a person has let this profile change the schema; every call waits for their approval. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.
+    /// Apply one DDL statement. Appears while a person has let this profile change the schema; each call waits for their approval unless they let it run without asking. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
     async fn schema_apply_ddl(
         &self,
@@ -495,7 +535,7 @@ impl DexoMcpServer {
             .await
     }
 
-    /// Cancel the running query of one server session. Appears while a person has let this profile end sessions on this connection; every call waits for their approval.
+    /// Cancel the running query of one server session. Appears while a person has let this profile end sessions on this connection; each call waits for their approval unless they let it run without asking.
     #[tool(annotations(read_only_hint = false, destructive_hint = false))]
     async fn admin_cancel_query(
         &self,
@@ -511,7 +551,7 @@ impl DexoMcpServer {
         .await
     }
 
-    /// Terminate one server session. Appears while a person has let this profile end sessions on this connection; every call waits for their approval, and needs `confirm_target` equal to `session_id`.
+    /// Terminate one server session. Appears while a person has let this profile end sessions on this connection; each call waits for their approval unless they let it run without asking, and needs `confirm_target` equal to `session_id`.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
     async fn admin_terminate_session(
         &self,
@@ -541,7 +581,7 @@ pub async fn call_write_tool(
     name: &str,
     arguments: Map<String, Value>,
     now: i64,
-    approved: Option<uuid::Uuid>,
+    approved: Option<Clearance>,
 ) -> Result<String, AppError> {
     if is_grant_management(name) {
         audit(
@@ -613,12 +653,24 @@ pub async fn call_write_tool(
         })?;
     confirmed(name, &arguments)?;
     // An approval stands only for the grant it was given under, and only while it is still
-    // approved: a revoke between the answer and the run denies it.
-    if let Some(id) = approved
-        && !ledger.approval(id).is_some_and(|approval| {
+    // approved: a revoke between the answer and the run denies it. A write let through
+    // without asking is let through only while the access still lets it.
+    let stands = match approved {
+        Some(Clearance::Approved(id)) => ledger.approval(id).is_some_and(|approval| {
             approval.decision == ApprovalDecision::Approved && approval.grant == grant.id
-        })
-    {
+        }),
+        Some(Clearance::Bypassed) => {
+            grant.bypasses(&operations_of(name, &arguments, connection.dialect))
+        }
+        None => true,
+    };
+    if !stands {
+        let why = match approved {
+            Some(Clearance::Bypassed) => {
+                "the write access no longer lets this run without asking: call again to ask"
+            }
+            _ => "the approval for this write no longer stands",
+        };
         audit(
             ledger,
             service,
@@ -627,14 +679,11 @@ pub async fn call_write_tool(
             &target_name,
             "deny",
             Some(&grant.id.to_string()),
-            "the approval no longer stands",
+            why,
             now,
             None,
         );
-        return Err(AppError::new(
-            ErrorCategory::McpPolicy,
-            "the approval for this write no longer stands",
-        ));
+        return Err(AppError::new(ErrorCategory::McpPolicy, why));
     }
     // A write goes through only once a person approved it, before it was taken to the
     // connection.
@@ -1095,10 +1144,10 @@ mod tests {
 
     /// Every write in these tests was approved, under the grant the ledger holds: the wait
     /// itself is the protocol suite's.
-    fn approved(ledger: &MemoryGrantLedger) -> Option<uuid::Uuid> {
+    fn approved(ledger: &MemoryGrantLedger) -> Option<super::Clearance> {
         use dexo_app::mcp::approval::{Approval, ApprovalDecision};
         let Some(grant) = ledger.active_grants("assistant", 0).pop() else {
-            return Some(uuid::Uuid::nil());
+            return Some(super::Clearance::Approved(uuid::Uuid::nil()));
         };
         let mut approval = Approval::pending(
             "assistant",
@@ -1116,7 +1165,7 @@ mod tests {
                 .settle_approval(approval.id, ApprovalDecision::Approved, 0)
                 .unwrap()
         );
-        Some(approval.id)
+        Some(super::Clearance::Approved(approval.id))
     }
 
     fn grant(kind: WriteKind) -> Grant {

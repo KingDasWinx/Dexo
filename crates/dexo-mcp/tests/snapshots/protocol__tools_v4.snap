@@ -8,7 +8,7 @@ expression: client.tools().await
       "destructiveHint": false,
       "readOnlyHint": false
     },
-    "description": "Cancel the running query of one server session. Appears while a person has let this profile end sessions on this connection; every call waits for their approval.",
+    "description": "Cancel the running query of one server session. Appears while a person has let this profile end sessions on this connection; each call waits for their approval unless they let it run without asking.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -68,7 +68,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Terminate one server session. Appears while a person has let this profile end sessions on this connection; every call waits for their approval, and needs `confirm_target` equal to `session_id`.",
+    "description": "Terminate one server session. Appears while a person has let this profile end sessions on this connection; each call waits for their approval unless they let it run without asking, and needs `confirm_target` equal to `session_id`.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -171,7 +171,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Delete the one row named by `identity`. Appears while a person has let this profile change rows; every call waits for their approval.",
+    "description": "Delete the one row named by `identity`. Appears while a person has let this profile change rows; each call waits for their approval unless they let it run without asking.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -210,7 +210,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Run a script of INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements as one transaction -- a whole seed in one call, all of it or none of it. Appears while a person has let this profile change rows; every table it touches must be one the profile sees, and the call waits for one approval of the whole script.",
+    "description": "Run a script of INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements as one transaction -- a whole seed in one call, all of it or none of it. Appears while a person has let this profile change rows; every table it touches must be one the profile sees, and the call waits for one approval of the whole script, unless they let all of it run without asking.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -259,7 +259,7 @@ expression: client.tools().await
       "destructiveHint": false,
       "readOnlyHint": false
     },
-    "description": "Insert one row. Appears while a person has let this profile change rows on a connection; every call waits for their approval on Dexo's Agents screen.",
+    "description": "Insert one row. Appears while a person has let this profile change rows on a connection; each call waits for their approval on Dexo's Agents screen, unless they let it run without asking.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -343,7 +343,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Update the one row named by `identity`. Appears while a person has let this profile change rows; every call waits for their approval.",
+    "description": "Update the one row named by `identity`. Appears while a person has let this profile change rows; each call waits for their approval unless they let it run without asking.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -569,7 +569,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Apply one DDL statement. Appears while a person has let this profile change the schema; every call waits for their approval. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.",
+    "description": "Apply one DDL statement. Appears while a person has let this profile change the schema; each call waits for their approval unless they let it run without asking. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {

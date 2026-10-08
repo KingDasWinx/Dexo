@@ -115,7 +115,7 @@ async fn postgres_and_mysql_keep_mcp_capabilities_isolated() {
             .cloned()
             .unwrap(),
             0,
-            Some(uuid::Uuid::nil()),
+            Some(dexo_mcp::tools_write::Clearance::Approved(uuid::Uuid::nil())),
         )
         .await
         .unwrap_err();

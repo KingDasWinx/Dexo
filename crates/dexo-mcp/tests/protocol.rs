@@ -809,6 +809,77 @@ async fn missing_required_arguments_are_rejected() {
     }
 }
 
+/// A write the person let through runs without asking, said in the audit; a script with
+/// anything more asks, and the request says what it asks about.
+#[tokio::test]
+async fn what_the_person_lets_through_runs_without_asking() {
+    use dexo_app::mcp::bypass::Operation;
+    use dexo_app::mcp::{ApprovalDecision, GrantLedger};
+    let (mut client, _, ledger) = client_with(FakeBackend::with_session("local", users())).await;
+    ledger
+        .insert_grant(
+            Grant::new(
+                &profile(),
+                "local",
+                &[WriteKind::Rows],
+                dexo_mcp::tools_write::now_secs(),
+                DEFAULT_TTL_SECS,
+                2,
+            )
+            .unwrap()
+            .with_bypass(&[Operation::Insert]),
+        )
+        .unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    let inserted = client
+        .call(
+            "data_execute_sql",
+            json!({"operation_id": "op-by-1", "sql": "insert into users values (2); insert into users values (3)"}),
+        )
+        .await;
+    assert!(text(&inserted).starts_with("done"), "{inserted}");
+    let now = dexo_mcp::tools_write::now_secs();
+    assert!(ledger.pending_approvals(now).is_empty());
+    assert!(
+        ledger
+            .audits()
+            .iter()
+            .any(|event| event.decision == "bypass" && event.status == "ran without asking: insert")
+    );
+    // A delete with it is asked about, and the request says which part.
+    let asking = {
+        let ledger = Arc::clone(&ledger);
+        tokio::spawn(async move {
+            loop {
+                let now = dexo_mcp::tools_write::now_secs();
+                if let Some(request) = ledger.pending_approvals(now).into_iter().next() {
+                    ledger
+                        .settle_approval(request.id, ApprovalDecision::Denied, now)
+                        .unwrap();
+                    return request.statement;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+    };
+    let asked = client
+        .call(
+            "data_execute_sql",
+            json!({"operation_id": "op-by-2", "sql": "insert into users values (4); delete from users where id = 1"}),
+        )
+        .await;
+    assert!(text(&asked).contains("denied"), "{asked}");
+    let statement = asking.await.unwrap();
+    assert!(
+        statement.starts_with("-- asks for: delete (the rest runs without asking)"),
+        "{statement}"
+    );
+}
+
 /// E1: under a grant every write waits for a person -- runs once approved, is
 /// refused when denied or when no one answers in time -- and the request keeps no SQL
 /// once it is decided.
