@@ -78,7 +78,8 @@ impl Session for FakeSession {
 
     async fn execute(&self, request: QueryRequest) -> Result<QueryStream, DriverError> {
         self.record(format!("execute {}", request.sql));
-        if self.hang {
+        // A session setting answers; the query after it is the one that hangs.
+        if self.hang && !request.sql.starts_with("SET ") {
             return Ok(Box::pin(futures_util::stream::pending::<
                 Result<QueryEvent, DriverError>,
             >()));

@@ -615,6 +615,26 @@ async fn a_structured_profile_exposes_no_raw_sql_or_writes() {
 
 /// QUALITY-019: every bypass found in the 2026-09-23 review, over the protocol. None of
 /// them may reach the session.
+/// A bare name is judged as public's; the session MCP opens resolves it there too, not by
+/// whatever search_path the role has.
+#[tokio::test]
+async fn a_session_resolves_bare_names_where_the_policy_judged_them() {
+    let session = users();
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", session.clone())).await;
+    let read = client
+        .call("query_execute_read", json!({"sql": "select id from users"}))
+        .await;
+    assert!(!is_error(&read), "{read}");
+    let log = session.log();
+    let pinned = log
+        .iter()
+        .position(|entry| entry == "execute SET search_path = \"public\"");
+    let selected = log
+        .iter()
+        .position(|entry| entry == "execute select id from users");
+    assert!(pinned.is_some() && pinned < selected, "{log:?}");
+}
+
 #[tokio::test]
 async fn review_bypasses_never_reach_the_database() {
     let session = users();

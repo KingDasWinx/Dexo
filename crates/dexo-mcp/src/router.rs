@@ -104,6 +104,7 @@ impl McpConnectionRouter {
                 .backend
                 .connect(&slot.meta.name, self.connect_timeout)
                 .await?;
+            slot.meta.pin_search_path(session.as_ref()).await?;
             *guard = Some(session);
         }
         Ok(SessionLease {
