@@ -122,12 +122,19 @@ impl McpBackend for CliMcpBackend {
         })
     }
 
-    fn schema_snapshot(&self, name: &str) -> Result<Option<SchemaSnapshot>, AppError> {
-        self.with_db(|db| {
+    fn schema_snapshot(
+        &self,
+        name: &str,
+        connection: &str,
+    ) -> Result<Option<SchemaSnapshot>, AppError> {
+        let snapshot = self.with_db(|db| {
             SchemaSnapshotStore::new(db.connection())
                 .load_by_name(name)
                 .map_err(storage)
-        })
+        })?;
+        // A snapshot is named after the connection it was taken of: one of a connection
+        // outside the profile is not there for it.
+        Ok(snapshot.filter(|snapshot| snapshot.scope == connection))
     }
 }
 

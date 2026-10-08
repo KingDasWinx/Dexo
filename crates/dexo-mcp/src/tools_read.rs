@@ -63,13 +63,14 @@ fn objects_result(objects: &[CatalogObject]) -> CallToolResult {
         .iter()
         .map(|object| {
             vec![
+                object.id.as_str().to_string(),
                 object.kind.as_str().to_string(),
-                object.qualified_name.display_unquoted(),
+                ObjectRef::from_catalog_object(object).to_string(),
             ]
         })
         .collect();
     rows_result(&RowsPage::new(
-        ["kind", "name"].map(String::from).to_vec(),
+        ["id", "kind", "name"].map(String::from).to_vec(),
         rows,
     ))
 }
@@ -204,9 +205,9 @@ async fn describe(
         rows,
     );
     let heading = format!(
-        "### {} ({:?})",
-        object.qualified_name.display_unquoted(),
-        object.kind
+        "### {} ({})",
+        ObjectRef::from_catalog_object(&object),
+        object.kind.as_str()
     );
     page.title = Some(match note_of(&object, notes) {
         Some(note) => format!("{heading}\n\n{note}"),
@@ -249,8 +250,8 @@ async fn relationships(
             {
                 rows.push(vec![
                     direction.to_string(),
-                    format!("{:?}", related.kind),
-                    related.qualified_name.display_unquoted(),
+                    related.kind.as_str().to_string(),
+                    ObjectRef::from_catalog_object(&related).to_string(),
                 ]);
             }
         }
@@ -312,7 +313,7 @@ impl DexoMcpServer {
                     connection.database.clone().unwrap_or_default(),
                     format!("{:?}", connection.environment).to_lowercase(),
                     match connection.accepts_writes() {
-                        Ok(()) => "with a grant".to_string(),
+                        Ok(()) => "while the profile has write access here".to_string(),
                         Err(error) => error.to_string(),
                     },
                 ]
@@ -426,7 +427,7 @@ impl DexoMcpServer {
         finish(&mut lease, outcome)
     }
 
-    /// Search table, view and column names in the connection's indexed catalog. The first search on a connection indexes it, which can take a while on a large server.
+    /// Tables, views, columns, indexes and constraints by name, or by what their notes say, in the connection's indexed catalog. The first search on a connection indexes it, which can take a while on a large server.
     #[tool(annotations(read_only_hint = true))]
     async fn catalog_search(
         &self,
@@ -489,7 +490,7 @@ impl DexoMcpServer {
             .map(|object| {
                 vec![
                     object.kind.as_str().to_string(),
-                    object.qualified_name.display_unquoted(),
+                    ObjectRef::from_catalog_object(object).to_string(),
                     note_of(object, &notes).unwrap_or_default(),
                 ]
             })
@@ -587,10 +588,14 @@ impl DexoMcpServer {
     /// Differences between two saved schema snapshots, limited to objects this profile may see. Read-only: nothing is applied.
     #[tool(annotations(read_only_hint = true))]
     async fn schema_diff(&self, Parameters(input): Parameters<DiffInput>) -> CallToolResult {
+        let connection = match self.inner.router.resolve(input.connection.as_deref()) {
+            Ok(slot) => slot.meta.name.clone(),
+            Err(error) => return app_error(&error),
+        };
         let backend = self.inner.router.backend();
         let load = |name: &str| {
             backend
-                .schema_snapshot(name)
+                .schema_snapshot(name, &connection)
                 .and_then(|snapshot| snapshot.ok_or_else(hidden))
         };
         let (from, to) = match (load(&input.from_snapshot), load(&input.to_snapshot)) {

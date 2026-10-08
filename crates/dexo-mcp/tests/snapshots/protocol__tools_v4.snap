@@ -119,7 +119,7 @@ expression: client.tools().await
           ]
         },
         "parent_id": {
-          "description": "`id` of the node whose children to list, from an earlier catalog_list or catalog_search; omit for the roots.",
+          "description": "`id` of the node whose children to list, from an earlier catalog_list; omit for the roots.",
           "type": [
             "string",
             "null"
@@ -134,7 +134,7 @@ expression: client.tools().await
     "annotations": {
       "readOnlyHint": true
     },
-    "description": "Search table, view and column names in the connection's indexed catalog. The first search on a connection indexes it, which can take a while on a large server.",
+    "description": "Tables, views, columns, indexes and constraints by name, or by what their notes say, in the connection's indexed catalog. The first search on a connection indexes it, which can take a while on a large server.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -606,6 +606,13 @@ expression: client.tools().await
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "connection": {
+          "description": "Connection the snapshots were taken of; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "from_snapshot": {
           "description": "Name of the older snapshot, saved with `dexo schema snapshot --connection C --name N`.",
           "type": "string"

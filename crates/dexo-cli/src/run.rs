@@ -741,11 +741,13 @@ fn run_schema_snapshot(
             cached
         }
     };
+    // Named after the connection, as the TUI names its own: MCP diffs only snapshots of
+    // the connections a profile may use.
     let snapshot = SchemaSnapshot::capture(
         profile.driver.clone(),
         String::new(),
         chrono_now(),
-        database_name.to_string(),
+        connection.clone(),
         objects,
     );
     SchemaSnapshotStore::new(db.connection()).save(&name, &snapshot)?;

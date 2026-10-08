@@ -277,6 +277,35 @@ fn catalog() -> Vec<dexo_driver_api::CatalogObject> {
     ]
 }
 
+/// The ids catalog_list shows are the ones `parent_id` takes, and each name is the path
+/// its object occupies: a schema read db.public.public, the database db.db.
+#[tokio::test]
+async fn the_catalog_is_walked_by_the_ids_it_shows() {
+    let mut backend = FakeBackend::with_session("local", users().with_catalog(catalog()));
+    backend.catalog = catalog();
+    let (mut client, _, _) = client_with(backend).await;
+    let roots = text(&client.call("catalog_list", json!({})).await);
+    assert!(roots.contains("| db | catalog | db |"), "{roots}");
+    let schemas = text(
+        &client
+            .call("catalog_list", json!({"parent_id": "db"}))
+            .await,
+    );
+    assert!(
+        schemas.contains("| public | schema | db.public |"),
+        "{schemas}"
+    );
+    let tables = text(
+        &client
+            .call("catalog_list", json!({"parent_id": "public"}))
+            .await,
+    );
+    assert!(
+        tables.contains("| users | table | db.public.users |"),
+        "{tables}"
+    );
+}
+
 #[tokio::test]
 async fn a_denied_table_is_invisible_to_every_catalog_tool() {
     let mut backend = FakeBackend::with_session("local", users().with_catalog(catalog()));
@@ -362,16 +391,29 @@ async fn schema_diff_hides_denied_objects() {
             None,
         )
     };
-    let snapshot =
-        |objects| SchemaSnapshot::capture("postgres", "16", "2026-09-23T00:00:00Z", "db", objects);
+    let of = |connection: &str, objects| {
+        SchemaSnapshot::capture(
+            "postgres",
+            "16",
+            "2026-09-23T00:00:00Z",
+            connection,
+            objects,
+        )
+    };
     let mut backend = FakeBackend::with_session("local", users());
     backend
         .snapshots
-        .insert("before".into(), snapshot(vec![table("users")]));
+        .insert("before".into(), of("local", vec![table("users")]));
     backend.snapshots.insert(
         "after".into(),
-        snapshot(vec![table("users"), table("orders"), table("secrets")]),
+        of(
+            "local",
+            vec![table("users"), table("orders"), table("secrets")],
+        ),
     );
+    backend
+        .snapshots
+        .insert("elsewhere".into(), of("billing", vec![table("invoices")]));
     let (mut client, _, _) = client_with(backend).await;
     let diff = client
         .call(
@@ -392,6 +434,14 @@ async fn schema_diff_hides_denied_objects() {
         )
         .await;
     assert_eq!(text(&missing), "Error [NOT_FOUND]: not found");
+    // A snapshot of a connection outside the profile is not there for it.
+    let elsewhere = client
+        .call(
+            "schema_diff",
+            json!({"from_snapshot": "before", "to_snapshot": "elsewhere"}),
+        )
+        .await;
+    assert_eq!(text(&elsewhere), "Error [NOT_FOUND]: not found");
 }
 
 #[tokio::test]

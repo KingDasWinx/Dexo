@@ -334,7 +334,7 @@ impl McpService {
     }
 }
 
-/// Read tools that exist. Tasks 8–12 add their names here as they land.
+/// Read tools that exist.
 pub const READ_TOOLS: &[&str] = &[
     "list_connections",
     "catalog_list",
@@ -388,8 +388,14 @@ fn hidden() -> AppError {
     AppError::new(ErrorCategory::McpPolicy, HIDDEN)
 }
 
+/// SQL that does not parse, or is not one statement, is the agent's to fix; the rest is
+/// the policy saying no.
 fn guard_error(rejection: GuardRejection) -> AppError {
-    AppError::new(ErrorCategory::McpPolicy, rejection.to_string())
+    let category = match rejection {
+        GuardRejection::Unparsed(_) | GuardRejection::NotSingleStatement => ErrorCategory::Syntax,
+        _ => ErrorCategory::McpPolicy,
+    };
+    AppError::new(category, rejection.to_string())
 }
 
 #[cfg(test)]

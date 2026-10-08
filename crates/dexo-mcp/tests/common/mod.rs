@@ -59,8 +59,16 @@ impl McpBackend for FakeBackend {
         Ok(self.catalog.clone())
     }
 
-    fn schema_snapshot(&self, name: &str) -> Result<Option<SchemaSnapshot>, AppError> {
-        Ok(self.snapshots.get(name).cloned())
+    fn schema_snapshot(
+        &self,
+        name: &str,
+        connection: &str,
+    ) -> Result<Option<SchemaSnapshot>, AppError> {
+        Ok(self
+            .snapshots
+            .get(name)
+            .filter(|snapshot| snapshot.scope == connection)
+            .cloned())
     }
 
     fn notes(

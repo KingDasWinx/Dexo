@@ -15,7 +15,12 @@ pub trait McpBackend: Send + Sync {
     ) -> Result<Box<dyn Session>, AppError>;
     /// The connection's indexed catalog; the first call on a connection may build it.
     async fn catalog_snapshot(&self, connection: &str) -> Result<Vec<CatalogObject>, AppError>;
-    fn schema_snapshot(&self, name: &str) -> Result<Option<SchemaSnapshot>, AppError>;
+    /// The newest snapshot saved under `name` of `connection`; none when it is of another.
+    fn schema_snapshot(
+        &self,
+        name: &str,
+        connection: &str,
+    ) -> Result<Option<SchemaSnapshot>, AppError>;
     /// The notes people wrote on the connection's objects, by qualified name.
     fn notes(
         &self,

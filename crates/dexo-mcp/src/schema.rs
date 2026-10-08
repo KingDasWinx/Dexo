@@ -103,7 +103,7 @@ pub struct AdminActionInput {
 pub struct CatalogListInput {
     /// Connection name from `list_connections`; optional when the profile has exactly one.
     pub connection: Option<String>,
-    /// `id` of the node whose children to list, from an earlier catalog_list or catalog_search; omit for the roots.
+    /// `id` of the node whose children to list, from an earlier catalog_list; omit for the roots.
     pub parent_id: Option<String>,
 }
 
@@ -139,6 +139,8 @@ pub struct DataReadInput {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DiffInput {
+    /// Connection the snapshots were taken of; optional when the profile has exactly one.
+    pub connection: Option<String>,
     /// Name of the older snapshot, saved with `dexo schema snapshot --connection C --name N`.
     pub from_snapshot: String,
     /// Name of the newer snapshot.
