@@ -1,61 +1,51 @@
 # Forms in Dexo's TUI
 
-Every form in the TUI is built the same way: creating or editing a connection, a grant, a profile, a setting. This page is that pattern, the inputs it is made of, and the code for each one.
+Every form in the TUI is built the same way: creating or editing a connection, a profile, an agent's write access, a setting. This page is that pattern, the inputs it is made of, and the code for each one.
 
-It came from New Grant, drawn four ways and compared in a real terminal. The patterns it borrows are from projects people use daily: lazydb's profile form (the label column, side-by-side choices, the button row) and sqlit's connection form (boxed inputs, dropdowns).
+It came from a New Grant form drawn four ways and compared in a real terminal. The patterns it borrows are from projects people use daily: lazydb's profile form (the label column, side-by-side choices, the button row) and sqlit's connection form (boxed inputs, dropdowns).
 
-The inputs are built in `crates/dexo-tui/src/widgets/panel.rs`: a form is a `panel::Lines`, filled row by row, then drawn with `panel::draw`. New grant and a profile's connections, on Agents → Profiles, are made with it. The four looks it was chosen from still run:
+The inputs are built in `crates/dexo-tui/src/widgets/panel.rs`: a form is a `panel::Lines`, filled row by row, then drawn with `panel::draw`. Agents → Profiles' four forms -- New profile, Edit, Writes and Connect agent -- are made with it, in `crates/dexo-tui/src/screens/mcp_profiles.rs`. They run on their own, with the Profiles page they open from:
 
 ```sh
-cargo run -p dexo-tui --example grant_styles    # F4 is this pattern
+cargo run -p dexo-tui --example agents_styles    # n, Enter, w and a open the forms
 ```
 
 ## The whole form
 
 ```
-┌▸ New grant────────────────────────────────────────────────────────────────┐
-│                                                                            │
-│ WHO                                                                        │
-│                   ┌──────────────────────────────────────────┐             │
-│ › Profile         │ claude-code                            ▼ │             │
-│                   └──────────────────────────────────────────┘             │
-│                   ┌──────────────────────────────────────────┐             │
-│   Connection      │ pg-commerce  production                ▼ │             │
-│                   └──────────────────────────────────────────┘             │
-│ WHAT                                                                       │
-│   Capability       data_write   ddl   admin   change rows                  │
-│   Tools            [x] data_insert            [x] data_update              │
-│                    [ ] data_delete            [ ] data_execute_sql         │
-│                   ┌──────────────────────────────────────────────────────┐ │
-│   Objects         │ app.public.orders                                    │ │
-│                   └──────────── db.schema.table · a lone * for any part ─┘ │
-│ HOW LONG                                                                   │
-│   Expires          15m   1h   2h   8h   24h                                │
-│   Ask each write   [x] On   each write waits for you, up to 120 s          │
-│                   ┌──────────────────────────────────────────────────────┐ │
-│   Wait up to      │ 120 s                                                │ │
-│                   └────────────────────────────────── 1 to 3600 seconds ─┘ │
-│ CONFIRM                                                                    │
-│   Type 'pg-commerce' to confirm                                            │
-│   ┌──────────────────────────────────────────┐                             │
-│   │                                          │                             │
-│   └──────────────────────────────────────────┘                             │
-│                                                                            │
-│ RESULT                                                                     │
-│   data_insert, data_update on app.public.orders in pg-commerce             │
-│   each write waits for you, up to 120 s · ends in 15 minutes               │
-│   ! writes to a production connection                                      │
-│                                                                            │
-│                       [   Cancel ]  [   Create grant ]                     │
-│ Enter open   ←/→ change   Tab next   Esc cancel                            │
-└────────────────────────────────────────────────────────────────────────────┘
+┌▸ Writes of assistant───────────────────────────────────────────────┐
+│                                                                    │
+│ WHERE                                                              │
+│                   ┌──────────────────────────────────────────┐     │
+│   Connection      │ pg-dev        development ✎ has writes ▼ │     │
+│                   └──────────────────────────────────────────┘     │
+│                    pg-prod is not offered: production never takes  │
+│                    agents' writes                                  │
+│                    covers everything assistant sees there          │
+│ WHAT                                                               │
+│ › May              [x] change rows         [x] change schema       │
+│                    [ ] end sessions                                │
+│                    change rows: insert, update, delete, and SQL    │
+│                    that writes                                     │
+│ HOW LONG                                                           │
+│   For              15m   1h   2h   8h   24h   Until revoked        │
+│                                                                    │
+│ RESULT                                                             │
+│   assistant may change rows and the schema in pg-dev, asking you   │
+│   before each write, for 1 hour.                                   │
+│   Each write waits up to 2 min on Approvals, then is refused.      │
+│   Replaces what it has there now: rows, schema · 28 min left.      │
+│                                                                    │
+│                  [   Cancel ]  [   Change writes ]                 │
+│ ↑/↓/←/→ move   Space check   Tab next   Esc cancel                 │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Layout
 
-- **Where.** A form takes the pane it is about -- New grant takes the profile's details, next to the list of profiles -- and is drawn in that pane's own frame, focused: `┌▸ New grant`. It is never a window over the screen.
+- **Where.** A form takes the pane it is about -- Writes takes the profile's page, next to the list of profiles -- and is drawn in that pane's own frame, focused: `┌▸ Writes of assistant`. It is never a window over the screen.
 - **Height.** The frame fills the pane; the buttons follow the last field, not the pane's foot. On a short pane the fields scroll to keep the focused row, and all of its box, in view; with the focus on the buttons, the end of the form is what shows. The buttons and the hint row never scroll.
-- **Sections.** The fields are grouped by the question they answer: WHO, WHAT, HOW LONG, CONFIRM, then RESULT. Section titles are uppercase, bold, in `Border`, one column in from the frame.
+- **Sections.** The fields are grouped by the question they answer -- WHO, WHERE, WHAT, HOW LONG, and CONFIRM when the action asks for it -- then RESULT. Section titles are uppercase, bold, in `Border`, one column in from the frame.
 - **Label column.** Every row starts with ` › ` (the `›` only on the focused row, in bold `Focus`), then the label padded to 16 columns. The focused label is bold `Focus`; the others are `Muted`. Values start at column 19.
 - **One field per row.** No two fields side by side: the eye goes down one column.
 - **A blank line, then the buttons, then the hint row**, at the bottom of the frame.
@@ -94,7 +84,7 @@ Never use `< value >` cycled with the arrows: the person cannot see the other op
 ### Segmented choice
 
 ```
- › Capability       data_write   ddl   admin   change rows
+ › For              15m   1h   2h   8h   24h   Until revoked
 ```
 
 - **Options.** Each one is padded by a space on each side, with one space between them. The options take as much room as they need: no fixed width per option.
@@ -105,8 +95,8 @@ Never use `< value >` cycled with the arrows: the person cannot see the other op
 ### Checkbox grid
 
 ```
- › Tools            [x] data_insert            [x] data_update
-                    [ ] data_delete            [ ] data_execute_sql
+ › May              [x] change rows            [x] change schema
+                    [ ] end sessions
 ```
 
 - **Grid.** Two columns, each cell 22 columns wide. The `x` is bold `Focus`.
@@ -120,8 +110,8 @@ Never use `< value >` cycled with the arrows: the person cannot see the other op
 ### Toggle row
 
 ```
- › Ask each write   [x] On   each write waits for you, up to 120 s
-                    [ ] Off  one write, then it is spent
+ › Skill file       [x] On   tells the agent how Dexo's tools behave
+                    [ ] Off  no skill file
 ```
 
 - **State.** `[x] On` or `[ ] Off`, then what that state means, in `Muted`. The person reads the consequence, not only the switch.
@@ -132,8 +122,8 @@ Never use `< value >` cycled with the arrows: the person cannot see the other op
 
 ```
                   ┌──────────────────────────────────────────────────────┐
- › Objects        │ app.public.orders                                    │
-                  └──────────── db.schema.table · a lone * for any part ─┘
+ › Name           │ assistant-2                                          │
+                  └──────────────────────────── letters, digits, - and _ ─┘
 ```
 
 - **Box.** It fills the value column.
@@ -152,7 +142,7 @@ Never use `< value >` cycled with the arrows: the person cannot see the other op
    └──────────────────────────────────────────┘
 ```
 
-- **When.** Only for an action that is hard to undo or writes somewhere that matters, such as a write grant or a production connection.
+- **When.** Only for an action that is hard to undo or writes somewhere that matters, such as a `DELETE` without `WHERE` on a production connection.
 - **Instruction.** It says exactly what to type, quoted, with the quoted part in bold. It follows the form: change the connection and the name in it changes.
 - **Box.** It sits under the instruction, at the section's indent and as wide as a dropdown. It has no placeholder and no hint.
 
@@ -162,9 +152,8 @@ Never use `< value >` cycled with the arrows: the person cannot see the other op
 
 ```
  RESULT
-   data_insert, data_update on app.public.orders in pg-commerce
-   one write, then it is spent · ends in 15 minutes
-   ! writes to a production connection
+   assistant may change rows in pg-dev, asking you before each write, until you revoke it.
+   ! no time limit: r on the connection takes it back
 ```
 
 The form says in plain words what it will do, and the sentence updates as the person changes the fields. When the action is risky, a bold `Warning` line says why.
@@ -172,7 +161,7 @@ The form says in plain words what it will do, and the sentence updates as the pe
 ### Errors
 
 ```
- × type pg-commerce to confirm
+ × check what it may change
 ```
 
 - **Where.** On the line before RESULT, in bold `Error`.
@@ -182,7 +171,7 @@ The form says in plain words what it will do, and the sentence updates as the pe
 ### Buttons
 
 ```
-                       [   Cancel ]  [ > Create grant ]
+                       [   Cancel ]  [ > Allow writes ]
 ```
 
 - **Row.** Centred, with two spaces between the buttons. Cancel goes first and the primary action last.
@@ -205,7 +194,7 @@ The last row of the frame names the keys of the control that has the focus, and 
 | Checkbox grid | `↑/↓/←/→ move   Space/Enter toggle   Tab next   Esc cancel` |
 | Toggle row | `Space/Enter toggle   Tab next   Esc cancel` |
 | Text box | `Enter/Tab next   Shift+Tab back   Esc cancel` |
-| Primary button | `Enter create the grant   ←/→ switch   Esc cancel` |
+| Primary button | `Enter allow   ←/→ switch   Esc cancel` |
 | Cancel | `Enter cancel   ←/→ switch` |
 
 Each key is bold `Focus` and its description is `Muted`, with three spaces between pairs.
@@ -242,7 +231,7 @@ Colour is never the only signal: the focused row also has `›`, the focused but
 
 ## Code
 
-These are the building blocks, as the reference example has them; `widgets/panel.rs` has them against the model. `Ui` holds the theme and the terminal's capabilities; in the TUI, `model.theme.style(role, model.capabilities)` is the same thing as `ui.fg(role)`.
+These are the building blocks, drawn on their own; `widgets/panel.rs` has them against the model, and `screens/mcp_profiles.rs` has Profiles' forms built on them. `Ui` holds the theme and the terminal's capabilities; in the TUI, `model.theme.style(role, model.capabilities)` is the same thing as `ui.fg(role)`.
 
 ### Colours
 
@@ -273,28 +262,26 @@ impl Ui {
 
 ### The focus order
 
-The order is computed from the form's state, so a field that does not apply is not in it:
+The order is computed from the form's state, so a field that does not apply is not in it -- New profile's, in `screens/mcp_profiles.rs`:
 
 ```rust
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Slot {
-    Field(Field),
-    Cancel,
-    Create,
-}
-
-fn slots(grant: &Grant) -> Vec<Slot> {
-    let mut slots: Vec<Slot> = [
-        Field::Profile, Field::Connection, Field::Capability, Field::Tools,
-        Field::Objects, Field::Expires, Field::Ask,
-    ]
-    .map(Slot::Field)
-    .to_vec();
-    if grant.ask {
-        slots.push(Slot::Field(Field::AskSecs)); // only while the toggle is on
+pub fn rows(&self) -> Vec<ProfileRow> {
+    let mut rows = Vec::new();
+    if !self.editing {
+        rows.push(ProfileRow::Name);
     }
-    slots.extend([Slot::Field(Field::Confirm), Slot::Cancel, Slot::Create]);
-    slots
+    rows.extend([ProfileRow::Connections, ProfileRow::Reads, ProfileRow::Sees]);
+    if self.sees != Sees::All {
+        rows.push(ProfileRow::Tables); // only while it sees some tables, not all
+    }
+    if !self.editing {
+        rows.push(ProfileRow::Agent);
+        if self.agent_choice().is_some_and(|agent| agent.skill) {
+            rows.push(ProfileRow::Skill);
+        }
+    }
+    rows.extend([ProfileRow::Cancel, ProfileRow::Save]);
+    rows
 }
 ```
 
@@ -384,10 +371,10 @@ A text box, with its hint in the foot:
 let border = if invalid { Role::Error } else if focused { Role::Focus } else { Role::Border };
 lines.extend(boxed(
     ui,
-    label(ui, focused, "Objects"),
+    label(ui, focused, "Name"),
     width,
-    vec![Span::styled(objects.clone(), ui.fg(Role::Foreground))],
-    "db.schema.table · a lone * for any part",
+    vec![Span::styled(name.clone(), ui.fg(Role::Foreground))],
+    "letters, digits, - and _",
     border,
 ));
 ```
@@ -480,56 +467,38 @@ fn hints(ui: &Ui, pairs: &[(&str, &str)]) -> Line<'static> {
 
 let tone = if production { Role::Warning } else { Role::Focus };
 let row = Line::from(vec![
-    button(ui, "Cancel", slot == Slot::Cancel, Role::Focus, false),
+    button(ui, "Cancel", focus == Row::Cancel, Role::Focus, false),
     Span::raw("  "),
-    button(ui, "Create grant", slot == Slot::Create, tone, true),
+    button(ui, "Allow writes", focus == Row::Create, tone, true),
 ])
 .alignment(Alignment::Center);
 ```
 
 ### Keys
 
-The rule that matters most: Enter submits only from the primary button.
+The rule that matters most: Enter submits only from the primary button. A form's `key` gives the focused row its keys first -- an open dropdown, a grid's arrows, a segment's Left and Right, typing -- and the rest to the walk every form shares, in `screens/mcp_profiles.rs`:
 
 ```rust
-fn key(&mut self, key: KeyEvent, grant: &mut Grant) -> Outcome {
-    let slots = slots(grant);
-    let slot = slots[self.focus.min(slots.len() - 1)];
-    // An open dropdown takes every key until it closes.
-    if let (Some(at), Slot::Field(field)) = (self.open, slot) {
-        match key.code {
-            KeyCode::Up => self.open = Some(at.saturating_sub(1)),
-            KeyCode::Down => self.open = Some((at + 1).min(last_option(field, grant))),
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                pick(field, at, grant);
-                self.open = None;
-            }
-            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => self.open = None,
-            _ => {}
-        }
-        return Outcome::Stay;
-    }
-    // The checkbox grid: Up and Down move between its rows, and leave it past either end.
-    let last = grant.tools.len().saturating_sub(1);
-    let tool = self.tool.min(last);
-    let in_grid = slot == Slot::Field(Field::Tools);
+fn walk_key<R: Copy + PartialEq>(
+    rows: &[R],
+    focus: &mut R,
+    cancel: R,
+    submit: R,
+    key: KeyEvent,
+) -> Option<FormKey> {
     match key.code {
-        KeyCode::Down if in_grid && tool / 2 < last / 2 => self.tool = (tool + 2).min(last),
-        KeyCode::Up if in_grid && tool / 2 > 0 => self.tool = tool - 2,
-        KeyCode::Tab | KeyCode::Down => self.focus = (self.focus + 1) % slots.len(),
-        KeyCode::BackTab | KeyCode::Up => self.focus = (self.focus + slots.len() - 1) % slots.len(),
-        KeyCode::Esc => return Outcome::Cancel,
-        KeyCode::Enter => match slot {
-            Slot::Create => return Outcome::Create,          // the only Enter that submits
-            Slot::Cancel => return Outcome::Cancel,
-            Slot::Field(Field::Profile | Field::Connection) => self.open = Some(chosen(slot, grant)),
-            Slot::Field(Field::Ask) => grant.ask = !grant.ask,
-            Slot::Field(Field::Tools) => toggle(grant, tool),
-            Slot::Field(_) => self.focus = (self.focus + 1) % slots.len(),
-        },
-        _ => self.edit(slot, key, grant),                  // ←/→, Space, typing
+        KeyCode::Esc => return Some(FormKey::Cancel),
+        KeyCode::Tab | KeyCode::Down => *focus = walk(rows, *focus, 1),
+        KeyCode::BackTab | KeyCode::Up => *focus = walk(rows, *focus, -1),
+        KeyCode::Left | KeyCode::Right if *focus == cancel || *focus == submit => {
+            *focus = if *focus == cancel { submit } else { cancel };
+        }
+        // The only Enter that submits.
+        KeyCode::Enter if *focus == submit => return Some(FormKey::Submit),
+        KeyCode::Enter if *focus == cancel => return Some(FormKey::Cancel),
+        _ => return None, // the focused row's: Enter on it moves on
     }
-    Outcome::Stay
+    Some(FormKey::Stay)
 }
 ```
 
@@ -537,7 +506,7 @@ fn key(&mut self, key: KeyEvent, grant: &mut Grant) -> Outcome {
 
 ```rust
 // Build every line first, noting the focused row's line and the cursor.
-let block = crate::render::pane_block(model, "New grant", true); // the pane's own frame
+let block = crate::render::pane_block(model, "Writes of assistant", true); // the pane's own frame
 let inner = block.inner(area);
 frame.render_widget(block, area);
 let rows = (lines.len() as u16).min(inner.height.saturating_sub(3));
