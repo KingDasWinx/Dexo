@@ -102,6 +102,9 @@ fn overview_result(overview: &dexo_app::mcp::overview::Overview, max_bytes: u64)
             .collect();
         part.push_str(&crate::render::markdown_table(&columns, &cells));
         part = part.trim_end().to_string();
+        if !table.constraints.is_empty() {
+            part.push('\n');
+        }
         for constraint in &table.constraints {
             part.push_str(&format!("\n- {constraint}"));
         }

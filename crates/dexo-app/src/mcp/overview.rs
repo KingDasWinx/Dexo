@@ -305,9 +305,11 @@ WHERE con.contype IN ('p', 'u', 'f', 'c', 'x')
   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 ORDER BY n.nspname, c.relname, con.contype = 'p' DESC, con.conname";
 
-/// The MySQL columns of the same shape: the database stands for the schema.
+/// The MySQL columns of the same shape: the database stands for the schema, and a column
+/// with no default says what fills it instead (`auto_increment`).
 const MYSQL_COLUMNS: &str = "SELECT c.TABLE_SCHEMA, c.TABLE_NAME, t.TABLE_TYPE, t.TABLE_ROWS,
-       c.COLUMN_NAME, c.COLUMN_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT
+       c.COLUMN_NAME, c.COLUMN_TYPE, c.IS_NULLABLE,
+       COALESCE(c.COLUMN_DEFAULT, NULLIF(c.EXTRA, ''))
 FROM information_schema.COLUMNS c
 JOIN information_schema.TABLES t
   ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
@@ -316,7 +318,8 @@ ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION";
 
 /// MySQL's keys, one definition each: its columns, and what a foreign key references.
 const MYSQL_CONSTRAINTS: &str = "SELECT k.TABLE_SCHEMA, k.TABLE_NAME,
-       CONCAT(k.CONSTRAINT_NAME, ' ', tc.CONSTRAINT_TYPE, ' (',
+       CONCAT(IF(k.CONSTRAINT_NAME = 'PRIMARY', '', CONCAT(k.CONSTRAINT_NAME, ' ')),
+              tc.CONSTRAINT_TYPE, ' (',
               GROUP_CONCAT(k.COLUMN_NAME ORDER BY k.ORDINAL_POSITION SEPARATOR ', '), ')',
               IF(MAX(k.REFERENCED_TABLE_NAME) IS NULL, '',
                  CONCAT(' REFERENCES ', MAX(k.REFERENCED_TABLE_NAME), ' (',
