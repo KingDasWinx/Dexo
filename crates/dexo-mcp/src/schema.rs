@@ -128,6 +128,16 @@ pub struct ObjectInput {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct OverviewInput {
+    /// Connection name from `list_connections`; optional when the profile has exactly one.
+    pub connection: Option<String>,
+    /// The schema to describe (on MySQL, the database); every one the profile sees when left out.
+    pub schema: Option<String>,
+    /// Count each table's rows with count(*) instead of the server's estimate: exact, but it reads every row, 200 tables at most.
+    pub exact_counts: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DataReadInput {
     /// Connection name from `list_connections`; optional when the profile has exactly one.
     pub connection: Option<String>,

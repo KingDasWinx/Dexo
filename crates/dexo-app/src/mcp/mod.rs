@@ -5,6 +5,7 @@ pub mod connection;
 pub mod grant;
 pub mod ledger;
 pub mod operation;
+pub mod overview;
 pub mod policy;
 pub mod profile;
 pub mod selector;

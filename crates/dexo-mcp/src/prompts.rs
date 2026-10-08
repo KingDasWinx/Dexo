@@ -27,7 +27,7 @@ pub fn get_prompt(service: &McpService, name: &str) -> Result<Vec<PromptMessage>
     let tools = advertised_tools(&service.profile).join(", ");
     let text = match name {
         "explore_schema" => format!(
-            "Call list_connections, then catalog_list without parent_id, and follow the ids down to tables; use object_describe for columns. Available tools: {tools}."
+            "Call list_connections, then schema_overview for every table of a schema at once -- columns, defaults, keys, foreign keys and row counts; catalog_list without parent_id walks the catalog down by its ids, and object_describe gives one table and its notes. Available tools: {tools}."
         ),
         "review_migration" => format!(
             "Call schema_diff with the two snapshot names the user gives you and explain each added, removed or changed object. Available tools: {tools}."

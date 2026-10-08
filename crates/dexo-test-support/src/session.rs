@@ -19,6 +19,7 @@ pub struct FakeSession {
     catalog: Vec<CatalogObject>,
     hang: bool,
     fail_on: Option<String>,
+    answers: Vec<(String, Vec<Vec<DbValue>>)>,
 }
 
 impl FakeSession {
@@ -36,6 +37,12 @@ impl FakeSession {
             hang: true,
             ..Self::default()
         }
+    }
+
+    /// `execute` answers a statement holding `fragment` with `rows` instead.
+    pub fn answering(mut self, fragment: &str, rows: Vec<Vec<DbValue>>) -> Self {
+        self.answers.push((fragment.into(), rows));
+        self
     }
 
     /// `execute` refuses a statement holding `fragment`, as a server refusing it.
@@ -106,13 +113,18 @@ impl Session for FakeSession {
         } else {
             request.row_limit as usize
         };
+        let rows = self
+            .answers
+            .iter()
+            .find(|(fragment, _)| request.sql.contains(fragment.as_str()))
+            .map_or(&self.rows, |(_, rows)| rows);
         let events = vec![
             Ok(QueryEvent::Columns(self.column_meta())),
             Ok(QueryEvent::Rows(RowBatch {
-                rows: self.rows.iter().take(limit).cloned().collect(),
+                rows: rows.iter().take(limit).cloned().collect(),
             })),
             Ok(QueryEvent::Finished {
-                rows_affected: Some(self.rows.len() as u64),
+                rows_affected: Some(rows.len() as u64),
             }),
         ];
         Ok(Box::pin(futures_util::stream::iter(events)))

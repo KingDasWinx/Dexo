@@ -409,6 +409,7 @@ pub const READ_TOOLS: &[&str] = &[
     "query_explain",
     "query_execute_read",
     "schema_diff",
+    "schema_overview",
     "admin_list_sessions",
 ];
 

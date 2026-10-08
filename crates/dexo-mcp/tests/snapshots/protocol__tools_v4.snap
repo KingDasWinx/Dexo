@@ -640,5 +640,39 @@ expression: client.tools().await
       "type": "object"
     },
     "name": "schema_diff"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Every table and view of a schema the profile sees, in one call: columns with type, nullability and default, primary and unique keys, foreign keys and checks, and the row count the server estimates -- or counts, with `exact_counts`. Use it instead of object_describe table by table.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exact_counts": {
+          "description": "Count each table's rows with count(*) instead of the server's estimate: exact, but it reads every row, 200 tables at most.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "schema": {
+          "description": "The schema to describe (on MySQL, the database); every one the profile sees when left out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "schema_overview"
   }
 ]

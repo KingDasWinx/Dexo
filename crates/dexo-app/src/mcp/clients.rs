@@ -661,6 +661,12 @@ pub fn skill_text(client: McpClient, profile: &McpProfile) -> String {
   table's columns, keys and the notes people wrote about it -- read the notes, they say
   what the data means. `object_get_ddl` and `object_relationships` give the rest.",
     ];
+    if has("schema_overview") {
+        reading.push(
+            "- `schema_overview` gives every table of a schema at once: columns, defaults, keys,
+  foreign keys and row counts.",
+        );
+    }
     if has("query_execute_read") {
         reading.push(
             "- `query_validate` checks a statement first; `query_execute_read` runs reads only, with a
