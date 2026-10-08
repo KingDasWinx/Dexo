@@ -1,4 +1,4 @@
-pub const LATEST_SCHEMA_VERSION: u32 = 19;
+pub const LATEST_SCHEMA_VERSION: u32 = 20;
 
 pub const MIGRATION_1: &str = r#"
 BEGIN;
@@ -361,6 +361,16 @@ INSERT INTO schema_migrations(version, applied_at) VALUES(19, datetime('now'));
 COMMIT;
 "#;
 
+/// Write access given before the redesign covered tables of its own and did not ask;
+/// migration 19 dropped those terms, which widened every live grant to all its profile
+/// sees. They are revoked: a person gives write access again, on the new terms.
+pub const MIGRATION_20: &str = r#"
+BEGIN;
+UPDATE mcp_grants SET revoked = 1, revision = revision + 1 WHERE revoked = 0;
+INSERT INTO schema_migrations(version, applied_at) VALUES(20, datetime('now'));
+COMMIT;
+"#;
+
 pub fn read_schema_version(conn: &rusqlite::Connection) -> u32 {
     conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
@@ -410,6 +420,7 @@ pub fn apply_up_to(conn: &rusqlite::Connection, target: u32) -> anyhow::Result<(
             17 => MIGRATION_17,
             18 => MIGRATION_18,
             19 => MIGRATION_19,
+            20 => MIGRATION_20,
             other => anyhow::bail!("missing migration {other}"),
         };
         conn.execute_batch(sql)?;

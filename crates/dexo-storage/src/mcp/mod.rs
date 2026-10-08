@@ -322,32 +322,41 @@ mod tests {
         assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
     }
 
-    /// Migration 19: a one-write grant already spent stays gone, one not spent asks.
+    /// Write access given before the redesign was under other terms: its own tables, no
+    /// approval. Migration 19 dropped those terms; migration 20 revokes what it widened,
+    /// so a person gives it again on the new terms.
     #[test]
-    fn a_spent_grant_does_not_come_back_with_migration_19() {
+    fn migrations_19_and_20_revoke_every_grant_made_before_the_redesign() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::migrations::apply_up_to(&conn, 18).unwrap();
-        for (id, uses) in [
-            ("00000000-0000-0000-0000-000000000001", 0),
-            ("00000000-0000-0000-0000-000000000002", 1),
+        for (id, uses, ask) in [
+            ("00000000-0000-0000-0000-000000000001", 0i64, 0i64),
+            ("00000000-0000-0000-0000-000000000002", 1, 0),
+            ("00000000-0000-0000-0000-000000000003", 4_294_967_295, 120),
         ] {
             conn.execute(
                 "INSERT INTO mcp_grants (id, profile_name, connection_name, capability, tools_json,
                     selectors_json, expires_at, remaining_uses, revision, revoked, ask_secs)
-                 VALUES (?1, 'assistant', 'local', 'data_write', '[\"data_insert\"]', '[]',
-                    1000, ?2, 1, 0, 0)",
-                rusqlite::params![id, uses],
+                 VALUES (?1, 'assistant', 'local', 'data_write', '[\"data_insert\"]',
+                    '[\"db.public.items\"]', 9223372036854775807, ?2, 1, 0, ?3)",
+                rusqlite::params![id, uses, ask],
             )
             .unwrap();
         }
         crate::migrations::apply_pending(&conn).unwrap();
-        let active = super::grant_repo::list_active(&conn, "assistant", 0).unwrap();
-        assert_eq!(active.len(), 1);
-        assert_eq!(
-            active[0].id.to_string(),
-            "00000000-0000-0000-0000-000000000002"
+        assert!(
+            super::grant_repo::list_active(&conn, "assistant", 0)
+                .unwrap()
+                .is_empty()
         );
-        assert_eq!(active[0].ask_secs, 120);
+        let revoked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM mcp_grants WHERE revoked = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(revoked, 3);
     }
 
     #[test]
