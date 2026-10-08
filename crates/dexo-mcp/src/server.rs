@@ -9,7 +9,7 @@ use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, GetPromptRequestParams, GetPromptResponse,
+    CacheScope, CallToolRequestParams, CallToolResponse, GetPromptRequestParams, GetPromptResponse,
     GetPromptResult, Implementation, JsonObject, ListPromptsResult, ListResourceTemplatesResult,
     ListResourcesResult, ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams,
     ReadResourceResponse, ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo,
@@ -230,7 +230,9 @@ impl ServerHandler for DexoMcpServer {
                 .into_iter()
                 .filter(|tool| visible.iter().any(|name| name == tool.name.as_ref()))
                 .collect(),
-        ))
+        )
+        .with_ttl_ms(0)
+        .with_cache_scope(CacheScope::Private))
     }
 
     async fn call_tool(
@@ -300,9 +302,11 @@ impl ServerHandler for DexoMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        Ok(ListResourcesResult::with_all_items(
-            resources::list_resources(),
-        ))
+        Ok(
+            ListResourcesResult::with_all_items(resources::list_resources())
+                .with_ttl_ms(0)
+                .with_cache_scope(CacheScope::Private),
+        )
     }
 
     async fn read_resource(
@@ -315,9 +319,13 @@ impl ServerHandler for DexoMcpServer {
             self.inner.router.connections(),
             &request.uri,
         ) {
-            Some(body) => {
-                Ok(ReadResourceResult::new(vec![ResourceContents::text(body, request.uri)]).into())
-            }
+            Some(body) => Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                body,
+                request.uri,
+            )])
+            .with_ttl_ms(0)
+            .with_cache_scope(CacheScope::Private)
+            .into()),
             None => Err(McpError::resource_not_found(
                 HIDDEN,
                 Some(serde_json::json!({ "uri": request.uri })),
@@ -330,7 +338,9 @@ impl ServerHandler for DexoMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
-        Ok(ListResourceTemplatesResult::with_all_items(Vec::new()))
+        Ok(ListResourceTemplatesResult::with_all_items(Vec::new())
+            .with_ttl_ms(0)
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn list_prompts(
@@ -338,7 +348,9 @@ impl ServerHandler for DexoMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
-        Ok(ListPromptsResult::with_all_items(prompts::list_prompts()))
+        Ok(ListPromptsResult::with_all_items(prompts::list_prompts())
+            .with_ttl_ms(0)
+            .with_cache_scope(CacheScope::Private))
     }
 
     async fn get_prompt(

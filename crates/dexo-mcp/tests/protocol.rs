@@ -47,6 +47,28 @@ async fn tools_are_typed_and_described() {
     }
 }
 
+/// Every list, and a resource read, says it may not be cached nor shared (SEP-2549):
+/// protocol 2026-07-28 requires both fields, and Claude Code refused the tools without
+/// them. The tools change with each grant, so nothing is kept.
+#[tokio::test]
+async fn lists_say_they_are_not_to_be_kept() {
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", users())).await;
+    for (method, params) in [
+        ("tools/list", json!({})),
+        ("resources/list", json!({})),
+        ("resources/templates/list", json!({})),
+        ("prompts/list", json!({})),
+        (
+            "resources/read",
+            json!({"uri": "dexo://profile/capabilities"}),
+        ),
+    ] {
+        let result = &client.request(method, params).await["result"];
+        assert_eq!(result["ttlMs"], json!(0), "{method}: {result}");
+        assert_eq!(result["cacheScope"], json!("private"), "{method}: {result}");
+    }
+}
+
 #[tokio::test]
 async fn a_read_returns_a_table_with_its_columns() {
     let (mut client, _, _) = client_with(FakeBackend::with_session("local", users())).await;
