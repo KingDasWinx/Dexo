@@ -21,4 +21,6 @@ pub use operation::{OperationRecord, OperationState, SideEffect};
 pub use policy::{Decision, ObjectPolicy};
 pub use profile::{McpLimits, McpProfile, PersistentAccess, QueryMode, ToolRule};
 pub use selector::{Effect, ObjectRef, Segment, Selector, SelectorRule};
-pub use service::{McpService, READ_TOOLS, ReadResult, advertised_tools, known_tools};
+pub use service::{
+    McpService, READ_TOOLS, ReadResult, advertised_tools, known_tools, published_tools,
+};

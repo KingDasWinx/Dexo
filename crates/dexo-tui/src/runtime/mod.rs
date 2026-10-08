@@ -3213,13 +3213,16 @@ fn write_agent_config(
         .set_up(&places, &command, profile, skill)
         .map_err(text)?;
     let shown = |path: &std::path::Path| home_relative(path, &places.home);
-    let mut lines = vec![match &done.backup {
-        Some(backup) => format!(
+    let mut lines = vec![match &done.written {
+        dexo_app::mcp::clients::Written::Unchanged => {
+            format!("✓ {} already set up", shown(&done.config))
+        }
+        dexo_app::mcp::clients::Written::Created => format!("✓ {} written", shown(&done.config)),
+        dexo_app::mcp::clients::Written::Replaced(backup) => format!(
             "✓ {} written (the old one kept as {})",
             shown(&done.config),
             shown(backup)
         ),
-        None => format!("✓ {} written", shown(&done.config)),
     }];
     if let Some(skill) = &done.skill {
         lines.push(format!("✓ {} written", shown(skill)));

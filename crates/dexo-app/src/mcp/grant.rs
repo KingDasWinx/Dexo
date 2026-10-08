@@ -283,6 +283,22 @@ pub struct GrantRequest {
     pub ask_secs: Option<u32>,
 }
 
+/// A span in words: `45 s`, `29 min`, `1 h 30 min`, `24 h`.
+pub fn duration_words(secs: i64) -> String {
+    match secs {
+        i64::MIN..=0 => "now".into(),
+        1..=89 => format!("{secs} s"),
+        90..=5399 => format!("{} min", (secs + 30) / 60),
+        _ => {
+            let minutes = (secs + 30) / 60;
+            match (minutes / 60, minutes % 60) {
+                (hours, 0) => format!("{hours} h"),
+                (hours, rest) => format!("{hours} h {rest} min"),
+            }
+        }
+    }
+}
+
 impl GrantRequest {
     /// The grant, once the connection is one the profile may use and one that accepts
     /// writes at all. `saved` is the connection named.
@@ -298,11 +314,19 @@ impl GrantRequest {
                 "name the connection it may write to",
             ));
         }
-        if !profile.connections.is_empty()
-            && !profile
-                .connections
-                .iter()
-                .any(|name| name == &self.connection)
+        if profile.connections.is_empty() {
+            return Err(AppError::new(
+                ErrorCategory::McpPolicy,
+                format!(
+                    "the profile {} uses no connection yet: dexo mcp profile set --name {} --connection {}",
+                    profile.name, profile.name, self.connection
+                ),
+            ));
+        }
+        if !profile
+            .connections
+            .iter()
+            .any(|name| name == &self.connection)
         {
             return Err(AppError::new(
                 ErrorCategory::McpPolicy,
@@ -382,6 +406,9 @@ mod tests {
             expires: "15m".into(),
             ask_secs: Some(90),
         };
+        let mut uses_local = profile();
+        uses_local.connections = vec!["local".into()];
+        let profile = || uses_local.clone();
         let grant = request.issue(&profile(), &saved, 0).unwrap();
         assert_eq!(grant.ask_secs, 90);
         assert_eq!(grant.expires_at, DEFAULT_TTL_SECS);
@@ -398,6 +425,10 @@ mod tests {
         let mut elsewhere = profile();
         elsewhere.connections = vec!["staging".into()];
         assert!(request.issue(&elsewhere, &saved, 0).is_err());
+        // `serve` refuses a profile with no connection; it is given no write access either.
+        let mut nowhere = profile();
+        nowhere.connections.clear();
+        assert!(request.issue(&nowhere, &saved, 0).is_err());
         let nothing = GrantRequest {
             kinds: Vec::new(),
             ..request.clone()

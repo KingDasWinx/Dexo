@@ -11,15 +11,7 @@ use crate::screens::mcp_clients::McpClients;
 use crate::widgets::form::{FooterFocus, footer_line};
 use crate::widgets::text_input::TextInput;
 
-/// A span of seconds in words: `45 s`, `29 min`, `3 h`.
-pub fn duration_words(secs: i64) -> String {
-    match secs {
-        i64::MIN..=0 => "now".into(),
-        1..=89 => format!("{secs} s"),
-        90..=5399 => format!("{} min", (secs + 30) / 60),
-        _ => format!("{} h", (secs + 1800) / 3600),
-    }
-}
+pub use dexo_app::mcp::grant::duration_words;
 
 /// A kind of write as the form's box says it, and what it covers.
 pub fn kind_label(kind: WriteKind) -> (&'static str, &'static str) {

@@ -37,8 +37,32 @@ pub enum ClientState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SetUp {
     pub config: PathBuf,
-    pub backup: Option<PathBuf>,
+    pub written: Written,
     pub skill: Option<PathBuf>,
+}
+
+/// What writing a file came to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Written {
+    /// It already said this.
+    Unchanged,
+    /// A new file.
+    Created,
+    /// Replaced, the old one copied here first.
+    Replaced(PathBuf),
+}
+
+/// `word` as one shell word: quoted when it holds a space or a quote, so a line to paste
+/// runs the program it names.
+pub fn shell_word(word: &str) -> String {
+    if word
+        .chars()
+        .any(|ch| ch.is_whitespace() || ch == '\'' || ch == '"')
+    {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    } else {
+        word.to_string()
+    }
 }
 
 /// Where the user's files are: the project (the current directory) and the home and
@@ -160,7 +184,7 @@ impl McpClient {
 
     /// The client's own command that adds the same server, for those that have one.
     pub fn by_hand(self, command: &str, profile: &str) -> Option<String> {
-        let serve = format!("{command} mcp serve --profile {profile}");
+        let serve = format!("{} mcp serve --profile {profile}", shell_word(command));
         match self {
             Self::ClaudeCode => Some(format!("claude mcp add dexo -- {serve}")),
             Self::Codex => Some(format!("codex mcp add dexo -- {serve}")),
@@ -203,7 +227,7 @@ impl McpClient {
         let merged = self
             .merged(existing.as_deref(), command, &args)
             .map_err(in_file)?;
-        let backup = write_with_backup(&config, &merged).map_err(in_file)?;
+        let written = write_with_backup(&config, &merged).map_err(in_file)?;
         let skill = match skill.then(|| self.skill_path(places)).flatten() {
             Some(path) => {
                 write_with_backup(&path, &skill_text(self, profile))?;
@@ -213,7 +237,7 @@ impl McpClient {
         };
         Ok(SetUp {
             config,
-            backup,
+            written,
             skill,
         })
     }
@@ -565,7 +589,7 @@ fn set_toml(table: &mut dyn toml_edit::TableLike, key: &str, value: toml_edit::V
 /// symlink is written through, so it stays a link to the file it named; the file keeps
 /// its permissions, since it may hold other servers' keys, and a new one is the user's
 /// alone.
-pub fn write_with_backup(path: &Path, contents: &str) -> Result<Option<PathBuf>, AppError> {
+pub fn write_with_backup(path: &Path, contents: &str) -> Result<Written, AppError> {
     use std::io::Write as _;
     let storage = |error: std::io::Error| AppError::new(ErrorCategory::Storage, error.to_string());
     let path = &match std::fs::canonicalize(path) {
@@ -581,7 +605,7 @@ pub fn write_with_backup(path: &Path, contents: &str) -> Result<Option<PathBuf>,
     }
     let existing = std::fs::metadata(path).ok();
     if std::fs::read(path).is_ok_and(|old| old == contents.as_bytes()) {
-        return Ok(None);
+        return Ok(Written::Unchanged);
     }
     // An earlier backup is never replaced: the first one is the file as it was before
     // Dexo ever touched it.
@@ -617,7 +641,7 @@ pub fn write_with_backup(path: &Path, contents: &str) -> Result<Option<PathBuf>,
         std::fs::set_permissions(&tmp, existing.permissions()).map_err(storage)?;
     }
     std::fs::rename(&tmp, path).map_err(storage)?;
-    Ok(backup)
+    Ok(backup.map_or(Written::Created, Written::Replaced))
 }
 
 /// What an agent should know before it uses Dexo's tools.
@@ -909,6 +933,21 @@ mod tests {
         assert_eq!(mode(&shared), 0o644);
     }
 
+    /// A line to paste runs the program it names, wherever it is installed.
+    #[test]
+    fn a_path_with_a_space_or_a_quote_is_one_shell_word() {
+        assert_eq!(super::shell_word("/usr/bin/dexo"), "/usr/bin/dexo");
+        assert_eq!(
+            super::shell_word("/opt/bin dir/dexo"),
+            "'/opt/bin dir/dexo'"
+        );
+        assert_eq!(super::shell_word("/it's/dexo"), r"'/it'\''s/dexo'");
+        assert_eq!(
+            McpClient::ClaudeCode.by_hand("/opt/bin dir/dexo", "assistant"),
+            Some("claude mcp add dexo -- '/opt/bin dir/dexo' mcp serve --profile assistant".into())
+        );
+    }
+
     /// Running setup again never loses the file as it was before Dexo: each old version
     /// gets a backup of its own, and text that did not change writes nothing.
     #[test]
@@ -916,12 +955,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mcp.json");
         std::fs::write(&path, "original").unwrap();
-        let first = super::write_with_backup(&path, "second").unwrap().unwrap();
-        let again = super::write_with_backup(&path, "third").unwrap().unwrap();
+        let replaced = |contents| match super::write_with_backup(&path, contents).unwrap() {
+            super::Written::Replaced(backup) => backup,
+            other => panic!("{other:?}"),
+        };
+        let first = replaced("second");
+        let again = replaced("third");
         assert_ne!(first, again);
         assert_eq!(std::fs::read_to_string(&first).unwrap(), "original");
         assert_eq!(std::fs::read_to_string(&again).unwrap(), "second");
-        assert_eq!(super::write_with_backup(&path, "third").unwrap(), None);
+        assert_eq!(
+            super::write_with_backup(&path, "third").unwrap(),
+            super::Written::Unchanged
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "third");
     }
 
@@ -1046,7 +1092,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(done.config, places.project.join(".mcp.json"));
-        assert!(done.backup.is_some(), "the old file is kept");
+        assert!(
+            matches!(done.written, super::Written::Replaced(_)),
+            "the old file is kept"
+        );
         assert!(done.skill.as_ref().is_some_and(|path| path.is_file()));
         assert_eq!(
             McpClient::ClaudeCode.state(&places),

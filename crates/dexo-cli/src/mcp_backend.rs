@@ -63,7 +63,7 @@ impl McpBackend for CliMcpBackend {
             AppError::new(
                 error.category(),
                 format!(
-                    "the {what} of {connection} failed; run `dexo connections test {connection}` to see why"
+                    "the {what} of {connection} failed; run `dexo connections test --name {connection}` to see why"
                 ),
             )
         };

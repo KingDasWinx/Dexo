@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::data::display_value;
 use crate::error::{AppError, ErrorCategory};
 use crate::mcp::connection::McpConnection;
+use crate::mcp::grant::{Grant, WRITE_TOOLS};
 use crate::mcp::policy::{Decision, ObjectPolicy};
 use crate::mcp::profile::{McpProfile, QueryMode};
 use crate::mcp::selector::ObjectRef;
@@ -371,6 +372,43 @@ pub fn advertised_tools(profile: &McpProfile) -> Vec<&'static str> {
             }
         })
         .collect()
+}
+
+/// What a client of `profile` may call while `grants` are active: its reads, the writes a
+/// grant publishes on a connection that takes them (MCP-002, MCP-004) -- a grant on one
+/// turned production or read-only stays in the ledger but opens nothing -- and the sessions
+/// list while a grant lets sessions be ended, since the tools that end them take its ids.
+pub fn published_tools(
+    profile: &McpProfile,
+    grants: &[Grant],
+    accepts_writes: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    let mut tools: Vec<String> = advertised_tools(profile)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let mut lists_sessions = false;
+    for grant in grants
+        .iter()
+        .filter(|grant| accepts_writes(&grant.connection))
+    {
+        for tool in &grant.tools {
+            if WRITE_TOOLS.contains(&tool.as_str())
+                && profile.tool_allowed(tool)
+                && !tools.contains(tool)
+            {
+                tools.push(tool.clone());
+            }
+        }
+        lists_sessions |= grant.lists_sessions(profile);
+    }
+    if lists_sessions
+        && profile.tool_allowed("admin_list_sessions")
+        && !tools.iter().any(|tool| tool == "admin_list_sessions")
+    {
+        tools.push("admin_list_sessions".into());
+    }
+    tools
 }
 
 /// Every tool name a profile rule may mention, so a typo is refused instead of silently

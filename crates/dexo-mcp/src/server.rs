@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use dexo_app::mcp::audit::{AuditEvent, SqlAuditMode};
 use dexo_app::mcp::ledger::GrantLedger;
-use dexo_app::mcp::{McpConnection, McpService, WRITE_TOOLS, advertised_tools};
+use dexo_app::mcp::{McpConnection, McpService, WRITE_TOOLS, published_tools};
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::backend::McpBackend;
 use crate::error::{HIDDEN, busy, tool_error};
 use crate::router::McpConnectionRouter;
-use crate::tools_write::{now_secs, write_tool_names};
+use crate::tools_write::now_secs;
 use crate::{prompts, resources};
 
 /// Bumped whenever a tool's name, input schema or annotations change; the snapshot test
@@ -151,39 +151,18 @@ impl DexoMcpServer {
 }
 
 impl Inner {
-    /// The profile's reads, plus the writes an active grant publishes on a connection that
-    /// takes them (MCP-002, MCP-004), and the sessions list while a grant lets sessions be
-    /// ended.
     fn visible_tools(&self) -> Vec<String> {
         let profile = &self.service.profile;
-        let now = now_secs();
-        let mut tools: Vec<String> = advertised_tools(profile)
-            .into_iter()
-            .map(str::to_string)
-            .collect();
-        let accepts_writes = |name: &str| {
-            self.router
-                .connections()
-                .find(|connection| connection.name == name)
-                .is_some_and(|connection| connection.accepts_writes().is_ok())
-        };
-        tools.extend(
-            write_tool_names(self.ledger.as_ref(), &profile.name, now, &accepts_writes)
-                .into_iter()
-                .filter(|tool| profile.tool_allowed(tool)),
-        );
-        let lists_sessions = self
-            .ledger
-            .active_grants(&profile.name, now)
-            .iter()
-            .any(|grant| grant.lists_sessions(profile) && accepts_writes(&grant.connection));
-        if lists_sessions
-            && profile.tool_allowed("admin_list_sessions")
-            && !tools.iter().any(|tool| tool == "admin_list_sessions")
-        {
-            tools.push("admin_list_sessions".into());
-        }
-        tools
+        published_tools(
+            profile,
+            &self.ledger.active_grants(&profile.name, now_secs()),
+            &|name| {
+                self.router
+                    .connections()
+                    .find(|connection| connection.name == name)
+                    .is_some_and(|connection| connection.accepts_writes().is_ok())
+            },
+        )
     }
 
     /// Calls `notify` each time the visible tools differ from what the client was last

@@ -444,12 +444,16 @@ pub enum McpCommand {
     },
     /// Allow or deny objects to a profile, by selector
     Allow {
+        /// The profile to change.
         #[arg(long)]
         profile: String,
+        /// Objects as database.schema.table, `*` for any one part: db.public.* or db.*.orders.
         #[arg(long)]
         selector: String,
+        /// Deny what the selector matches instead; a deny wins over an allow.
         #[arg(long)]
         deny: bool,
+        /// Take the rule away instead of adding it.
         #[arg(long)]
         remove: bool,
     },
@@ -461,10 +465,14 @@ pub enum McpCommand {
     /// List each profile's tools; --probe starts the server and asks it, then checks
     /// every client's config.
     Doctor {
+        /// Only this profile; every profile when left out.
         #[arg(long)]
         profile: Option<String>,
+        /// One JSON document on stdout, nothing else.
         #[arg(long)]
         json: bool,
+        /// Start each enabled profile's server, ask it for its tools, and check every
+        /// client's config for Dexo.
         #[arg(long)]
         probe: bool,
     },
@@ -536,24 +544,34 @@ pub enum McpProfileCommand {
     },
     /// Change a profile's connections, query mode and limits
     Set {
+        /// The profile to change.
         #[arg(long)]
         name: String,
+        /// A saved connection it may use; repeat for several.
         #[arg(long = "connection")]
         connections: Vec<String>,
+        /// Drop every connection first; writes on the ones not given again are revoked.
         #[arg(long)]
         clear_connections: bool,
+        /// structured: the catalog and table tools; raw-read: read-only SQL too.
         #[arg(long, value_parser = ["structured", "raw-read"])]
         query_mode: Option<String>,
+        /// Rows a read returns at most, 1 to 1000000.
         #[arg(long)]
         max_rows: Option<u64>,
+        /// Bytes a read returns at most, 1 to 33554432.
         #[arg(long)]
         max_bytes: Option<u64>,
+        /// Seconds a call may take, 1 to 3600.
         #[arg(long)]
         timeout_secs: Option<u64>,
+        /// Calls the profile may run at once, 1 to 32.
         #[arg(long)]
         max_concurrency: Option<u32>,
+        /// Offer this tool, one an explicit rule must allow (admin_list_sessions).
         #[arg(long = "allow-tool")]
         allow_tools: Vec<String>,
+        /// Never offer this tool, even under write access.
         #[arg(long = "deny-tool")]
         deny_tools: Vec<String>,
     },
@@ -605,9 +623,11 @@ pub enum McpGrantCommand {
 pub enum McpConfigCommand {
     /// Print a client's MCP config for a profile
     Print {
+        /// The profile the server serves.
         #[arg(long)]
         profile: String,
-        #[arg(long)]
+        /// The client whose config to print; the generic mcpServers JSON when left out.
+        #[arg(long, value_parser = ["claude-code", "codex", "cursor", "claude-desktop", "gemini-cli", "windsurf", "vscode"])]
         client: Option<String>,
     },
 }

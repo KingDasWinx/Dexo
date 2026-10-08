@@ -3,7 +3,6 @@ use dexo_app::error::{AppError, ErrorCategory};
 use dexo_app::mcp::approval::{Approval, ApprovalDecision};
 use dexo_app::mcp::audit::{AuditEvent, SqlAuditMode};
 use dexo_app::mcp::grant::Grant;
-use dexo_app::mcp::grant::WRITE_TOOLS;
 use dexo_app::mcp::ledger::GrantLedger;
 use dexo_app::mcp::operation::{OperationRecord, OperationState, SideEffect, payload_hash};
 use dexo_app::mcp::selector::ObjectRef;
@@ -445,31 +444,6 @@ impl DexoMcpServer {
         )
         .await
     }
-}
-
-/// The write tools an active grant publishes, for the connections that accept writes: a
-/// grant on a connection that became production, or read-only, stays in the ledger but
-/// opens nothing, and the tool list no longer offers what `list_connections` says it
-/// cannot do.
-pub fn write_tool_names(
-    ledger: &dyn GrantLedger,
-    profile: &str,
-    now: i64,
-    accepts_writes: &dyn Fn(&str) -> bool,
-) -> Vec<String> {
-    let mut tools = Vec::new();
-    for grant in ledger
-        .active_grants(profile, now)
-        .into_iter()
-        .filter(|grant| accepts_writes(&grant.connection))
-    {
-        for tool in grant.tools {
-            if WRITE_TOOLS.contains(&tool.as_str()) && !tools.contains(&tool) {
-                tools.push(tool);
-            }
-        }
-    }
-    tools
 }
 
 pub fn is_grant_management(name: &str) -> bool {
@@ -976,7 +950,7 @@ fn cancelled_by_agent() -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use super::{call_write_tool, is_grant_management, write_tool_names};
+    use super::{call_write_tool, is_grant_management};
     use dexo_app::mcp::McpConnection;
     use dexo_app::mcp::McpService;
     use dexo_app::mcp::audit::{SECRET_SENTINEL, contains_secret};
@@ -1201,8 +1175,11 @@ mod tests {
     fn catalog_has_no_grant_management_tools() {
         assert!(!is_grant_management("data_insert"));
         assert!(is_grant_management("grant_create"));
-        let ledger = MemoryGrantLedger::default();
-        assert!(write_tool_names(&ledger, "assistant", 0, &|_| true).is_empty());
+        assert!(
+            dexo_app::mcp::published_tools(&profile(), &[], &|_| true)
+                .iter()
+                .all(|tool| !is_grant_management(tool))
+        );
     }
 
     #[tokio::test]

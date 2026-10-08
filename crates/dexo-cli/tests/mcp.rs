@@ -246,6 +246,25 @@ fn mcp_grant_lifecycle_and_audit_export() {
     };
     assert!(create("all").is_err());
     assert!(create("ddl").is_err());
+    assert!(
+        create("rows").is_err(),
+        "a profile with no connection gets no write access"
+    );
+    run_dispatch(
+        Args::parse_from([
+            "dexo",
+            "mcp",
+            "profile",
+            "set",
+            "--name",
+            "assistant",
+            "--connection",
+            "local",
+        ]),
+        DriverRegistry::new(),
+        || Ok(()),
+    )
+    .unwrap();
     create("rows").unwrap();
     create("rows,schema").unwrap();
     run_dispatch(

@@ -8,9 +8,10 @@ use crate::args::{
     SessionsCommand, TransferCliFormat, TuiStart,
 };
 use crate::presenter;
+use dexo_app::mcp::grant::duration_words;
 use dexo_app::mcp::{
     Effect, GrantLedger, McpConnection, McpProfile, McpService, QueryMode, SelectorRule, ToolRule,
-    advertised_tools, known_tools,
+    advertised_tools, known_tools, published_tools,
 };
 use dexo_app::schema_diff::{RenameMapping, SchemaSnapshot, plan_migration, render_unquoted};
 use dexo_app::search_service::SearchService;
@@ -1505,7 +1506,7 @@ fn run_mcp_profile(command: McpProfileCommand) -> anyhow::Result<()> {
         McpProfileCommand::Show { name } => mcp_policy(&name)?,
         McpProfileCommand::Enable { name, confirm } => {
             let mut profile = load_profile(&repo, &name)?;
-            println!("scopes:");
+            println!("objects:");
             for rule in &profile.selectors {
                 println!("  {rule}");
             }
@@ -1536,6 +1537,7 @@ fn run_mcp_profile(command: McpProfileCommand) -> anyhow::Result<()> {
             deny_tools,
         } => {
             let mut profile = load_profile(&repo, &name)?;
+            let before = profile.connections.clone();
             if clear_connections {
                 profile.connections.clear();
             }
@@ -1577,6 +1579,17 @@ fn run_mcp_profile(command: McpProfileCommand) -> anyhow::Result<()> {
                 }
             }
             repo.save(&profile)?;
+            // Write access on a connection the profile no longer uses would come back
+            // with the connection; it goes with it.
+            let ledger = SqliteGrantLedger::open(&paths.database)?;
+            for connection in before
+                .iter()
+                .filter(|connection| !profile.connections.contains(connection))
+            {
+                if ledger.revoke_connection(&name, connection)? > 0 {
+                    println!("{name} may no longer write on {connection}: it no longer uses it");
+                }
+            }
             mcp_policy(&name)?;
         }
     }
@@ -1643,22 +1656,67 @@ fn query_mode_words(mode: QueryMode) -> &'static str {
     }
 }
 
-/// A span in words: `45 s`, `29 min`, `3 h`.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// `pg-dev  rows, schema  ends in 2 h, each write waiting up to 2 min`
+fn grant_line(grant: &dexo_app::mcp::Grant, profile: &McpProfile, now: i64) -> String {
+    format!(
+        "{}  {}  {}, each write waiting up to {}",
+        grant.connection,
+        kinds_words(grant, profile),
+        grant_lasts(grant, now),
+        duration_words(i64::from(grant.ask_secs)),
+    )
+}
+
+/// A profile's live write access, each grant with the reason it opens nothing when its
+/// connection takes no writes from MCP (production, read-only, or gone).
+fn live_writes(
+    db: &Database,
+    ledger: &SqliteGrantLedger,
+    profile: &McpProfile,
+    now: i64,
+) -> anyhow::Result<Vec<(dexo_app::mcp::Grant, Option<String>)>> {
+    let saved = ConnectionRepository::new(db.connection());
+    let mut writes = Vec::new();
+    for grant in ledger.active_grants(&profile.name, now) {
+        let refused = match saved.get_by_name(&grant.connection)? {
+            Some(found) => McpConnection::from_profile(&found)
+                .and_then(|connection| connection.accepts_writes())
+                .err()
+                .map(|error| error.to_string()),
+            None => Some("it is no longer a saved connection".into()),
+        };
+        writes.push((grant, refused));
+    }
+    writes.sort_by(|a, b| a.0.connection.cmp(&b.0.connection));
+    Ok(writes)
+}
+
+/// The tools a client of `profile` is offered now, writes included.
+fn tools_now(
+    profile: &McpProfile,
+    writes: &[(dexo_app::mcp::Grant, Option<String>)],
+) -> Vec<String> {
+    let open: Vec<dexo_app::mcp::Grant> = writes
+        .iter()
+        .filter(|(_, refused)| refused.is_none())
+        .map(|(grant, _)| grant.clone())
+        .collect();
+    published_tools(profile, &open, &|_| true)
+}
+
 /// When a grant ends: "ends in 15 min", or "lasts until it is revoked".
 fn grant_lasts(grant: &dexo_app::mcp::Grant, now: i64) -> String {
     if grant.until_revoked() {
         "lasts until it is revoked".into()
     } else {
-        format!("ends in {}", span_words(grant.expires_at - now))
-    }
-}
-
-fn span_words(secs: i64) -> String {
-    match secs {
-        i64::MIN..=0 => "now".into(),
-        1..=89 => format!("{secs} s"),
-        90..=5399 => format!("{} min", (secs + 30) / 60),
-        _ => format!("{} h", (secs + 1800) / 3600),
+        format!("ends in {}", duration_words(grant.expires_at - now))
     }
 }
 
@@ -1666,8 +1724,20 @@ fn mcp_policy(name: &str) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     let profile = load_profile(&McpProfileRepository::new(db.connection()), name)?;
+    let now = unix_now();
+    let ledger = SqliteGrantLedger::open(&paths.database)?;
+    let writes = live_writes(&db, &ledger, &profile, now)?;
+    let access = if writes.is_empty() {
+        "read-only access".to_string()
+    } else {
+        let on: Vec<&str> = writes
+            .iter()
+            .map(|(grant, _)| grant.connection.as_str())
+            .collect();
+        format!("writes on {}", on.join(", "))
+    };
     println!(
-        "Profile {}: {}, read-only access",
+        "Profile {}: {}, {access}",
         profile.name,
         if profile.enabled {
             "enabled"
@@ -1705,7 +1775,16 @@ fn mcp_policy(name: &str) -> anyhow::Result<()> {
         let effect = if rule.allowed { "allow" } else { "deny" };
         println!("tool {effect} {}", rule.tool);
     }
-    println!("tools: {}", advertised_tools(&profile).join(", "));
+    for (grant, refused) in &writes {
+        match refused {
+            None => println!("writes: {}", grant_line(grant, &profile, now)),
+            Some(why) => println!(
+                "writes: {} -- opens nothing: {why}",
+                grant_line(grant, &profile, now)
+            ),
+        }
+    }
+    println!("tools: {}", tools_now(&profile, &writes).join(", "));
     Ok(())
 }
 
@@ -1721,13 +1800,26 @@ fn mcp_doctor(name: Option<&str>, json: bool, probe: bool) -> anyhow::Result<()>
         repo.list()?
     };
     let probed = probe.then(|| mcp_probe(name)).transpose()?;
+    let now = unix_now();
+    let ledger = SqliteGrantLedger::open(&paths.database)?;
+    let writes = profiles
+        .iter()
+        .map(|profile| live_writes(&db, &ledger, profile, now))
+        .collect::<anyhow::Result<Vec<_>>>()?;
     if json {
         let mut report = serde_json::json!({
-            "profiles": profiles.iter().map(|p| serde_json::json!({
+            "profiles": profiles.iter().zip(&writes).map(|(p, writes)| serde_json::json!({
                 "name": p.name,
                 "enabled": p.enabled,
-                "access": "read_only",
-                "tools": advertised_tools(p),
+                "access": if writes.is_empty() { "read_only" } else { "writes" },
+                "grants": writes.iter().map(|(g, refused)| serde_json::json!({
+                    "connection": g.connection,
+                    "allow": g.kinds_for(p).iter().map(|k| k.as_str()).collect::<Vec<_>>(),
+                    "expires_at": g.expires_at,
+                    "approval_timeout_secs": g.ask_secs,
+                    "refused": refused,
+                })).collect::<Vec<_>>(),
+                "tools": tools_now(p, writes),
             })).collect::<Vec<_>>()
         });
         if let Some(probed) = probed {
@@ -1739,12 +1831,21 @@ fn mcp_doctor(name: Option<&str>, json: bool, probe: bool) -> anyhow::Result<()>
     if profiles.is_empty() {
         println!("no MCP profiles yet: dexo mcp profile create --name NAME");
     }
-    for profile in profiles {
+    for (profile, writes) in profiles.iter().zip(&writes) {
         println!(
             "{}  tools: {}",
-            profile_summary(&profile),
-            advertised_tools(&profile).join(", ")
+            profile_summary(profile),
+            tools_now(profile, writes).join(", ")
         );
+        for (grant, refused) in writes {
+            match refused {
+                None => println!("  writes: {}", grant_line(grant, profile, now)),
+                Some(why) => println!(
+                    "  writes: {} -- opens nothing: {why}",
+                    grant_line(grant, profile, now)
+                ),
+            }
+        }
     }
     let Some(probed) = probed else {
         return Ok(());
@@ -1783,7 +1884,9 @@ fn mcp_doctor(name: Option<&str>, json: bool, probe: bool) -> anyhow::Result<()>
 /// `dexo mcp setup`: Dexo's server merged into the client's config file, the old file
 /// backed up first; with `--skill`, the skill file beside it.
 fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Result<()> {
-    use dexo_app::mcp::clients::{McpClient, Places, dexo_command, read_config, skill_text};
+    use dexo_app::mcp::clients::{
+        McpClient, Places, Written, dexo_command, read_config, skill_text,
+    };
     let client =
         McpClient::parse(client).ok_or_else(|| anyhow::anyhow!("unknown client {client}"))?;
     let paths = AppPaths::discover()?;
@@ -1817,13 +1920,14 @@ fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Re
         }
     } else {
         let done = client.set_up(&places, &exe, name, skill)?;
-        match done.backup {
-            Some(backup) => println!(
+        match done.written {
+            Written::Unchanged => println!("already set up: {}", done.config.display()),
+            Written::Created => println!("wrote {}", done.config.display()),
+            Written::Replaced(backup) => println!(
                 "wrote {} (the old one is {})",
                 done.config.display(),
                 backup.display()
             ),
-            None => println!("wrote {}", done.config.display()),
         }
         if let Some(skill_path) = &done.skill {
             println!("wrote {}", skill_path.display());
@@ -2036,14 +2140,27 @@ fn probe_server(
     result
 }
 
+/// `dexo mcp config print`: what a client's config takes to start Dexo's server -- the
+/// command Claude Code adds it with, the file another client reads (TOML for Codex,
+/// `servers` for VS Code), or generic `mcpServers` JSON.
 fn mcp_config_print(name: &str, client: Option<&str>) -> anyhow::Result<()> {
+    use dexo_app::mcp::clients::McpClient;
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     load_profile(&McpProfileRepository::new(db.connection()), name)?;
     let exe = dexo_app::mcp::clients::dexo_command()?;
-    match client.unwrap_or("json") {
-        "claude-code" => println!("claude mcp add dexo -- {exe} mcp serve --profile {name}"),
-        _ => println!(
+    let args: Vec<String> = ["mcp", "serve", "--profile", name]
+        .map(String::from)
+        .to_vec();
+    match client.and_then(McpClient::parse) {
+        Some(McpClient::ClaudeCode) => println!(
+            "{}",
+            McpClient::ClaudeCode
+                .by_hand(&exe, name)
+                .unwrap_or_default()
+        ),
+        Some(client) => print!("{}", client.merged(None, &exe, &args)?),
+        None => println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "mcpServers": {
@@ -2093,10 +2210,7 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     let ledger = SqliteGrantLedger::open(&paths.database)?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let now = unix_now();
     match command {
         McpGrantCommand::Create {
             profile,
@@ -2111,8 +2225,14 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("unknown connection '{connection}'"))?;
             let kinds = allow
                 .iter()
-                .map(|kind| dexo_app::mcp::WriteKind::parse(kind))
+                .map(|kind| kind.trim())
+                .filter(|kind| !kind.is_empty())
+                .map(dexo_app::mcp::WriteKind::parse)
                 .collect::<Result<Vec<_>, _>>()?;
+            anyhow::ensure!(
+                !kinds.is_empty(),
+                "name what it may change: rows, schema or sessions"
+            );
             // The same request the TUI's Writes makes, so both make one grant.
             let grant = dexo_app::mcp::GrantRequest {
                 connection,
@@ -2126,7 +2246,7 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
                 kinds_words(&grant, &loaded),
                 grant.connection,
                 grant_lasts(&grant, now),
-                span_words(i64::from(grant.ask_secs)),
+                duration_words(i64::from(grant.ask_secs)),
             );
             ledger.insert_grant(grant)?;
         }
@@ -2138,13 +2258,7 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
             }
             grants.sort_by(|a, b| a.connection.cmp(&b.connection));
             for grant in grants {
-                println!(
-                    "{}  {}  {}, each write waiting up to {}",
-                    grant.connection,
-                    kinds_words(&grant, &loaded),
-                    grant_lasts(&grant, now),
-                    span_words(i64::from(grant.ask_secs)),
-                );
+                println!("{}", grant_line(&grant, &loaded, now));
             }
         }
         McpGrantCommand::Revoke {
@@ -2152,12 +2266,19 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
             connection,
         } => {
             load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
+            anyhow::ensure!(
+                ConnectionRepository::new(db.connection())
+                    .get_by_name(&connection)?
+                    .is_some(),
+                "unknown connection '{connection}'"
+            );
             match ledger.revoke_connection(&profile, &connection)? {
                 0 => println!("{profile} could not write on {connection} already"),
                 _ => println!("{profile} may no longer write on {connection}"),
             }
         }
         McpGrantCommand::RevokeAll { profile } => {
+            load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
             ledger.revoke_profile(&profile)?;
             println!("{profile} may no longer write anywhere");
         }
@@ -2177,7 +2298,10 @@ fn kinds_words(grant: &dexo_app::mcp::Grant, profile: &McpProfile) -> String {
 
 fn mcp_audit(profile: Option<&str>) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
-    let _db = Database::open(&paths.database)?;
+    let db = Database::open(&paths.database)?;
+    if let Some(name) = profile {
+        load_profile(&McpProfileRepository::new(db.connection()), name)?;
+    }
     let ledger = SqliteGrantLedger::open(&paths.database)?;
     let mut printed = 0;
     for event in ledger.audits() {
@@ -2200,7 +2324,8 @@ fn mcp_audit(profile: Option<&str>) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod mcp_words_tests {
-    use super::{span_words, valid_profile_name};
+    use super::valid_profile_name;
+    use dexo_app::mcp::grant::duration_words;
 
     #[test]
     fn a_profile_name_is_what_fits_in_an_agents_config() {
@@ -2212,9 +2337,10 @@ mod mcp_words_tests {
 
     #[test]
     fn spans_read_as_words() {
-        assert_eq!(span_words(45), "45 s");
-        assert_eq!(span_words(1796), "30 min");
-        assert_eq!(span_words(86_400), "24 h");
+        assert_eq!(duration_words(45), "45 s");
+        assert_eq!(duration_words(1796), "30 min");
+        assert_eq!(duration_words(86_400), "24 h");
+        assert_eq!(duration_words(5_400), "1 h 30 min");
     }
 }
 
