@@ -267,6 +267,28 @@ fn mcp_grant_lifecycle_and_audit_export() {
     .unwrap();
     create("rows").unwrap();
     create("rows,schema").unwrap();
+    let bypass = |operations: &str| {
+        run_dispatch(
+            Args::parse_from([
+                "dexo",
+                "mcp",
+                "grant",
+                "create",
+                "--profile",
+                "assistant",
+                "--connection",
+                "local",
+                "--allow",
+                "rows",
+                "--bypass",
+                operations,
+            ]),
+            DriverRegistry::new(),
+            || Ok(()),
+        )
+    };
+    bypass("insert,update").unwrap();
+    assert!(bypass("insrt").is_err());
     run_dispatch(
         Args::parse_from([
             "dexo",

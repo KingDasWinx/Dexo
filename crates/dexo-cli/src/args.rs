@@ -599,6 +599,12 @@ pub enum McpGrantCommand {
             value_parser = clap::value_parser!(u32).range(1..=3600)
         )]
         approval_timeout: u32,
+        /// What runs without asking: insert, update, delete, every-row, create, drop or sessions, joined by commas, or all. Without it every write asks.
+        #[arg(long)]
+        bypass: Option<String>,
+        /// A production connection's name, typed to confirm that agents may write to it.
+        #[arg(long)]
+        confirm: Option<String>,
     },
     /// List what a profile may write, one line per connection
     List {

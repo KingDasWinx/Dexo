@@ -105,6 +105,35 @@ pub fn operations_words(operations: &[Operation]) -> String {
         .join(", ")
 }
 
+/// What letting `operations` run without asking risks, said before it is given; none when
+/// every write asks.
+pub fn bypass_risk(operations: &[Operation], production: bool) -> Option<String> {
+    if operations.is_empty() {
+        return None;
+    }
+    let place = if production {
+        "on a production connection, "
+    } else {
+        ""
+    };
+    let destructive: Vec<Operation> = operations
+        .iter()
+        .copied()
+        .filter(|operation| operation.destructive())
+        .collect();
+    Some(if destructive.is_empty() {
+        format!(
+            "{place}{} run without asking: you see them only afterwards, in Activity",
+            operations_words(operations)
+        )
+    } else {
+        format!(
+            "{place}{} run without asking: an agent can empty or drop tables, or end sessions, before you see it",
+            operations_words(&destructive)
+        )
+    })
+}
+
 /// What a call of the write tool `tool` with `arguments` does, statement by statement for
 /// a script. A statement the guard cannot read is refused where it runs; it is never let
 /// through here, since it is no operation at all.

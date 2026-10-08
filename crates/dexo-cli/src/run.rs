@@ -1671,12 +1671,33 @@ fn unix_now() -> i64 {
 /// `pg-dev  rows, schema  ends in 2 h, each write waiting up to 2 min`
 fn grant_line(grant: &dexo_app::mcp::Grant, profile: &McpProfile, now: i64) -> String {
     format!(
-        "{}  {}  {}, each write waiting up to {}",
+        "{}  {}  {}, {}",
         grant.connection,
         kinds_words(grant, profile),
         grant_lasts(grant, now),
-        duration_words(i64::from(grant.ask_secs)),
+        asks_words(grant, profile).0,
     )
+}
+
+/// How its writes go through: `each write waiting up to 2 min`, `insert without asking,
+/// the rest waiting up to 2 min`, `every write without asking`; and whether any asks.
+fn asks_words(grant: &dexo_app::mcp::Grant, profile: &McpProfile) -> (String, bool) {
+    use dexo_app::mcp::bypass::{Operation, operations_words};
+    let wait = duration_words(i64::from(grant.ask_secs));
+    let kinds = grant.kinds_for(profile);
+    let asked = Operation::ALL
+        .into_iter()
+        .filter(|operation| kinds.contains(&operation.kind()))
+        .any(|operation| !grant.bypass.contains(&operation));
+    let words = match (grant.bypass.is_empty(), asked) {
+        (true, _) => format!("each write waiting up to {wait}"),
+        (false, true) => format!(
+            "{} without asking, the rest waiting up to {wait}",
+            operations_words(&grant.bypass)
+        ),
+        (false, false) => "every write without asking".into(),
+    };
+    (words, asked)
 }
 
 /// A profile's live write access, each grant with the reason it opens nothing when its
@@ -1692,7 +1713,7 @@ fn live_writes(
     for grant in ledger.active_grants(&profile.name, now) {
         let refused = match saved.get_by_name(&grant.connection)? {
             Some(found) => McpConnection::from_profile(&found)
-                .and_then(|connection| connection.accepts_writes())
+                .and_then(|connection| connection.opens(&grant))
                 .err()
                 .map(|error| error.to_string()),
             None => Some("it is no longer a saved connection".into()),
@@ -1822,6 +1843,8 @@ fn mcp_doctor(name: Option<&str>, json: bool, probe: bool) -> anyhow::Result<()>
                     "allow": g.kinds_for(p).iter().map(|k| k.as_str()).collect::<Vec<_>>(),
                     "expires_at": g.expires_at,
                     "approval_timeout_secs": g.ask_secs,
+                    "bypass": g.bypass,
+                    "production": g.production,
                     "refused": refused,
                 })).collect::<Vec<_>>(),
                 "tools": tools_now(p, writes),
@@ -2223,6 +2246,8 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
             allow,
             expires,
             approval_timeout,
+            bypass,
+            confirm,
         } => {
             let loaded = load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
             let saved = ConnectionRepository::new(db.connection())
@@ -2244,16 +2269,34 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
                 kinds,
                 expires,
                 ask_secs: Some(approval_timeout),
-                ..Default::default()
+                bypass: bypass
+                    .as_deref()
+                    .map(dexo_app::mcp::bypass::Operation::parse_list)
+                    .transpose()?
+                    .unwrap_or_default(),
+                confirm,
             }
             .issue(&loaded, &saved, now)?;
+            let (asks, any_asks) = asks_words(&grant, &loaded);
             println!(
-                "{profile} may change {} on {}, {}: each write waits up to {} for your approval under Agents, Approvals, in the TUI",
+                "{profile} may change {} on {}, {}, {asks}{}",
                 kinds_words(&grant, &loaded),
                 grant.connection,
                 grant_lasts(&grant, now),
-                duration_words(i64::from(grant.ask_secs)),
+                if any_asks {
+                    "; a write that asks waits under Agents, Approvals, in the TUI"
+                } else {
+                    ""
+                },
             );
+            match dexo_app::mcp::bypass::bypass_risk(&grant.bypass, grant.production) {
+                Some(risk) => println!("! {risk}"),
+                None if grant.production => println!(
+                    "! {} is production: every write asks you first",
+                    grant.connection
+                ),
+                None => {}
+            }
             ledger.insert_grant(grant)?;
         }
         McpGrantCommand::List { profile } => {
