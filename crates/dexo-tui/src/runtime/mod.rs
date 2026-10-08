@@ -2790,9 +2790,12 @@ impl WorkbenchRuntime {
                 .chain(mcp_audit_loaded())
                 .chain(mcp_profiles_loaded())
                 .collect(),
-                Err(error) => vec![Action::McpStatus {
+                // What is shown is read again either way: part of it may have changed.
+                Err(error) => std::iter::once(Action::McpStatus {
                     message: error.to_string(),
-                }],
+                })
+                .chain(mcp_profiles_loaded())
+                .collect(),
             }
         });
     }
@@ -2820,9 +2823,12 @@ impl WorkbenchRuntime {
                 Ok(_) => std::iter::once(Action::McpProfileDeleted { name })
                     .chain(mcp_profiles_loaded())
                     .collect(),
-                Err(error) => vec![Action::McpStatus {
+                // What is shown is read again either way: part of it may have changed.
+                Err(error) => std::iter::once(Action::McpStatus {
                     message: error.to_string(),
-                }],
+                })
+                .chain(mcp_profiles_loaded())
+                .collect(),
             }
         });
     }
@@ -2845,9 +2851,12 @@ impl WorkbenchRuntime {
                     .chain(mcp_audit_loaded())
                     .chain(mcp_profiles_loaded())
                     .collect(),
-                Err(error) => vec![Action::McpStatus {
+                // What is shown is read again either way: part of it may have changed.
+                Err(error) => std::iter::once(Action::McpStatus {
                     message: error.to_string(),
-                }],
+                })
+                .chain(mcp_profiles_loaded())
+                .collect(),
             }
         });
     }
@@ -2891,8 +2900,9 @@ pub fn audit_line(event: &dexo_app::mcp::AuditEvent) -> crate::screens::mcp_audi
     let outcome = match (event.decision.as_str(), code) {
         ("ask", _) => "waiting for approval".to_string(),
         ("approved", _) => "approved by a person".to_string(),
-        ("deny", _) => format!("refused: {}", event.status),
+        // A code the server answered with (`NOT_FOUND`) is said in words, a deny's too.
         (_, true) => format!("refused: {words}"),
+        ("deny", _) => format!("refused: {}", event.status),
         _ if event.status.is_empty() || event.status == "ok" => "ok".to_string(),
         _ => event.status.clone(),
     };
@@ -2941,6 +2951,7 @@ fn mcp_connection_lines(
                     refused,
                     postgres: meta.dialect == dexo_sql::Dialect::Postgres,
                     access: None,
+                    unlisted: false,
                 },
             ))
         })
@@ -2953,7 +2964,6 @@ fn access_on(
     grants: &[dexo_app::mcp::Grant],
     profile: &dexo_app::mcp::McpProfile,
     connection: &str,
-    now: i64,
 ) -> Option<crate::screens::mcp_profiles::Access> {
     let there: Vec<&dexo_app::mcp::Grant> = grants
         .iter()
@@ -2970,8 +2980,7 @@ fn access_on(
         .collect();
     Some(crate::screens::mcp_profiles::Access {
         kinds,
-        expires_in_secs: last.expires_at.saturating_sub(now),
-        until_revoked: last.until_revoked(),
+        expires_at: last.expires_at,
     })
 }
 
@@ -2995,26 +3004,41 @@ fn mcp_profiles_loaded() -> Option<Action> {
                 .map(|ledger| ledger.active_grants(&profile.name, now))
                 .unwrap_or_default();
             let any = profile.connections.is_empty();
-            let names: Vec<String> = if any {
-                served.iter().map(|(name, _)| name.clone()).collect()
-            } else {
-                profile.connections.clone()
+            let line_of = |name: &String| {
+                served
+                    .iter()
+                    .find(|(served, _)| served == name)
+                    .map(|(_, line)| line.clone())
+                    .unwrap_or_else(|| crate::screens::mcp_profiles::ConnectionLine {
+                        refused: Some("it is not a saved connection MCP serves".into()),
+                        name: name.clone(),
+                        ..Default::default()
+                    })
             };
-            let connections = names
-                .into_iter()
+            // Write access left on a connection the profile no longer lists is shown under
+            // it, to be taken back; the server opens nothing there.
+            let mut unlisted: Vec<String> = grants
+                .iter()
+                .map(|grant| grant.connection.clone())
+                .filter(|name| !profile.connections.contains(name))
+                .collect();
+            unlisted.sort();
+            unlisted.dedup();
+            let connections = profile
+                .connections
+                .iter()
                 .map(|name| {
-                    let mut line = served
-                        .iter()
-                        .find(|(served, _)| *served == name)
-                        .map(|(_, line)| line.clone())
-                        .unwrap_or_else(|| crate::screens::mcp_profiles::ConnectionLine {
-                            refused: Some("it is not a saved connection MCP serves".into()),
-                            name: name.clone(),
-                            ..Default::default()
-                        });
-                    line.access = access_on(&grants, &profile, &name, now);
+                    let mut line = line_of(name);
+                    line.access = access_on(&grants, &profile, name);
                     line
                 })
+                .chain(unlisted.iter().map(|name| {
+                    let mut line = line_of(name);
+                    line.refused = Some("no longer listed: r revokes".into());
+                    line.unlisted = true;
+                    line.access = access_on(&grants, &profile, name);
+                    line
+                }))
                 .collect();
             let grantable = dexo_app::mcp::grantable_tools(&profile);
             crate::screens::mcp_profiles::McpProfileSummary {
@@ -3056,12 +3080,26 @@ fn mcp_audit_loaded() -> Option<Action> {
 /// Each agent's config as it is now, and what an entry would run.
 fn mcp_clients() -> Action {
     use dexo_app::mcp::clients::{McpClient, Places, dexo_command};
-    let Ok(places) = Places::discover() else {
-        return Action::McpClientsLoaded {
-            clients: Vec::new(),
-            command: String::new(),
-            project: String::new(),
-        };
+    let places = match Places::discover() {
+        Ok(places) => places,
+        // Every client is listed, unusable with the reason: an empty list read as not
+        // loaded yet, and a form waiting for it waited for ever.
+        Err(error) => {
+            return Action::McpClientsLoaded {
+                clients: McpClient::ALL
+                    .into_iter()
+                    .map(|client| crate::screens::mcp_clients::ClientRow {
+                        client,
+                        path: client.id().into(),
+                        skill: None,
+                        state: dexo_app::mcp::clients::ClientState::Unusable(error.to_string()),
+                        found: false,
+                    })
+                    .collect(),
+                command: "dexo".into(),
+                project: String::new(),
+            };
+        }
     };
     let clients = McpClient::ALL
         .into_iter()
@@ -3129,12 +3167,6 @@ fn save_mcp_profile(
             .map_err(|error| error.to_string())?
             .ok_or_else(|| format!("{} is not a profile any more", save.name))?
     };
-    let dropped: Vec<String> = profile
-        .connections
-        .iter()
-        .filter(|name| !save.connections.contains(name))
-        .cloned()
-        .collect();
     profile.connections = save.connections.clone();
     profile.query_mode = if save.reads {
         dexo_app::mcp::QueryMode::RawReadSql
@@ -3162,17 +3194,27 @@ fn save_mcp_profile(
         if save.new { "made, enabled" } else { "saved" },
         save.connections.join(", ")
     )];
-    if !dropped.is_empty()
-        && let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database)
+    // Write access goes with a connection the profile no longer lists -- read from the
+    // ledger, not from the list it had, which was empty for a profile that listed none.
+    let ledger = dexo_storage::SqliteGrantLedger::open(&paths.database)
+        .map_err(|error| error.to_string())?;
+    let mut had: Vec<String> = ledger
+        .active_grants(&save.name, unix_seconds())
+        .into_iter()
+        .map(|grant| grant.connection)
+        .collect();
+    had.sort();
+    had.dedup();
+    for connection in had
+        .iter()
+        .filter(|connection| !save.connections.contains(connection))
     {
-        for connection in dropped {
-            if ledger
-                .revoke_connection(&save.name, &connection)
-                .map_err(text)?
-                > 0
-            {
-                lines.push(format!("✓ it may no longer write on {connection}"));
-            }
+        if ledger
+            .revoke_connection(&save.name, connection)
+            .map_err(text)?
+            > 0
+        {
+            lines.push(format!("✓ it may no longer write on {connection}"));
         }
     }
     if let Some((client, skill)) = save.agent {

@@ -384,10 +384,19 @@ mod tests {
     }
 
     #[test]
+    /// It says how many write accesses stopped -- one per profile and connection, the
+    /// ones still in time -- and none is left.
     fn revoke_all_clears_active_grants() {
         let ledger = ledger();
-        ledger.insert_grant(grant("local")).unwrap();
-        assert_eq!(ledger.revoke_all().unwrap(), 1);
+        let mut live = grant("local");
+        live.expires_at = dexo_app::mcp::grant::UNTIL_REVOKED;
+        ledger.insert_grant(live).unwrap();
+        ledger.insert_grant(grant("other")).unwrap();
+        assert_eq!(
+            ledger.revoke_all().unwrap(),
+            1,
+            "the expired one stopped nothing"
+        );
         assert!(ledger.active_grants("assistant", 0).is_empty());
     }
 

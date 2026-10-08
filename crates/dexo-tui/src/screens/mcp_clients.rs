@@ -46,6 +46,8 @@ impl ClientRow {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct McpClients {
+    /// The clients have been read once: an empty list before that is not "none".
+    pub loaded: bool,
     pub clients: Vec<ClientRow>,
     /// What a client's entry runs to start Dexo.
     pub command: String,

@@ -457,8 +457,7 @@ fn selecting_a_profile_shows_its_own_writes() {
             name: connection.into(),
             access: Some(Access {
                 kinds,
-                expires_in_secs: 900,
-                ..Access::default()
+                expires_at: 900,
             }),
             ..ConnectionLine::default()
         }],

@@ -7,7 +7,7 @@ expression: "render_to_string(&model, 100, 30)"
 ┌> Profiles (1)──────────────────────────┐┌  assistant─────────────────────────────────────────────┐
 │ [n New]  [R Stop all writes]           ││ [e Enable]  [⏎ Edit]  [x Delete]                       │
 │                                        ││                                                        │
-│> ○ assistant  no agent       ✎ writes  ││ Status        ○ disabled: agents cannot connect        │
+│> ○ assistant  no agent       disabled  ││ Status        ○ disabled: agents cannot connect        │
 │                                        ││ Reads         tables only: browse, describe, read pages│
 │                                        ││ Sees          everything, except db.public.secrets     │
 │                                        ││                                                        │

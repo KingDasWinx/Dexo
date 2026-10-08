@@ -34,23 +34,31 @@ fn kinds_words(kinds: &[WriteKind]) -> String {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Access {
     pub kinds: Vec<WriteKind>,
-    pub expires_in_secs: i64,
-    pub until_revoked: bool,
+    /// When it ends, in Unix seconds; `UNTIL_REVOKED` for one that does not.
+    pub expires_at: i64,
 }
 
 impl Access {
-    /// How long is left, as the end of a line: `28 min left`, `until revoked`.
-    pub fn left(&self) -> String {
-        if self.until_revoked {
+    pub fn until_revoked(&self) -> bool {
+        self.expires_at == dexo_app::mcp::grant::UNTIL_REVOKED
+    }
+
+    /// How long is left at `now`, as the end of a line: `28 min left`, `until revoked`.
+    /// Drawn against the clock, it counts down while the screen is shown.
+    pub fn left(&self, now: i64) -> String {
+        if self.until_revoked() {
             "until revoked".into()
         } else {
-            format!("{} left", duration_words(self.expires_in_secs))
+            format!(
+                "{} left",
+                duration_words(self.expires_at.saturating_sub(now))
+            )
         }
     }
 
     /// `rows, schema · 28 min left`.
-    pub fn words(&self) -> String {
-        format!("{} · {}", kinds_words(&self.kinds), self.left())
+    pub fn words(&self, now: i64) -> String {
+        format!("{} · {}", kinds_words(&self.kinds), self.left(now))
     }
 }
 
@@ -65,6 +73,9 @@ pub struct ConnectionLine {
     /// A PostgreSQL connection: its tables are `database.schema.table`.
     pub postgres: bool,
     pub access: Option<Access>,
+    /// Not one of the profile's connections any more, shown for the write access still
+    /// on it, which `r` takes back; Edit does not check it again.
+    pub unlisted: bool,
 }
 
 /// What a profile sees: every object of its connections, all of them but some, or only
@@ -285,9 +296,9 @@ impl McpProfilesScreen {
                     postgres: true,
                     access: Some(Access {
                         kinds: vec![WriteKind::Rows],
-                        expires_in_secs: 900,
-                        until_revoked: false,
+                        expires_at: 900,
                     }),
+                    unlisted: false,
                 }],
                 kinds: WriteKind::ALL.to_vec(),
             }],
@@ -320,8 +331,11 @@ impl McpProfilesScreen {
             .collect()
     }
 
+    /// The walked row, the last one when the list shrank under it.
     pub fn current(&self, clients: &McpClients) -> Option<Row> {
-        self.rows(clients).get(self.row).copied()
+        let rows = self.rows(clients);
+        rows.get(self.row.min(rows.len().saturating_sub(1)))
+            .copied()
     }
 
     /// The walked connection.
@@ -702,7 +716,7 @@ impl ProfileForm {
             })
             .collect();
         if !profile.any {
-            for line in &profile.connections {
+            for line in profile.connections.iter().filter(|line| !line.unlisted) {
                 if !connections
                     .iter()
                     .any(|(choice, _)| choice.name == line.name)
@@ -883,15 +897,26 @@ impl ProfileForm {
         }
     }
 
+    /// The tables checked meant "hidden" under Except and "shown" under Only: going from
+    /// one to the other starts with none, not with the opposite of what was meant.
+    fn set_sees(&mut self, sees: Sees) {
+        let flipped = matches!(
+            (self.sees, sees),
+            (Sees::Except, Sees::Only) | (Sees::Only, Sees::Except)
+        );
+        if flipped {
+            self.checked.clear();
+        }
+        self.sees = sees;
+    }
+
     /// Picks option `option` of `row`: a segment, an agent, a box, the toggle.
     pub fn pick(&mut self, row: ProfileRow, option: usize) {
         self.focus = row;
         self.error = None;
         match row {
             ProfileRow::Reads => self.sql = option == 1,
-            ProfileRow::Sees => {
-                self.sees = [Sees::All, Sees::Except, Sees::Only][option.min(2)];
-            }
+            ProfileRow::Sees => self.set_sees([Sees::All, Sees::Except, Sees::Only][option.min(2)]),
             ProfileRow::Agent => {
                 self.agent = option.min(self.agents.len());
                 self.open = None;
@@ -938,25 +963,25 @@ impl ProfileForm {
                 return FormKey::Stay;
             }
             (ProfileRow::Sees, KeyCode::Left) => {
-                self.sees = match self.sees {
+                self.set_sees(match self.sees {
                     Sees::Only => Sees::Except,
                     _ => Sees::All,
-                };
+                });
                 return FormKey::Stay;
             }
             (ProfileRow::Sees, KeyCode::Right) => {
-                self.sees = match self.sees {
+                self.set_sees(match self.sees {
                     Sees::All => Sees::Except,
                     _ => Sees::Only,
-                };
+                });
                 return FormKey::Stay;
             }
             (ProfileRow::Sees, KeyCode::Char(' ')) => {
-                self.sees = match self.sees {
+                self.set_sees(match self.sees {
                     Sees::All => Sees::Except,
                     Sees::Except => Sees::Only,
                     Sees::Only => Sees::All,
-                };
+                });
                 return FormKey::Stay;
             }
             (ProfileRow::Skill, KeyCode::Char(' ') | KeyCode::Enter) => {
@@ -1173,6 +1198,16 @@ impl WritesForm {
             .connections
             .iter()
             .partition(|connection| connection.refused.is_none());
+        if profile
+            .connections
+            .iter()
+            .all(|connection| connection.unlisted)
+        {
+            return Err(format!(
+                "{} uses no connection yet: Enter edits it and picks them.",
+                profile.name
+            ));
+        }
         if offered.is_empty() {
             return Err(format!(
                 "{} has no connection that takes writes: MCP never writes to production or read-only connections.",
@@ -1181,7 +1216,7 @@ impl WritesForm {
         }
         if profile.kinds.is_empty() {
             return Err(format!(
-                "{} denies every write tool: dexo mcp profile set --name {} --allow-tool data_insert",
+                "{} denies every write tool: dexo mcp profile set --name {} --allow-tool TOOL gives one back (data_insert, schema_apply_ddl, admin_cancel_query)",
                 profile.name, profile.name
             ));
         }
@@ -1212,17 +1247,21 @@ impl WritesForm {
     /// What the picked connection may write now, to change it.
     fn load_current(&mut self) {
         let kinds = self.kinds.clone();
+        // "Until revoked" is chosen for one connection: it opens on the one that has it,
+        // and is never carried over to the next.
+        let forever = self.current().is_some_and(Access::until_revoked);
+        if forever {
+            self.lasts = LASTS.len() - 1;
+        } else if self.until_revoked() {
+            self.lasts = 1;
+        }
         if let Some(access) = self.current() {
-            let until_revoked = access.until_revoked;
             self.checked = access
                 .kinds
                 .iter()
                 .copied()
                 .filter(|kind| kinds.contains(kind))
                 .collect();
-            if until_revoked {
-                self.lasts = LASTS.len() - 1;
-            }
         } else {
             self.checked.retain(|kind| kinds.contains(kind));
         }
@@ -1587,6 +1626,7 @@ mod tests {
             refused: refused.map(str::to_string),
             postgres: true,
             access: None,
+            unlisted: false,
         }
     }
 
@@ -1667,8 +1707,7 @@ mod tests {
         let mut summary = profile();
         summary.connections[0].access = Some(Access {
             kinds: vec![WriteKind::Schema],
-            until_revoked: true,
-            ..Access::default()
+            expires_at: dexo_app::mcp::grant::UNTIL_REVOKED,
         });
         let mut form = WritesForm::new(&summary, Some("pg-dev")).unwrap();
         assert_eq!(form.offered.len(), 1);

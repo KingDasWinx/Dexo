@@ -2064,14 +2064,15 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             let screen = &mut model.mcp_profiles;
             screen.status.clear();
             screen.confirm = None;
-            model.agents_view = crate::screen::agents::AgentsView::Profiles;
+            show_agents_view(model, crate::screen::agents::AgentsView::Profiles);
             go_to_screen(model, crate::model::Screen::Agents)
         }
         Action::OpenMcpWritesForm => {
-            model.agents_view = crate::screen::agents::AgentsView::Profiles;
-            // Asked for from elsewhere, the profiles are read again first, and the form
-            // opens when they arrive.
-            if model.screen != crate::model::Screen::Agents {
+            show_agents_view(model, crate::screen::agents::AgentsView::Profiles);
+            // Asked for from elsewhere, or before the first read on Agents, the profiles are
+            // read first and the form opens when they arrive: it said "make a profile
+            // first" of a list not read yet.
+            if model.screen != crate::model::Screen::Agents || !model.mcp_profiles.loaded {
                 model.mcp_profiles.when_loaded = Some(WhenLoaded::Writes);
                 return go_to_screen(model, crate::model::Screen::Agents);
             }
@@ -2079,21 +2080,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenMcpAgentForm => {
-            model.agents_view = crate::screen::agents::AgentsView::Profiles;
+            show_agents_view(model, crate::screen::agents::AgentsView::Profiles);
             model.mcp_profiles.when_loaded = Some(WhenLoaded::Agent);
             go_to_screen(model, crate::model::Screen::Agents)
         }
         Action::McpFormDone { result } => {
-            use crate::screens::mcp_profiles::Form;
             match result {
                 Ok(lines) => {
                     let screen = &mut model.mcp_profiles;
-                    // One just made is the one picked once the profiles are read again.
-                    if let Some(Form::Profile(form)) = &screen.form
-                        && !form.editing
-                    {
-                        screen.pick = Some(form.name.trim().to_string());
-                    }
                     screen.form = None;
                     screen.status = lines.join("\n");
                 }
@@ -2122,7 +2116,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::RevokeAllMcpGrants => {
             // From the palette: the profiles, read again, with the question of how many
             // writes stop.
-            model.agents_view = crate::screen::agents::AgentsView::Profiles;
+            show_agents_view(model, crate::screen::agents::AgentsView::Profiles);
             model.mcp_profiles.when_loaded = Some(WhenLoaded::RevokeAll);
             go_to_screen(model, crate::model::Screen::Agents)
         }
@@ -2199,7 +2193,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenMcpAudit => {
-            model.agents_view = crate::screen::agents::AgentsView::Approvals;
+            show_agents_view(model, crate::screen::agents::AgentsView::Approvals);
             go_to_screen(model, crate::model::Screen::Agents)
         }
         Action::OpenDiagnostics => {
@@ -2655,6 +2649,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             project,
         } => {
             let agents = &mut model.mcp_clients;
+            agents.loaded = true;
             agents.clients = clients;
             agents.command = command;
             agents.project = project;
@@ -2671,7 +2666,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 && model.mcp_audit.pending.is_empty();
             model.mcp_profiles.load_profiles(profiles);
             if first_time {
-                model.agents_view = crate::screen::agents::AgentsView::Profiles;
+                show_agents_view(model, crate::screen::agents::AgentsView::Profiles);
             }
             run_when_loaded(model);
             Vec::new()
@@ -2711,11 +2706,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     effects.extend(load_admin_sessions(model));
                 }
             }
-            // The profiles follow what `dexo mcp` changes while they are shown, but not
-            // under a form or a question being answered.
+            // The profiles follow what `dexo mcp` changes while Agents is shown -- Approvals
+            // says who may ask from them -- but not under a form or a question.
             let profiles = &model.mcp_profiles;
             if model.screen == crate::model::Screen::Agents
-                && model.agents_view == crate::screen::agents::AgentsView::Profiles
                 && profiles.form.is_none()
                 && profiles.confirm.is_none()
             {
@@ -4292,6 +4286,11 @@ fn submit_profiles_form(model: &mut Model) -> Vec<Effect> {
             Ok(save) => {
                 form.error = None;
                 form.busy = true;
+                // One being made is the one picked once the profiles are read again --
+                // picked now, so an Esc while it saves does not lose it.
+                if save.new {
+                    model.mcp_profiles.pick = Some(save.name.clone());
+                }
                 vec![Effect::SaveMcpProfile(save)]
             }
             Err((row, message)) => {
@@ -4357,6 +4356,11 @@ fn copy_agent_command(
 fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     use crate::screens::mcp_profiles::{AgentRow, Form, ProfileRow, WritesRow};
     if let Some(form) = model.mcp_profiles.form.as_mut() {
+        // While it saves, only Cancel is heard, as Esc is from the keys: a second click on
+        // Save sent the save a second time.
+        if *form.busy() && hit != Some(HitTarget::FooterCancel) {
+            return Vec::new();
+        }
         match hit {
             // A click on a row focuses it; on a dropdown, it opens it too.
             Some(HitTarget::FormField(index)) => match form {
@@ -4481,6 +4485,8 @@ fn open_edit_profile(model: &mut Model) -> Vec<Effect> {
     };
     let form =
         crate::screens::mcp_profiles::ProfileForm::edit(profile, mcp_connection_choices(model));
+    // A form opens in place of a question, never in front of one left open.
+    model.mcp_profiles.confirm = None;
     model.mcp_profiles.form = Some(crate::screens::mcp_profiles::Form::Profile(form));
     read_profile_tables(model)
 }
@@ -4498,14 +4504,17 @@ fn open_writes_form(model: &mut Model) {
         return;
     };
     match crate::screens::mcp_profiles::WritesForm::new(profile, on.as_deref()) {
-        Ok(form) => screen.form = Some(crate::screens::mcp_profiles::Form::Writes(form)),
+        Ok(form) => {
+            screen.confirm = None;
+            screen.form = Some(crate::screens::mcp_profiles::Form::Writes(form));
+        }
         Err(why) => screen.status = why,
     }
 }
 
 /// Connect agent, for the picked profile, on `agent` or one it does not use yet.
 fn open_agent_form(model: &mut Model, agent: Option<dexo_app::mcp::clients::McpClient>) {
-    if model.mcp_clients.clients.is_empty() {
+    if !model.mcp_clients.loaded {
         model.mcp_profiles.status = "Reading the agents' configs: a again in a moment.".into();
         return;
     }
@@ -4514,6 +4523,7 @@ fn open_agent_form(model: &mut Model, agent: Option<dexo_app::mcp::clients::McpC
         return;
     };
     let form = crate::screens::mcp_profiles::AgentForm::new(profile, agents, agent);
+    model.mcp_profiles.confirm = None;
     model.mcp_profiles.form = Some(crate::screens::mcp_profiles::Form::Agent(form));
 }
 
@@ -4521,8 +4531,7 @@ fn open_agent_form(model: &mut Model, agent: Option<dexo_app::mcp::clients::McpC
 /// once the agents' configs are too.
 fn run_when_loaded(model: &mut Model) {
     let screen = &model.mcp_profiles;
-    let waiting_agents =
-        screen.when_loaded == Some(WhenLoaded::Agent) && model.mcp_clients.clients.is_empty();
+    let waiting_agents = screen.when_loaded == Some(WhenLoaded::Agent) && !model.mcp_clients.loaded;
     if !screen.loaded || waiting_agents {
         return;
     }
@@ -4532,7 +4541,11 @@ fn run_when_loaded(model: &mut Model) {
             open_new_profile(model)
         }
         Some(WhenLoaded::Agent) => open_agent_form(model, None),
-        Some(WhenLoaded::RevokeAll) => model.mcp_profiles.ask_revoke_all(),
+        Some(WhenLoaded::RevokeAll) => {
+            // The question is not left behind a form.
+            model.mcp_profiles.form = None;
+            model.mcp_profiles.ask_revoke_all();
+        }
         None => {}
     }
 }
@@ -4660,12 +4673,25 @@ fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec
     }
 }
 
+/// Shows one of the Agents views, its keys starting on its list: the detail walked on
+/// Profiles is not the detail read on Approvals.
+fn show_agents_view(model: &mut Model, view: crate::screen::agents::AgentsView) {
+    model.sections[crate::model::Screen::Agents.index()] = crate::screen::Section::List;
+    model.screen_button = 0;
+    model.agents_view = view;
+}
+
 fn mouse_agents(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     use crate::screen::agents::AgentsView;
     if let Some(HitTarget::ScreenView(index)) = hit
         && let Some(view) = AgentsView::ALL.get(index).copied()
     {
-        model.agents_view = view;
+        // A form or a question open keeps the screen: switched away, it stayed open
+        // off-screen with the keys.
+        if crate::screen::held(model).is_some() {
+            return Vec::new();
+        }
+        show_agents_view(model, view);
         return match view {
             AgentsView::Profiles => vec![Effect::LoadMcpProfiles, Effect::LoadMcpClients],
             _ => Vec::new(),
@@ -5701,7 +5727,7 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         _ => None,
     };
     if let Some(view) = view {
-        model.agents_view = view;
+        show_agents_view(model, view);
         return Some(match view {
             AgentsView::Profiles => vec![Effect::LoadMcpProfiles, Effect::LoadMcpClients],
             _ => Vec::new(),
@@ -15925,9 +15951,10 @@ mod tests {
             update(&mut model, key(KeyCode::Char('d'))).as_slice(),
             [Effect::SettleApproval { approve: false, .. }]
         ));
+        // Approvals reads the profiles again too: it says who may ask.
         assert!(matches!(
             update(&mut model, Action::ScreenTick).as_slice(),
-            [Effect::LoadMcpAudit]
+            [Effect::LoadMcpAudit, Effect::LoadMcpProfiles]
         ));
     }
 

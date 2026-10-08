@@ -79,12 +79,22 @@ pub fn revoke_profile(conn: &Connection, profile: &str) -> anyhow::Result<usize>
     Ok(revoked)
 }
 
+/// Takes back every write access; how many stopped, one per profile and connection --
+/// not counting access already out of time, which was never going to write again.
 pub fn revoke_all(conn: &Connection) -> anyhow::Result<usize> {
+    let live: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM (
+            SELECT DISTINCT profile_name, connection_name FROM mcp_grants
+            WHERE revoked = 0 AND expires_at > CAST(strftime('%s', 'now') AS INTEGER)
+         )",
+        [],
+        |row| row.get(0),
+    )?;
     conn.execute(
         "UPDATE mcp_grants SET revoked = 1, revision = revision + 1 WHERE revoked = 0",
         [],
-    )
-    .map_err(Into::into)
+    )?;
+    Ok(live as usize)
 }
 
 pub fn is_revoked(conn: &Connection, id: Uuid) -> anyhow::Result<bool> {

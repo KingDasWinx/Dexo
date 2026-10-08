@@ -105,17 +105,22 @@ fn who_may_ask(model: &Model) -> Vec<String> {
         .mcp_profiles
         .profiles
         .iter()
+        .filter(|profile| profile.enabled)
         .flat_map(|profile| {
-            profile.connections.iter().filter_map(move |connection| {
-                connection.access.as_ref().map(|access| {
-                    format!(
-                        "{} may write on {}, {}.",
-                        profile.name,
-                        connection.name,
-                        access.left()
-                    )
+            profile
+                .connections
+                .iter()
+                .filter(|connection| connection.refused.is_none())
+                .filter_map(move |connection| {
+                    connection.access.as_ref().map(|access| {
+                        format!(
+                            "{} may write on {}, {}.",
+                            profile.name,
+                            connection.name,
+                            access.left(model.mcp_audit.now)
+                        )
+                    })
                 })
-            })
         })
         .collect();
     if lines.is_empty() {
@@ -519,12 +524,13 @@ fn profiles_list(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap
                 [one] => one.client.name().to_string(),
                 many => format!("{} agents", many.len()),
             };
-            let state = if profile.writes() > 0 {
-                Span::raw("✎ writes")
-            } else if profile.enabled {
-                Span::styled("read only", style(Role::Muted))
-            } else {
+            // A disabled profile serves no agent, whatever access it keeps.
+            let state = if !profile.enabled {
                 Span::styled("disabled", style(Role::Muted))
+            } else if profile.writes() > 0 {
+                Span::raw("✎ writes")
+            } else {
+                Span::styled("read only", style(Role::Muted))
             };
             let mut spans = vec![
                 if profile.enabled {
@@ -538,7 +544,7 @@ fn profiles_list(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap
                 )),
             ];
             if compact {
-                if profile.writes() > 0 {
+                if profile.enabled && profile.writes() > 0 {
                     spans.push(Span::raw("✎"));
                 }
             } else {
@@ -674,7 +680,15 @@ fn sheet(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     let place = |row: Row| rows.iter().position(|at| *at == row);
     for (at, connection) in profile.connections.iter().enumerate() {
         let (writes, role) = match (&connection.access, &connection.refused) {
-            (Some(access), _) => (format!("✎ {}", access.words()), Role::Foreground),
+            (Some(access), None) => (
+                format!("✎ {}", access.words(model.mcp_audit.now)),
+                Role::Foreground,
+            ),
+            // Write access the server opens nothing with, said with the reason.
+            (Some(access), Some(why)) => (
+                format!("✎ {} -- {why}", access.words(model.mcp_audit.now)),
+                Role::Warning,
+            ),
             (None, Some(why)) if why.contains("production") => {
                 ("read only: production".to_string(), Role::Muted)
             }
@@ -711,7 +725,7 @@ fn sheet(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         lines.push((
             None,
             Line::styled(
-                "   it lists no connection, so it may use any: Edit picks them",
+                "   it lists no connection yet, so no agent can use it: Edit picks them",
                 style(Role::Muted),
             ),
         ));
@@ -1221,7 +1235,10 @@ fn writes_form(frame: &mut Frame, area: Rect, model: &Model, form: &WritesForm, 
     );
     if let Some(access) = form.current() {
         lines.note(
-            format!("Replaces what it has there now: {}.", access.words()),
+            format!(
+                "Replaces what it has there now: {}.",
+                access.words(model.mcp_audit.now)
+            ),
             panel::fg(model, Role::Warning),
         );
     }

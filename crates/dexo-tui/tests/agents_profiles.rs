@@ -34,8 +34,7 @@ fn assistant(name: &str) -> McpProfileSummary {
             postgres: true,
             access: Some(Access {
                 kinds: vec![WriteKind::Rows],
-                expires_in_secs: 1700,
-                ..Access::default()
+                expires_at: 1700,
             }),
             ..ConnectionLine::default()
         }],
