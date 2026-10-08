@@ -36,14 +36,6 @@ pub fn list_active(conn: &Connection, profile: &str, now: i64) -> anyhow::Result
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
-pub fn revision(conn: &Connection) -> anyhow::Result<u64> {
-    Ok(conn.query_row(
-        "SELECT COALESCE(MAX(revision), 0) FROM mcp_grants",
-        [],
-        |row| row.get::<_, i64>(0),
-    )? as u64)
-}
-
 pub fn revoke(conn: &Connection, id: Uuid) -> anyhow::Result<()> {
     conn.execute(
         "UPDATE mcp_grants SET revoked = 1, revision = revision + 1 WHERE id = ?1",

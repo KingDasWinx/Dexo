@@ -110,6 +110,16 @@ impl Client {
         backend: Arc<FakeBackend>,
         ledger: Arc<MemoryGrantLedger>,
     ) -> Self {
+        Self::start_at("2025-11-25", profile, connections, backend, ledger).await
+    }
+
+    pub async fn start_at(
+        protocol: &str,
+        profile: McpProfile,
+        connections: Vec<McpConnection>,
+        backend: Arc<FakeBackend>,
+        ledger: Arc<MemoryGrantLedger>,
+    ) -> Self {
         let (client, server) = tokio::io::duplex(1 << 20);
         let (server_read, server_write) = tokio::io::split(server);
         tokio::spawn(dexo_mcp::serve_io(
@@ -131,7 +141,7 @@ impl Client {
             .request(
                 "initialize",
                 json!({
-                    "protocolVersion": "2025-11-25",
+                    "protocolVersion": protocol,
                     "capabilities": {},
                     "clientInfo": {"name": "test", "version": "0"}
                 }),
@@ -205,12 +215,17 @@ impl Client {
 
     /// Waits up to three seconds for a notification with this method.
     pub async fn saw_notification(&mut self, method: &str) -> bool {
-        if self
+        self.notification(method).await.is_some()
+    }
+
+    /// The first notification with this method, waiting up to three seconds for it.
+    pub async fn notification(&mut self, method: &str) -> Option<Value> {
+        if let Some(seen) = self
             .notifications
             .iter()
-            .any(|message| message["method"] == method)
+            .find(|message| message["method"] == method)
         {
-            return true;
+            return Some(seen.clone());
         }
         for _ in 0..20 {
             let next =
@@ -218,12 +233,12 @@ impl Client {
             if let Ok(Ok(Some(line))) = next {
                 let message: Value = serde_json::from_str(&line).unwrap();
                 if message["method"] == method {
-                    return true;
+                    return Some(message);
                 }
                 self.notifications.push(message);
             }
         }
-        false
+        None
     }
 
     async fn send(&mut self, message: Value) {

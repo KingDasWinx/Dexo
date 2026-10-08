@@ -191,6 +191,12 @@ impl Grant {
             .collect()
     }
 
+    /// It lets sessions be ended, so the sessions list is published with it: the
+    /// `session_id` those tools take comes from `admin_list_sessions`.
+    pub fn lists_sessions(&self) -> bool {
+        self.kinds().contains(&WriteKind::Sessions)
+    }
+
     pub fn active(&self, now: i64) -> bool {
         self.expires_at > now && !self.revoked
     }

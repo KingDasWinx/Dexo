@@ -93,7 +93,7 @@ pub struct AdminActionInput {
     pub connection: Option<String>,
     /// Unique id for this action. Retrying with the same id and payload returns the first result.
     pub operation_id: String,
-    /// Server session to act on, from `admin_list_sessions`.
+    /// Server session to act on, from `admin_list_sessions`, listed while this profile may end sessions.
     pub session_id: String,
     /// Required to terminate a session: repeat `session_id` exactly to confirm.
     pub confirm_target: Option<String>,

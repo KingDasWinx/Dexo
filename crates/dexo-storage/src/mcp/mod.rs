@@ -63,11 +63,6 @@ impl GrantLedger for SqliteGrantLedger {
         grant_repo::list_active(&conn, profile, now).unwrap_or_default()
     }
 
-    fn revision(&self) -> u64 {
-        let conn = self.conn.lock().expect("sqlite");
-        grant_repo::revision(&conn).unwrap_or(0)
-    }
-
     fn insert_grant(&self, grant: Grant) -> Result<(), AppError> {
         self.revoking(|conn| grant_repo::insert(conn, &grant))
             .map(drop)

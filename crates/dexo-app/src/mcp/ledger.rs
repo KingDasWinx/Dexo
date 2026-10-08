@@ -13,7 +13,6 @@ use crate::mcp::operation::{
 
 pub trait GrantLedger: Send + Sync {
     fn active_grants(&self, profile: &str, now: i64) -> Vec<Grant>;
-    fn revision(&self) -> u64;
     /// Saves `grant` in place of what its profile had on its connection -- one write access
     /// per profile and connection -- denying the writes that waited under the old one.
     fn insert_grant(&self, grant: Grant) -> Result<(), AppError>;
@@ -116,10 +115,6 @@ impl GrantLedger for MemoryGrantLedger {
             .filter(|grant| grant.profile == profile && grant.active(now))
             .cloned()
             .collect()
-    }
-
-    fn revision(&self) -> u64 {
-        self.inner.lock().expect("ledger").revision
     }
 
     fn insert_grant(&self, grant: Grant) -> Result<(), AppError> {

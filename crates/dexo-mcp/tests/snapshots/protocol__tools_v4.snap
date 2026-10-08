@@ -31,7 +31,7 @@ expression: client.tools().await
           "type": "string"
         },
         "session_id": {
-          "description": "Server session to act on, from `admin_list_sessions`.",
+          "description": "Server session to act on, from `admin_list_sessions`, listed while this profile may end sessions.",
           "type": "string"
         }
       },
@@ -91,7 +91,7 @@ expression: client.tools().await
           "type": "string"
         },
         "session_id": {
-          "description": "Server session to act on, from `admin_list_sessions`.",
+          "description": "Server session to act on, from `admin_list_sessions`, listed while this profile may end sessions.",
           "type": "string"
         }
       },

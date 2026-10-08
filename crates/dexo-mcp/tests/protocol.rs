@@ -132,13 +132,93 @@ async fn a_grant_publishes_its_tool_and_revoking_removes_it() {
     assert!(
         client
             .saw_notification("notifications/tools/list_changed")
-            .await
+            .await,
+        "revoking did not announce the change"
     );
     assert!(
         !client
             .tool_names()
             .await
             .contains(&"data_insert".to_string())
+    );
+    // The second grant is announced too: the list is compared, not a counter that stalls.
+    client.notifications.clear();
+    ledger.insert_grant(sessions_grant()).unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    let names = client.tool_names().await;
+    assert!(names.contains(&"admin_cancel_query".to_string()));
+    assert!(
+        names.contains(&"admin_list_sessions".to_string()),
+        "the session_id the session tools take must be findable"
+    );
+}
+
+fn sessions_grant() -> Grant {
+    Grant::new(
+        &profile(),
+        "local",
+        &[WriteKind::Sessions],
+        dexo_mcp::tools_write::now_secs(),
+        DEFAULT_TTL_SECS,
+        120,
+    )
+    .unwrap()
+}
+
+/// From protocol 2026-07-28 a client subscribes to list changes, and hears of them on that
+/// subscription only; unanswered, the listen was method-not-found on every poll.
+#[tokio::test]
+async fn a_listening_client_hears_of_tool_changes_on_its_subscription() {
+    let backend = Arc::new(FakeBackend::with_session("local", users()));
+    let ledger = Arc::new(MemoryGrantLedger::default());
+    let mut client = Client::start_at(
+        "2026-07-28",
+        profile(),
+        vec![connection("local")],
+        backend,
+        Arc::clone(&ledger),
+    )
+    .await;
+    let listen = client
+        .send_request(
+            "subscriptions/listen",
+            json!({"notifications": {"toolsListChanged": true}}),
+        )
+        .await;
+    assert!(
+        client
+            .saw_notification("notifications/subscriptions/acknowledged")
+            .await,
+        "{:?}",
+        client.notifications
+    );
+    assert!(
+        !client
+            .notifications
+            .iter()
+            .any(|message| message["id"] == json!(listen)),
+        "the listen was refused: {:?}",
+        client.notifications
+    );
+    ledger.insert_grant(sessions_grant()).unwrap();
+    let changed = client
+        .notification("notifications/tools/list_changed")
+        .await
+        .expect("the grant was announced");
+    assert_eq!(
+        changed["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"],
+        json!(listen)
+    );
+    assert!(
+        client
+            .notification("notifications/tools/list_changed")
+            .await
+            .is_none(),
+        "a subscribed client hears of a change once, on its subscription"
     );
 }
 
@@ -421,7 +501,7 @@ async fn resources_and_prompts_do_not_leak_policy_or_sql() {
 async fn tool_contract_is_versioned() {
     assert_eq!(
         dexo_mcp::TOOL_SCHEMA_VERSION,
-        3,
+        4,
         "rename the snapshot below with the new version"
     );
     let mut everything = profile();
@@ -453,7 +533,7 @@ async fn tool_contract_is_versioned() {
         ledger,
     )
     .await;
-    insta::assert_json_snapshot!("tools_v3", client.tools().await);
+    insta::assert_json_snapshot!("tools_v4", client.tools().await);
 }
 
 /// MCP-002 / MCP-003: a structured-only profile exposes no raw SQL, no write and no

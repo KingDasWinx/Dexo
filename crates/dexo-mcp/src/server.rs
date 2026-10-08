@@ -11,10 +11,11 @@ use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, GetPromptRequestParams, GetPromptResponse,
     GetPromptResult, Implementation, JsonObject, ListPromptsResult, ListResourceTemplatesResult,
-    ListResourcesResult, ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams,
-    ReadResourceResponse, ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo,
+    ListResourcesResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, ResourceContents,
+    ServerCapabilities, ServerInfo, SubscriptionFilter,
 };
-use rmcp::service::{NotificationContext, RequestContext, RoleServer};
+use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -27,7 +28,7 @@ use crate::{prompts, resources};
 
 /// Bumped whenever a tool's name, input schema or annotations change; the snapshot test
 /// in `tests/protocol.rs` fails until it is (MCP-020).
-pub const TOOL_SCHEMA_VERSION: u32 = 3;
+pub const TOOL_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Clone)]
 pub struct DexoMcpServer {
@@ -41,7 +42,8 @@ pub(crate) struct Inner {
     pub ledger: Arc<dyn GrantLedger>,
     pub session_id: String,
     pub calls: Semaphore,
-    last_revision: Mutex<u64>,
+    /// The tools the client was last shown, by `tools/list` or a change notification.
+    shown: Mutex<Vec<String>>,
     stop: CancellationToken,
 }
 
@@ -59,18 +61,20 @@ impl DexoMcpServer {
         // Requests left by a server that was killed while it waited lose their SQL now,
         // not when someone next opens Approvals.
         ledger.sweep_approvals(now_secs());
-        Self {
+        let server = Self {
             inner: Arc::new(Inner {
                 router: McpConnectionRouter::new(connections, backend, connect_timeout),
                 ledger,
                 session_id: uuid::Uuid::new_v4().to_string(),
                 calls: Semaphore::new(concurrency),
-                last_revision: Mutex::new(0),
+                shown: Mutex::new(Vec::new()),
                 stop: CancellationToken::new(),
                 service,
             }),
             tool_router: Self::read_tools() + Self::write_tools(),
-        }
+        };
+        *server.inner.shown.lock().expect("tools") = server.inner.visible_tools();
+        server
     }
 
     fn audit(
@@ -140,31 +144,77 @@ impl DexoMcpServer {
         self.inner.stop.clone()
     }
 
-    /// What this client may see right now: the profile's reads, plus the writes an active
-    /// grant has published (MCP-002, MCP-004). `tools/call` is gated by the same list.
+    /// What this client may see right now; `tools/call` is gated by the same list.
     pub fn visible_tools(&self) -> Vec<String> {
-        let profile = &self.inner.service.profile;
+        self.inner.visible_tools()
+    }
+}
+
+impl Inner {
+    /// The profile's reads, plus the writes an active grant publishes on a connection that
+    /// takes them (MCP-002, MCP-004), and the sessions list while a grant lets sessions be
+    /// ended.
+    fn visible_tools(&self) -> Vec<String> {
+        let profile = &self.service.profile;
+        let now = now_secs();
         let mut tools: Vec<String> = advertised_tools(profile)
             .into_iter()
             .map(str::to_string)
             .collect();
+        let accepts_writes = |name: &str| {
+            self.router
+                .connections()
+                .find(|connection| connection.name == name)
+                .is_some_and(|connection| connection.accepts_writes().is_ok())
+        };
         tools.extend(
-            write_tool_names(
-                self.inner.ledger.as_ref(),
-                &profile.name,
-                now_secs(),
-                &|name| {
-                    self.inner
-                        .router
-                        .connections()
-                        .find(|connection| connection.name == name)
-                        .is_some_and(|connection| connection.accepts_writes().is_ok())
-                },
-            )
-            .into_iter()
-            .filter(|tool| profile.tool_allowed(tool)),
+            write_tool_names(self.ledger.as_ref(), &profile.name, now, &accepts_writes)
+                .into_iter()
+                .filter(|tool| profile.tool_allowed(tool)),
         );
+        let lists_sessions = self
+            .ledger
+            .active_grants(&profile.name, now)
+            .iter()
+            .any(|grant| grant.lists_sessions() && accepts_writes(&grant.connection));
+        if lists_sessions
+            && profile.tool_allowed("admin_list_sessions")
+            && !tools.iter().any(|tool| tool == "admin_list_sessions")
+        {
+            tools.push("admin_list_sessions".into());
+        }
         tools
+    }
+
+    /// Calls `notify` each time the visible tools differ from what the client was last
+    /// shown, until the server stops, `until` resolves, or `notify` says the client is gone.
+    /// The list is compared, not a counter: a revoke left the maximum revision where it was,
+    /// and the client kept tools it had lost.
+    // ponytail: one `shown` per connection, so two listens on one connection split the
+    // notifications between them; keep one per subscription if a client ever opens two.
+    async fn watch_tools<F: Future<Output = bool>>(
+        &self,
+        until: impl Future<Output = ()>,
+        notify: impl Fn() -> F,
+    ) {
+        let mut until = std::pin::pin!(until);
+        loop {
+            tokio::select! {
+                () = self.stop.cancelled() => break,
+                () = &mut until => break,
+                () = tokio::time::sleep(Duration::from_millis(150)) => {}
+            }
+            let tools = self.visible_tools();
+            let changed = {
+                let mut shown = self.shown.lock().expect("tools");
+                let changed = tools != *shown;
+                *shown = tools;
+                changed
+            };
+            if changed && !notify().await {
+                break;
+            }
+        }
     }
 }
 
@@ -224,6 +274,7 @@ impl ServerHandler for DexoMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let visible = self.visible_tools();
+        self.inner.shown.lock().expect("tools").clone_from(&visible);
         Ok(ListToolsResult::with_all_items(
             self.tool_router
                 .list_all()
@@ -364,26 +415,52 @@ impl ServerHandler for DexoMcpServer {
         }
     }
 
+    /// A client before protocol 2026-07-28 hears of tool changes unasked; a later one
+    /// subscribes with `subscriptions/listen` and hears of them there.
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        let listens = context
+            .peer
+            .peer_info()
+            .is_some_and(|info| info.protocol_version >= ProtocolVersion::V_2026_07_28);
+        if listens {
+            return;
+        }
         let inner = Arc::clone(&self.inner);
         let peer = context.peer.clone();
         tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    () = inner.stop.cancelled() => break,
-                    () = tokio::time::sleep(Duration::from_millis(150)) => {}
-                }
-                let revision = inner.ledger.revision();
-                let changed = {
-                    let mut last = inner.last_revision.lock().expect("revision");
-                    let changed = revision != *last;
-                    *last = revision;
-                    changed
-                };
-                if changed {
-                    let _ = peer.notify_tool_list_changed().await;
-                }
-            }
+            inner
+                .watch_tools(std::future::pending(), || {
+                    let peer = peer.clone();
+                    async move {
+                        let _ = peer.notify_tool_list_changed().await;
+                        true
+                    }
+                })
+                .await;
         });
+    }
+
+    /// Every category a client asks for is accepted; the SDK keeps what the capabilities
+    /// advertise, which is the tool list. Unanswered, each listen was method-not-found.
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(requested.clone())
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
+        if context.accepted().tools_list_changed != Some(true) {
+            context.cancelled().await;
+            return Ok(());
+        }
+        let sink = context.sink().clone();
+        self.inner
+            .watch_tools(context.cancelled(), || {
+                let sink = sink.clone();
+                async move { sink.notify_tool_list_changed().await.is_ok() }
+            })
+            .await;
+        Ok(())
     }
 }
