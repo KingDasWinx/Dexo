@@ -1,4 +1,4 @@
-pub const LATEST_SCHEMA_VERSION: u32 = 20;
+pub const LATEST_SCHEMA_VERSION: u32 = 21;
 
 pub const MIGRATION_1: &str = r#"
 BEGIN;
@@ -371,6 +371,16 @@ INSERT INTO schema_migrations(version, applied_at) VALUES(20, datetime('now'));
 COMMIT;
 "#;
 
+/// Write access learns which operations run without asking, and whether it was given on
+/// a production connection with its name typed.
+pub const MIGRATION_21: &str = r#"
+BEGIN;
+ALTER TABLE mcp_grants ADD COLUMN bypass_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE mcp_grants ADD COLUMN production INTEGER NOT NULL DEFAULT 0;
+INSERT INTO schema_migrations(version, applied_at) VALUES(21, datetime('now'));
+COMMIT;
+"#;
+
 pub fn read_schema_version(conn: &rusqlite::Connection) -> u32 {
     conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
@@ -421,6 +431,7 @@ pub fn apply_up_to(conn: &rusqlite::Connection, target: u32) -> anyhow::Result<(
             18 => MIGRATION_18,
             19 => MIGRATION_19,
             20 => MIGRATION_20,
+            21 => MIGRATION_21,
             other => anyhow::bail!("missing migration {other}"),
         };
         conn.execute_batch(sql)?;

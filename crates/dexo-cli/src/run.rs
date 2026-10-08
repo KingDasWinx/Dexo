@@ -2244,6 +2244,7 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
                 kinds,
                 expires,
                 ask_secs: Some(approval_timeout),
+                ..Default::default()
             }
             .issue(&loaded, &saved, now)?;
             println!(

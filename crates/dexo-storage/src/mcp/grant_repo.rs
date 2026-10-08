@@ -9,8 +9,8 @@ pub fn insert(conn: &Connection, grant: &Grant) -> anyhow::Result<usize> {
     conn.execute(
         "INSERT INTO mcp_grants (
             id, profile_name, connection_name, tools_json, expires_at, revision, revoked,
-            ask_secs
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            ask_secs, bypass_json, production
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             grant.id.to_string(),
             grant.profile,
@@ -20,6 +20,8 @@ pub fn insert(conn: &Connection, grant: &Grant) -> anyhow::Result<usize> {
             grant.revision as i64,
             if grant.revoked { 1 } else { 0 },
             grant.ask_secs,
+            serde_json::to_string(&grant.bypass)?,
+            grant.production,
         ],
     )?;
     Ok(replaced)
@@ -29,7 +31,7 @@ pub fn insert(conn: &Connection, grant: &Grant) -> anyhow::Result<usize> {
 pub fn live(conn: &Connection) -> anyhow::Result<Vec<Grant>> {
     let mut stmt = conn.prepare(
         "SELECT id, profile_name, connection_name, tools_json, expires_at, revision, revoked,
-                ask_secs
+                ask_secs, bypass_json, production
          FROM mcp_grants
          WHERE revoked = 0",
     )?;
@@ -40,7 +42,7 @@ pub fn live(conn: &Connection) -> anyhow::Result<Vec<Grant>> {
 pub fn list_active(conn: &Connection, profile: &str, now: i64) -> anyhow::Result<Vec<Grant>> {
     let mut stmt = conn.prepare(
         "SELECT id, profile_name, connection_name, tools_json, expires_at, revision, revoked,
-                ask_secs
+                ask_secs, bypass_json, production
          FROM mcp_grants
          WHERE profile_name = ?1 AND expires_at > ?2 AND revoked = 0",
     )?;
@@ -119,5 +121,7 @@ fn row_to_grant(row: &rusqlite::Row<'_>) -> rusqlite::Result<Grant> {
         revision: row.get::<_, i64>(5)? as u64,
         revoked: row.get::<_, i64>(6)? != 0,
         ask_secs: row.get(7)?,
+        bypass: serde_json::from_str(&row.get::<_, String>(8)?).unwrap_or_default(),
+        production: row.get::<_, i64>(9)? != 0,
     })
 }

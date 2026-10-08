@@ -101,7 +101,7 @@ pub const UNTIL_REVOKED: i64 = i64::MAX;
 
 /// A profile's write access to one connection: the tools of the kinds it was given, until
 /// it expires or is revoked. Every write it covers waits up to `ask_secs` for a person to
-/// approve it.
+/// approve it, but for the operations it lets through without asking.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Grant {
     pub id: Uuid,
@@ -112,6 +112,13 @@ pub struct Grant {
     pub revision: u64,
     pub revoked: bool,
     pub ask_secs: u32,
+    /// The operations that run without asking.
+    #[serde(default)]
+    pub bypass: Vec<crate::mcp::bypass::Operation>,
+    /// Given on a production connection, its name typed to confirm it. Access given
+    /// before a connection was marked production opens nothing there.
+    #[serde(default)]
+    pub production: bool,
 }
 
 impl Grant {
@@ -171,6 +178,8 @@ impl Grant {
             revision: 1,
             revoked: false,
             ask_secs: ask_secs.clamp(1, crate::mcp::approval::MAX_TIMEOUT_SECS),
+            bypass: Vec::new(),
+            production: false,
         })
     }
 
@@ -281,6 +290,10 @@ pub struct GrantRequest {
     pub expires: String,
     /// How long each write waits for a person; the default without it.
     pub ask_secs: Option<u32>,
+    /// The operations that run without asking.
+    pub bypass: Vec<crate::mcp::bypass::Operation>,
+    /// The connection's name, typed: a production connection takes writes only with it.
+    pub confirm: Option<String>,
 }
 
 /// A span in words: `45 s`, `29 min`, `1 h 30 min`, `24 h`.
@@ -300,8 +313,9 @@ pub fn duration_words(secs: i64) -> String {
 }
 
 impl GrantRequest {
-    /// The grant, once the connection is one the profile may use and one that accepts
-    /// writes at all. `saved` is the connection named.
+    /// The grant, once the connection is one the profile may use, one that accepts writes
+    /// at all, and -- production -- confirmed by its name typed. `saved` is the connection
+    /// named.
     pub fn issue(
         &self,
         profile: &McpProfile,
@@ -338,8 +352,19 @@ impl GrantRequest {
                 ),
             ));
         }
-        crate::mcp::McpConnection::from_profile(saved)?.accepts_writes()?;
-        Grant::new(
+        let connection = crate::mcp::McpConnection::from_profile(saved)?;
+        connection.accepts_writes()?;
+        let production = connection.environment == crate::Environment::Production;
+        if production && self.confirm.as_deref().map(str::trim) != Some(self.connection.as_str()) {
+            return Err(AppError::new(
+                ErrorCategory::McpPolicy,
+                format!(
+                    "{} is a production connection: type {} to confirm that agents may write to it",
+                    self.connection, self.connection
+                ),
+            ));
+        }
+        let mut grant = Grant::new(
             profile,
             self.connection.clone(),
             &self.kinds,
@@ -347,7 +372,10 @@ impl GrantRequest {
             parse_ttl(&self.expires)?,
             self.ask_secs
                 .unwrap_or(crate::mcp::approval::DEFAULT_TIMEOUT_SECS),
-        )
+        )?
+        .with_bypass(&self.bypass);
+        grant.production = production;
+        Ok(grant)
     }
 }
 
@@ -405,6 +433,7 @@ mod tests {
             kinds: vec![WriteKind::Rows, WriteKind::Schema],
             expires: "15m".into(),
             ask_secs: Some(90),
+            ..GrantRequest::default()
         };
         let mut uses_local = profile();
         uses_local.connections = vec!["local".into()];
@@ -441,6 +470,19 @@ mod tests {
         .issue(&profile(), &saved, 0)
         .unwrap();
         assert!(forever.until_revoked() && forever.active(i64::MAX - 1));
+        // Production takes writes once its name is typed, and the access says so.
+        let mut production = saved.clone();
+        production.environment = "production".into();
+        assert!(request.issue(&profile(), &production, 0).is_err());
+        let confirmed = GrantRequest {
+            confirm: Some("local".into()),
+            bypass: vec![crate::mcp::bypass::Operation::Insert],
+            ..request.clone()
+        }
+        .issue(&profile(), &production, 0)
+        .unwrap();
+        assert!(confirmed.production);
+        assert_eq!(confirmed.bypass, [crate::mcp::bypass::Operation::Insert]);
     }
 
     /// Each write waits at least a second and at most an hour.

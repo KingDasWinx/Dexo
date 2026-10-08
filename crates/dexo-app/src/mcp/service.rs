@@ -443,17 +443,14 @@ pub fn advertised_tools(profile: &McpProfile) -> Vec<&'static str> {
 pub fn published_tools(
     profile: &McpProfile,
     grants: &[Grant],
-    accepts_writes: &dyn Fn(&str) -> bool,
+    opens: &dyn Fn(&Grant) -> bool,
 ) -> Vec<String> {
     let mut tools: Vec<String> = advertised_tools(profile)
         .into_iter()
         .map(str::to_string)
         .collect();
     let mut lists_sessions = false;
-    for grant in grants
-        .iter()
-        .filter(|grant| accepts_writes(&grant.connection))
-    {
+    for grant in grants.iter().filter(|grant| opens(grant)) {
         for tool in &grant.tools {
             if WRITE_TOOLS.contains(&tool.as_str())
                 && profile.tool_allowed(tool)

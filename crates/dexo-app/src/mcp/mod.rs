@@ -1,5 +1,6 @@
 pub mod approval;
 pub mod audit;
+pub mod bypass;
 pub mod clients;
 pub mod connection;
 pub mod grant;

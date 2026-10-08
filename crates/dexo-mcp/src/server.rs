@@ -156,11 +156,11 @@ impl Inner {
         published_tools(
             profile,
             &self.ledger.active_grants(&profile.name, now_secs()),
-            &|name| {
+            &|grant| {
                 self.router
                     .connections()
-                    .find(|connection| connection.name == name)
-                    .is_some_and(|connection| connection.accepts_writes().is_ok())
+                    .find(|connection| connection.name == grant.connection)
+                    .is_some_and(|connection| connection.opens(grant).is_ok())
             },
         )
     }

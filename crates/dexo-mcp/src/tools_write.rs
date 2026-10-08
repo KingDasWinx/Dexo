@@ -430,9 +430,10 @@ fn covering_grant(
 ) -> Option<Grant> {
     let policy = service.policy();
     let covers = |grant: &&Grant| {
-        targets
-            .iter()
-            .all(|target| grant.authorizes(name, &connection.name, target, &policy, now))
+        connection.opens(grant).is_ok()
+            && targets
+                .iter()
+                .all(|target| grant.authorizes(name, &connection.name, target, &policy, now))
     };
     grants.iter().find(covers).cloned()
 }
@@ -1676,33 +1677,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn production_connections_refuse_writes_and_keep_the_grant() {
+    async fn production_takes_writes_only_through_access_confirmed_for_it() {
         let ledger = MemoryGrantLedger::default();
         ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
         let production = McpConnection {
             environment: dexo_app::Environment::Production,
             ..connection("local")
         };
+        let session = FakeSession::default();
+        let insert = |operation: &str| {
+            json!({"operation_id": operation, "sql": "insert into items values (1)"})
+                .as_object()
+                .cloned()
+                .unwrap()
+        };
+        // Access given before the connection was marked production opens nothing there.
         let error = call_write_tool(
             &service(),
             &ledger,
-            Some((
-                &production,
-                &FakeSession::default() as &dyn dexo_driver_api::Session,
-            )),
+            Some((&production, &session as &dyn dexo_driver_api::Session)),
             "s",
-            "data_insert",
-            json!({"operation_id":"op-p","target":"db.public.items","values":{"id":1}})
-                .as_object()
-                .cloned()
-                .unwrap(),
+            "data_execute_sql",
+            insert("op-p"),
             0,
             approved(&ledger),
         )
         .await
         .unwrap_err();
-        assert!(error.to_string().contains("production"));
+        assert_eq!(error.to_string(), "not found");
+        assert!(session.log().is_empty());
         assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
+        // Access given with its name typed does.
+        let mut confirmed = grant(WriteKind::Rows);
+        confirmed.production = true;
+        ledger.insert_grant(confirmed).unwrap();
+        call_write_tool(
+            &service(),
+            &ledger,
+            Some((&production, &session as &dyn dexo_driver_api::Session)),
+            "s",
+            "data_execute_sql",
+            insert("op-q"),
+            0,
+            approved(&ledger),
+        )
+        .await
+        .unwrap();
+        assert!(
+            session
+                .log()
+                .contains(&"execute insert into items values (1)".to_string())
+        );
     }
 
     fn keyed() -> FakeSession {

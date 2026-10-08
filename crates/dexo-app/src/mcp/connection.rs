@@ -97,15 +97,27 @@ impl McpConnection {
         Ok(())
     }
 
-    /// MCP never writes to production (MCP-015) or to a connection whose own policy keeps
-    /// it read-only (SEC-011); a grant cannot override either.
-    pub fn accepts_writes(&self) -> Result<(), AppError> {
-        if self.environment == Environment::Production {
+    /// Whether `grant` opens anything here: what `accepts_writes` says, and on production
+    /// only access given with the connection's name typed -- access given before it was
+    /// marked production does not carry over.
+    pub fn opens(&self, grant: &crate::mcp::Grant) -> Result<(), AppError> {
+        self.accepts_writes()?;
+        if self.environment == Environment::Production && !grant.production {
             return Err(AppError::new(
                 ErrorCategory::McpPolicy,
-                "writes to production connections are not available over MCP",
+                format!(
+                    "{} became a production connection after this write access was given: give it again, typing its name",
+                    self.name
+                ),
             ));
         }
+        Ok(())
+    }
+
+    /// MCP never writes to a connection whose own policy keeps it read-only (SEC-011);
+    /// no write access overrides that. Production takes writes only through access given
+    /// with its name typed: see `opens`.
+    pub fn accepts_writes(&self) -> Result<(), AppError> {
         if self.read_only {
             return Err(AppError::new(
                 ErrorCategory::Permission,

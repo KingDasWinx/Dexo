@@ -1449,6 +1449,7 @@ impl WritesForm {
             kinds,
             expires: LASTS[self.lasts].0.to_string(),
             ask_secs: None,
+            ..Default::default()
         })
     }
 

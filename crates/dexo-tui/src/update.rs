@@ -15995,6 +15995,7 @@ mod tests {
             kinds: vec![dexo_app::mcp::WriteKind::Rows],
             expires: "1h".into(),
             ask_secs: None,
+            ..Default::default()
         };
         assert!(
             matches!(
