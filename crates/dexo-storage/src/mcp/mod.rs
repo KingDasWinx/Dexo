@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use dexo_app::error::{AppError, ErrorCategory};
 use dexo_app::mcp::approval::{Approval, ApprovalDecision};
-use dexo_app::mcp::audit::AuditEvent;
+use dexo_app::mcp::audit::{AuditEvent, access_changes};
 use dexo_app::mcp::grant::Grant;
 use dexo_app::mcp::ledger::GrantLedger;
 use dexo_app::mcp::operation::{OperationRecord, OperationState, SideEffect};
@@ -43,15 +43,21 @@ impl SqliteGrantLedger {
     }
 
     /// Revokes -- or replaces -- and denies the revoked grants' waiting writes in the same
-    /// transaction, so no one approves a write its grant no longer allows.
+    /// transaction, so no one approves a write its grant no longer allows. Each grant given
+    /// or taken back is audited in it too.
     fn revoking<T>(
         &self,
         revoke: impl FnOnce(&Connection) -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
         let conn = self.conn.lock().expect("sqlite");
         let tx = conn.unchecked_transaction()?;
+        let before = grant_repo::live(&tx)?;
         let revoked = revoke(&tx)?;
         approval_repo::deny_revoked(&tx)?;
+        let after = grant_repo::live(&tx)?;
+        for event in access_changes(&before, &after) {
+            audit_repo::insert(&tx, &event)?;
+        }
         tx.commit()?;
         Ok(revoked)
     }
@@ -383,5 +389,33 @@ mod tests {
         ledger.insert_grant(grant("local")).unwrap();
         assert_eq!(ledger.revoke_all().unwrap(), 1);
         assert!(ledger.active_grants("assistant", 0).is_empty());
+    }
+
+    /// Who could write, and from when, is on the record beside what was written; a revoke
+    /// of a grant that is not live says so.
+    #[test]
+    fn giving_and_taking_back_access_is_audited() {
+        let ledger = ledger();
+        let given = grant("local");
+        let id = given.id;
+        ledger.insert_grant(given).unwrap();
+        ledger.insert_grant(grant("local")).unwrap();
+        ledger.revoke_connection("assistant", "local").unwrap();
+        let requests: Vec<String> = ledger
+            .audits()
+            .into_iter()
+            .filter(|event| event.grant_id.is_some())
+            .map(|event| event.request)
+            .collect();
+        assert_eq!(
+            requests,
+            [
+                "dexo give_access",
+                "dexo revoke_access",
+                "dexo give_access",
+                "dexo revoke_access"
+            ]
+        );
+        assert!(ledger.revoke(id).is_err());
     }
 }

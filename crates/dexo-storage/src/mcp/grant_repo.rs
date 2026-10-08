@@ -25,6 +25,18 @@ pub fn insert(conn: &Connection, grant: &Grant) -> anyhow::Result<usize> {
     Ok(replaced)
 }
 
+/// Every grant not revoked, of any profile, expired or not.
+pub fn live(conn: &Connection) -> anyhow::Result<Vec<Grant>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, profile_name, connection_name, tools_json, expires_at, revision, revoked,
+                ask_secs
+         FROM mcp_grants
+         WHERE revoked = 0",
+    )?;
+    let rows = stmt.query_map([], row_to_grant)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
 pub fn list_active(conn: &Connection, profile: &str, now: i64) -> anyhow::Result<Vec<Grant>> {
     let mut stmt = conn.prepare(
         "SELECT id, profile_name, connection_name, tools_json, expires_at, revision, revoked,
@@ -37,10 +49,11 @@ pub fn list_active(conn: &Connection, profile: &str, now: i64) -> anyhow::Result
 }
 
 pub fn revoke(conn: &Connection, id: Uuid) -> anyhow::Result<()> {
-    conn.execute(
-        "UPDATE mcp_grants SET revoked = 1, revision = revision + 1 WHERE id = ?1",
+    let changed = conn.execute(
+        "UPDATE mcp_grants SET revoked = 1, revision = revision + 1 WHERE id = ?1 AND revoked = 0",
         params![id.to_string()],
     )?;
+    anyhow::ensure!(changed == 1, "no live grant has the id {id}");
     Ok(())
 }
 

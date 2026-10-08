@@ -53,6 +53,14 @@ pub fn replay_or_conflict(
             "unknown outcome must not be retried",
         ));
     }
+    // A retry while the first call still runs has no result to be given: handed the
+    // running record, it was told "" -- or ran the write a second time.
+    if existing.state == OperationState::Running {
+        return Err(AppError::new(
+            ErrorCategory::Conflict,
+            "this operation is still running; retry once it has finished",
+        ));
+    }
     Ok(existing.clone())
 }
 
@@ -82,5 +90,6 @@ mod tests {
         assert_eq!(first, replay);
         assert!(replay_or_conflict(&first, &payload_hash(&json!({"id": 8}))).is_err());
         assert!(replay_or_conflict(&record(&hash, OperationState::Unknown), &hash).is_err());
+        assert!(replay_or_conflict(&record(&hash, OperationState::Running), &hash).is_err());
     }
 }

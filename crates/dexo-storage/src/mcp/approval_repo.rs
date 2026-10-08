@@ -84,6 +84,9 @@ pub fn pending(conn: &Connection, now: i64) -> anyhow::Result<Vec<Approval>> {
 /// expires, and one whose call went silent -- its server stopped while it waited -- is
 /// cancelled. Decided requests are deleted after a day.
 pub fn sweep(conn: &Connection, now: i64) -> anyhow::Result<()> {
+    // One transaction: a request is not cancelled without the audit line that says why.
+    let tx = conn.unchecked_transaction()?;
+    let conn: &Connection = &tx;
     conn.execute(
         "UPDATE mcp_approvals SET decision = 'expired', statement = ''
          WHERE decision = 'pending' AND deadline <= ?1",
@@ -131,6 +134,7 @@ pub fn sweep(conn: &Connection, now: i64) -> anyhow::Result<()> {
         "DELETE FROM mcp_approvals WHERE decision <> 'pending' AND deadline < ?1 - ?2",
         params![now, KEEP_SETTLED_SECS],
     )?;
+    tx.commit()?;
     Ok(())
 }
 

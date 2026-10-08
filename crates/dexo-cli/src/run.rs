@@ -2121,7 +2121,7 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
             .issue(&loaded, &saved, now)?;
             println!(
                 "{profile} may change {} on {}, {}: each write waits up to {} for your approval under Agents, Approvals, in the TUI",
-                kinds_words(&grant),
+                kinds_words(&grant, &loaded),
                 grant.connection,
                 grant_lasts(&grant, now),
                 span_words(i64::from(grant.ask_secs)),
@@ -2129,7 +2129,7 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
             ledger.insert_grant(grant)?;
         }
         McpGrantCommand::List { profile } => {
-            load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
+            let loaded = load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
             let mut grants = ledger.active_grants(&profile, now);
             if grants.is_empty() {
                 println!("{profile} may not write: agents only read through it");
@@ -2139,7 +2139,7 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
                 println!(
                     "{}  {}  {}, each write waiting up to {}",
                     grant.connection,
-                    kinds_words(&grant),
+                    kinds_words(&grant, &loaded),
                     grant_lasts(&grant, now),
                     span_words(i64::from(grant.ask_secs)),
                 );
@@ -2164,9 +2164,9 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
 }
 
 /// What a grant lets change, as `rows, schema`.
-fn kinds_words(grant: &dexo_app::mcp::Grant) -> String {
+fn kinds_words(grant: &dexo_app::mcp::Grant, profile: &McpProfile) -> String {
     grant
-        .kinds()
+        .kinds_for(profile)
         .iter()
         .map(|kind| kind.as_str())
         .collect::<Vec<_>>()

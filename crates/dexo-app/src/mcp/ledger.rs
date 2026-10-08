@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, ErrorCategory};
 use crate::mcp::approval::{Approval, ApprovalDecision, KEEP_SETTLED_SECS};
-use crate::mcp::audit::AuditEvent;
+use crate::mcp::audit::{AuditEvent, access_changes};
 use crate::mcp::grant::Grant;
 use crate::mcp::operation::{
     OperationRecord, OperationState, SideEffect, payload_hash, replay_or_conflict,
@@ -84,6 +84,22 @@ struct Inner {
 }
 
 impl Inner {
+    fn live(&self) -> Vec<Grant> {
+        self.grants
+            .iter()
+            .filter(|grant| !grant.revoked)
+            .cloned()
+            .collect()
+    }
+
+    /// After grants changed from `before`: the revoked ones' waiting writes are denied, and
+    /// each grant given or taken back is audited.
+    fn changed(&mut self, before: &[Grant]) {
+        self.deny_revoked();
+        let events = access_changes(before, &self.live());
+        self.audits.extend(events);
+    }
+
     /// A revoked grant's waiting writes are denied, so no one approves one of them.
     fn deny_revoked(&mut self) {
         let revoked: Vec<Uuid> = self
@@ -119,6 +135,7 @@ impl GrantLedger for MemoryGrantLedger {
 
     fn insert_grant(&self, grant: Grant) -> Result<(), AppError> {
         let mut inner = self.inner.lock().expect("ledger");
+        let before = inner.live();
         for old in &mut inner.grants {
             if old.profile == grant.profile && old.connection == grant.connection {
                 old.revoked = true;
@@ -128,16 +145,21 @@ impl GrantLedger for MemoryGrantLedger {
         let mut grant = grant;
         grant.revision = inner.revision;
         inner.grants.push(grant);
-        inner.deny_revoked();
+        inner.changed(&before);
         Ok(())
     }
 
     fn revoke(&self, id: Uuid) -> Result<(), AppError> {
         let mut inner = self.inner.lock().expect("ledger");
-        if let Some(grant) = inner.grants.iter_mut().find(|grant| grant.id == id) {
+        let before = inner.live();
+        if let Some(grant) = inner
+            .grants
+            .iter_mut()
+            .find(|grant| grant.id == id && !grant.revoked)
+        {
             grant.revoked = true;
             inner.revision += 1;
-            inner.deny_revoked();
+            inner.changed(&before);
             Ok(())
         } else {
             Err(AppError::new(ErrorCategory::McpPolicy, "not found"))
@@ -146,6 +168,7 @@ impl GrantLedger for MemoryGrantLedger {
 
     fn revoke_connection(&self, profile: &str, connection: &str) -> Result<usize, AppError> {
         let mut inner = self.inner.lock().expect("ledger");
+        let before = inner.live();
         let mut revoked = 0;
         for grant in &mut inner.grants {
             if grant.profile == profile && grant.connection == connection && !grant.revoked {
@@ -154,12 +177,13 @@ impl GrantLedger for MemoryGrantLedger {
             }
         }
         inner.revision += 1;
-        inner.deny_revoked();
+        inner.changed(&before);
         Ok(revoked)
     }
 
     fn revoke_profile(&self, profile: &str) -> Result<usize, AppError> {
         let mut inner = self.inner.lock().expect("ledger");
+        let before = inner.live();
         let mut revoked = 0;
         for grant in &mut inner.grants {
             if grant.profile == profile && !grant.revoked {
@@ -168,7 +192,7 @@ impl GrantLedger for MemoryGrantLedger {
             }
         }
         inner.revision += 1;
-        inner.deny_revoked();
+        inner.changed(&before);
         Ok(revoked)
     }
 

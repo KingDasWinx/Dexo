@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::mcp::grant::Grant;
+
 pub const SECRET_SENTINEL: &str = "SUPER_SECRET_SENTINEL";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -27,6 +29,46 @@ pub struct AuditEvent {
 }
 
 impl AuditEvent {
+    /// A person gave a profile write access to a connection, or took it back: who could
+    /// write, and from when, is part of the record of what was written.
+    pub fn access(grant: &Grant, given: bool) -> Self {
+        let kinds: Vec<&str> = grant
+            .kinds()
+            .into_iter()
+            .map(|kind| kind.as_str())
+            .collect();
+        Self {
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs() as i64),
+            request: if given {
+                "dexo give_access"
+            } else {
+                "dexo revoke_access"
+            }
+            .into(),
+            operation_id: None,
+            profile: grant.profile.clone(),
+            client: "dexo".into(),
+            target: grant.connection.clone(),
+            decision: "allow".into(),
+            grant_id: Some(grant.id.to_string()),
+            duration_ms: 0,
+            rows: 0,
+            bytes: 0,
+            status: format!(
+                "{} {}",
+                if given {
+                    "may write"
+                } else {
+                    "may no longer write"
+                },
+                kinds.join(", ")
+            ),
+            sql: None,
+        }
+    }
+
     pub fn sanitize(mut self, mode: SqlAuditMode, sql: Option<&str>) -> Self {
         self.sql = match (mode, sql) {
             (SqlAuditMode::None, _) => None,
@@ -46,6 +88,19 @@ impl AuditEvent {
 
 pub fn contains_secret(text: &str) -> bool {
     text.contains(SECRET_SENTINEL)
+}
+
+/// The grants that went, then the grants that came, between two lists of live grants.
+pub fn access_changes(before: &[Grant], after: &[Grant]) -> Vec<AuditEvent> {
+    let gone = before
+        .iter()
+        .filter(|grant| !after.iter().any(|now| now.id == grant.id))
+        .map(|grant| AuditEvent::access(grant, false));
+    let came = after
+        .iter()
+        .filter(|grant| !before.iter().any(|then| then.id == grant.id))
+        .map(|grant| AuditEvent::access(grant, true));
+    gone.chain(came).collect()
 }
 
 #[cfg(test)]

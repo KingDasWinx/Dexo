@@ -54,6 +54,23 @@ impl DexoMcpServer {
         // A call the agent cancelled does not run, approved or not: rmcp only cancels
         // the token, and the handler goes on unless it looks.
         if cancel.is_cancelled() {
+            if approved.is_some() {
+                audit(
+                    self.inner.ledger.as_ref(),
+                    &self.inner.service,
+                    name,
+                    arguments.get("operation_id").and_then(Value::as_str),
+                    arguments
+                        .get("target")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    "deny",
+                    None,
+                    "cancelled by the agent after approval",
+                    now_secs(),
+                    None,
+                );
+            }
             return crate::error::app_error(&cancelled_by_agent());
         }
         // The profile's call permit is taken only now, to run: held while a person
@@ -124,23 +141,11 @@ impl DexoMcpServer {
         let Some(grant) = covering_grant(&grants, name, connection, &targets, service, now) else {
             return Ok(None);
         };
-        // A destructive DDL without its confirm_target is refused where it runs; asking a
-        // person to approve it first only had them approve a write that then failed.
-        if name == "schema_apply_ddl" {
-            let target = arguments
-                .get("target")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let sql = arguments
-                .get("sql")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let risk = classify_raw_sql(sql);
-            if (risk.destructive || risk.data_loss)
-                && arguments.get("confirm_target").and_then(Value::as_str) != Some(target)
-            {
-                return Ok(None);
-            }
+        // A write refused where it runs -- an unconfirmed destructive DDL or session end, a
+        // connection that no longer takes writes -- is not put to a person first: they
+        // approved a write that then failed, and the agent heard only that it waited.
+        if confirmed(name, arguments).is_err() || connection.accepts_writes().is_err() {
+            return Ok(None);
         }
         let mut approval = Approval::pending(
             &service.profile.name,
@@ -262,6 +267,52 @@ impl DexoMcpServer {
             );
             return Err(AppError::new(ErrorCategory::McpPolicy, refused));
         }
+    }
+}
+
+/// A destructive DDL needs `confirm_target` equal to `target`, typed by the client.
+fn ddl_confirmed(arguments: &Map<String, Value>) -> Result<(), AppError> {
+    let target = arguments
+        .get("target")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let sql = arguments
+        .get("sql")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let risk = classify_raw_sql(sql);
+    if (risk.destructive || risk.data_loss)
+        && arguments.get("confirm_target").and_then(Value::as_str) != Some(target)
+    {
+        return Err(AppError::new(
+            ErrorCategory::Permission,
+            format!("type {target} as confirm_target to confirm"),
+        ));
+    }
+    Ok(())
+}
+
+/// Ending a session needs `confirm_target` equal to `session_id`.
+fn session_confirmed(arguments: &Map<String, Value>) -> Result<(), AppError> {
+    let session = arguments
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if arguments.get("confirm_target").and_then(Value::as_str) != Some(session) {
+        return Err(AppError::new(
+            ErrorCategory::Permission,
+            format!("type {session} as confirm_target to confirm"),
+        ));
+    }
+    Ok(())
+}
+
+/// What a write must carry before anyone is asked about it.
+fn confirmed(name: &str, arguments: &Map<String, Value>) -> Result<(), AppError> {
+    match name {
+        "schema_apply_ddl" => ddl_confirmed(arguments),
+        "admin_terminate_session" => session_confirmed(arguments),
+        _ => Ok(()),
     }
 }
 
@@ -506,6 +557,31 @@ pub async fn call_write_tool(
             );
             AppError::new(ErrorCategory::McpPolicy, "not found")
         })?;
+    confirmed(name, &arguments)?;
+    // An approval stands only for the grant it was given under, and only while it is still
+    // approved: a revoke between the answer and the run denies it.
+    if let Some(id) = approved
+        && !ledger.approval(id).is_some_and(|approval| {
+            approval.decision == ApprovalDecision::Approved && approval.grant == grant.id
+        })
+    {
+        audit(
+            ledger,
+            service,
+            name,
+            Some(operation_id),
+            target_name,
+            "deny",
+            Some(&grant.id.to_string()),
+            "the approval no longer stands",
+            now,
+            None,
+        );
+        return Err(AppError::new(
+            ErrorCategory::McpPolicy,
+            "the approval for this write no longer stands",
+        ));
+    }
     // A write goes through only once a person approved it, before it was taken to the
     // connection.
     if approved.is_none() {
@@ -769,29 +845,17 @@ async fn apply_mutations(
 }
 
 /// Raw DDL from a client cannot be turned into a structured `SchemaChange`, so the risk
-/// comes from the driver-api classifier and the typed confirmation is required from the
-/// client, never filled in from the target it already sent. MySQL commits DDL implicitly;
-/// that is a property of the connection, not something the client gets to claim.
+/// comes from the driver-api classifier, and `ddl_confirmed` held a destructive one to the
+/// confirmation the client typed, never filled in from the target it already sent. MySQL
+/// commits DDL implicitly; that is a property of the connection, not something the client
+/// gets to claim.
 async fn apply_ddl(
     value: &Value,
     session: &dyn Session,
     connection: &McpConnection,
     cancelled: bool,
 ) -> Result<(SideEffect, String), AppError> {
-    let target = value
-        .get("target")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
     let sql = value.get("sql").and_then(Value::as_str).unwrap_or_default();
-    let risk = classify_raw_sql(sql);
-    if (risk.destructive || risk.data_loss)
-        && value.get("confirm_target").and_then(Value::as_str) != Some(target)
-    {
-        return Err(AppError::new(
-            ErrorCategory::Permission,
-            format!("type {target} as confirm_target to confirm"),
-        ));
-    }
     if cancelled {
         return Ok((SideEffect::RolledBack, "rolled_back".into()));
     }
@@ -844,14 +908,6 @@ async fn apply_admin(
     );
     if !decision.allowed {
         return Err(AppError::new(ErrorCategory::Permission, "admin denied"));
-    }
-    if name == "admin_terminate_session"
-        && value.get("confirm_target").and_then(Value::as_str) != Some(session_id.as_str())
-    {
-        return Err(AppError::new(
-            ErrorCategory::Permission,
-            format!("type {session_id} to confirm"),
-        ));
     }
     let outcome = session
         .admin()
@@ -971,8 +1027,31 @@ mod tests {
         McpService::new(profile())
     }
 
-    /// Every write in these tests was approved: the wait itself is the protocol suite's.
-    const APPROVED: Option<uuid::Uuid> = Some(uuid::Uuid::nil());
+    /// Every write in these tests was approved, under the grant the ledger holds: the wait
+    /// itself is the protocol suite's.
+    fn approved(ledger: &MemoryGrantLedger) -> Option<uuid::Uuid> {
+        use dexo_app::mcp::approval::{Approval, ApprovalDecision};
+        let Some(grant) = ledger.active_grants("assistant", 0).pop() else {
+            return Some(uuid::Uuid::nil());
+        };
+        let mut approval = Approval::pending(
+            "assistant",
+            &grant.connection,
+            "test",
+            &serde_json::Map::new(),
+            vec![],
+            0,
+            60,
+        );
+        approval.grant = grant.id;
+        ledger.request_approval(&approval).unwrap();
+        assert!(
+            ledger
+                .settle_approval(approval.id, ApprovalDecision::Approved, 0)
+                .unwrap()
+        );
+        Some(approval.id)
+    }
 
     fn grant(kind: WriteKind) -> Grant {
         grant_on(&profile(), kind)
@@ -1016,7 +1095,7 @@ mod tests {
             tool,
             payload.as_object().cloned().unwrap(),
             0,
-            APPROVED,
+            approved(ledger),
         )
         .await
     }
@@ -1080,7 +1159,7 @@ mod tests {
                 .cloned()
                 .unwrap(),
             0,
-            APPROVED,
+            approved(&ledger),
         )
         .await
         .unwrap_err();
@@ -1225,7 +1304,7 @@ mod tests {
             .cloned()
             .unwrap(),
             0,
-            APPROVED,
+            approved(&ledger),
         )
         .await
         .unwrap_err();
@@ -1264,7 +1343,7 @@ mod tests {
             .cloned()
             .unwrap(),
             0,
-            APPROVED,
+            approved(&ledger),
         )
         .await
         .unwrap();
@@ -1273,6 +1352,76 @@ mod tests {
             "{result}"
         );
         assert!(session.log().contains(&"ddl DROP TABLE items".to_string()));
+    }
+
+    /// A destructive DDL without its confirm_target is told to type the target, before
+    /// anyone is asked to approve it: told it waits for approval, the agent retried for ever.
+    #[tokio::test]
+    async fn an_unconfirmed_destructive_ddl_is_told_what_to_type_first() {
+        let ledger = MemoryGrantLedger::default();
+        ledger.insert_grant(grant(WriteKind::Schema)).unwrap();
+        let connection = connection("local");
+        let session = FakeSession::default();
+        let error = call_write_tool(
+            &service(),
+            &ledger,
+            Some((&connection, &session as &dyn dexo_driver_api::Session)),
+            "s",
+            "schema_apply_ddl",
+            json!({"operation_id":"op-d","target":"db.public.items","sql":"DROP TABLE items"})
+                .as_object()
+                .cloned()
+                .unwrap(),
+            0,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("type db.public.items as confirm_target"),
+            "{error}"
+        );
+    }
+
+    /// An approval stands only while it is approved, and only for the grant it was given
+    /// under: one from another grant does not carry a write.
+    #[tokio::test]
+    async fn an_approval_from_another_grant_does_not_carry_a_write() {
+        let ledger = MemoryGrantLedger::default();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
+        let elsewhere = approved(&ledger);
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
+        let connection = connection("local");
+        let session = FakeSession::default();
+        let error = call_write_tool(
+            &service(),
+            &ledger,
+            Some((&connection, &session as &dyn dexo_driver_api::Session)),
+            "s",
+            "data_insert",
+            json!({"operation_id":"op-a","target":"db.public.items","values":{"id":1}})
+                .as_object()
+                .cloned()
+                .unwrap(),
+            0,
+            elsewhere,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("no longer stands"), "{error}");
+        assert!(session.log().is_empty());
+    }
+
+    /// A retry whose JSON keys arrive in another order is the same write.
+    #[test]
+    fn the_payload_hash_ignores_key_order() {
+        use dexo_app::mcp::operation::payload_hash;
+        assert_eq!(
+            payload_hash(&json!({"values":{"id":7,"name":"x"},"target":"t"})),
+            payload_hash(&json!({"target":"t","values":{"name":"x","id":7}}))
+        );
     }
 
     #[tokio::test]
@@ -1320,7 +1469,7 @@ mod tests {
             .cloned()
             .unwrap(),
             0,
-            APPROVED,
+            approved(&ledger),
         )
         .await
         .unwrap_err();
@@ -1350,7 +1499,7 @@ mod tests {
                 .cloned()
                 .unwrap(),
             0,
-            APPROVED,
+            approved(&ledger),
         )
         .await
         .unwrap_err();

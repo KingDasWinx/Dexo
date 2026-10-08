@@ -176,7 +176,7 @@ impl Inner {
             .ledger
             .active_grants(&profile.name, now)
             .iter()
-            .any(|grant| grant.lists_sessions() && accepts_writes(&grant.connection));
+            .any(|grant| grant.lists_sessions(profile) && accepts_writes(&grant.connection));
         if lists_sessions
             && profile.tool_allowed("admin_list_sessions")
             && !tools.iter().any(|tool| tool == "admin_list_sessions")

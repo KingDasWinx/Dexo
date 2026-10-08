@@ -191,10 +191,23 @@ impl Grant {
             .collect()
     }
 
-    /// It lets sessions be ended, so the sessions list is published with it: the
+    /// The kinds its tools are of, less those whose every tool the profile now denies:
+    /// what the profile can actually do with it.
+    pub fn kinds_for(&self, profile: &McpProfile) -> Vec<WriteKind> {
+        WriteKind::ALL
+            .into_iter()
+            .filter(|kind| {
+                kind.tools()
+                    .iter()
+                    .any(|tool| self.tools.iter().any(|t| t == tool) && profile.tool_allowed(tool))
+            })
+            .collect()
+    }
+
+    /// It lets the profile end sessions, so the sessions list is published with it: the
     /// `session_id` those tools take comes from `admin_list_sessions`.
-    pub fn lists_sessions(&self) -> bool {
-        self.kinds().contains(&WriteKind::Sessions)
+    pub fn lists_sessions(&self, profile: &McpProfile) -> bool {
+        self.kinds_for(profile).contains(&WriteKind::Sessions)
     }
 
     pub fn active(&self, now: i64) -> bool {

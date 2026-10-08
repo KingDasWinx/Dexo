@@ -2945,6 +2945,7 @@ fn mcp_connection_lines(
 /// ones, made several to a connection, joined.
 fn access_on(
     grants: &[dexo_app::mcp::Grant],
+    profile: &dexo_app::mcp::McpProfile,
     connection: &str,
     now: i64,
 ) -> Option<crate::screens::mcp_profiles::Access> {
@@ -2955,7 +2956,11 @@ fn access_on(
     let last = there.iter().max_by_key(|grant| grant.expires_at)?;
     let kinds = dexo_app::mcp::WriteKind::ALL
         .into_iter()
-        .filter(|kind| there.iter().any(|grant| grant.kinds().contains(kind)))
+        .filter(|kind| {
+            there
+                .iter()
+                .any(|grant| grant.kinds_for(profile).contains(kind))
+        })
         .collect();
     Some(crate::screens::mcp_profiles::Access {
         kinds,
@@ -3001,7 +3006,7 @@ fn mcp_profiles_loaded() -> Option<Action> {
                             name: name.clone(),
                             ..Default::default()
                         });
-                    line.access = access_on(&grants, &name, now);
+                    line.access = access_on(&grants, &profile, &name, now);
                     line
                 })
                 .collect();
