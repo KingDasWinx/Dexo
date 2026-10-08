@@ -2658,6 +2658,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             agents.clients = clients;
             agents.command = command;
             agents.project = project;
+            run_when_loaded(model);
             Vec::new()
         }
         Action::McpProfilesLoaded { profiles } => {
@@ -2672,15 +2673,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if first_time {
                 model.agents_view = crate::screen::agents::AgentsView::Profiles;
             }
-            match model.mcp_profiles.when_loaded.take() {
-                Some(WhenLoaded::Writes) => open_writes_form(model),
-                Some(WhenLoaded::Agent) if model.mcp_profiles.profiles.is_empty() => {
-                    open_new_profile(model)
-                }
-                Some(WhenLoaded::Agent) => open_agent_form(model, None),
-                Some(WhenLoaded::RevokeAll) => model.mcp_profiles.ask_revoke_all(),
-                None => {}
-            }
+            run_when_loaded(model);
             Vec::new()
         }
         Action::McpAuditLoaded {
@@ -4522,6 +4515,26 @@ fn open_agent_form(model: &mut Model, agent: Option<dexo_app::mcp::clients::McpC
     };
     let form = crate::screens::mcp_profiles::AgentForm::new(profile, agents, agent);
     model.mcp_profiles.form = Some(crate::screens::mcp_profiles::Form::Agent(form));
+}
+
+/// What was asked for before the profiles were read, once they are -- and, for an agent,
+/// once the agents' configs are too.
+fn run_when_loaded(model: &mut Model) {
+    let screen = &model.mcp_profiles;
+    let waiting_agents =
+        screen.when_loaded == Some(WhenLoaded::Agent) && model.mcp_clients.clients.is_empty();
+    if !screen.loaded || waiting_agents {
+        return;
+    }
+    match model.mcp_profiles.when_loaded.take() {
+        Some(WhenLoaded::Writes) => open_writes_form(model),
+        Some(WhenLoaded::Agent) if model.mcp_profiles.profiles.is_empty() => {
+            open_new_profile(model)
+        }
+        Some(WhenLoaded::Agent) => open_agent_form(model, None),
+        Some(WhenLoaded::RevokeAll) => model.mcp_profiles.ask_revoke_all(),
+        None => {}
+    }
 }
 
 /// What the confirmation asked is done.

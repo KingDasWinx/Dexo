@@ -271,6 +271,8 @@ pub struct McpProfilesScreen {
     pub when_loaded: Option<WhenLoaded>,
     /// The profile to pick once they are read again: one just made.
     pub pick: Option<String>,
+    /// They were read at least once: what was asked before then can be done.
+    pub loaded: bool,
 }
 
 impl McpProfilesScreen {
@@ -362,6 +364,7 @@ impl McpProfilesScreen {
     pub fn load_profiles(&mut self, profiles: Vec<McpProfileSummary>) {
         let keep = self.pick.take().or_else(|| self.name());
         self.profiles = profiles;
+        self.loaded = true;
         self.selected = keep
             .and_then(|keep| self.profiles.iter().position(|p| p.name == keep))
             .unwrap_or_else(|| self.selected.min(self.profiles.len().saturating_sub(1)));
