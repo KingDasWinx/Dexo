@@ -561,48 +561,40 @@ pub enum McpProfileCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum McpGrantCommand {
-    /// Let a profile write to a connection until the grant expires
+    /// Let a profile write to one connection for a while, in place of what it had there;
+    /// every write waits for your approval on Dexo's Agents screen, under Approvals
     Create {
         #[arg(long)]
         profile: String,
         #[arg(long)]
         connection: String,
-        #[arg(long)]
-        capability: String,
-        #[arg(long)]
-        tool: Vec<String>,
-        /// The objects the grant covers; repeat it for several.
-        #[arg(long, required = true)]
-        selector: Vec<String>,
+        /// What it may change: rows, schema or sessions, several joined by commas.
+        #[arg(long, value_delimiter = ',', required = true)]
+        allow: Vec<String>,
         /// How long it lasts, as 15m, 2h or 1h30m (24h at most), or never: until revoked.
         #[arg(long, default_value = "15m")]
         expires: String,
-        #[arg(long = "confirm-target")]
-        confirm_target: Option<String>,
-        /// Every write the grant covers waits for a person to approve it on Dexo's Agents
-        /// screen, under Approvals; the grant lasts until it expires.
-        #[arg(long)]
-        ask: bool,
         /// Seconds a write waits for approval before it is refused, 1 to 3600.
         #[arg(
             long,
             default_value_t = 120,
-            requires = "ask",
             value_parser = clap::value_parser!(u32).range(1..=3600)
         )]
         approval_timeout: u32,
     },
-    /// List a profile's grants
+    /// List what a profile may write, one line per connection
     List {
         #[arg(long)]
         profile: String,
     },
-    /// Take back one grant
+    /// Take back a profile's writes on one connection
     Revoke {
         #[arg(long)]
-        id: String,
+        profile: String,
+        #[arg(long)]
+        connection: String,
     },
-    /// Take back every grant of a profile
+    /// Take back every write a profile may make
     RevokeAll {
         #[arg(long)]
         profile: String,

@@ -1,4 +1,4 @@
-pub const LATEST_SCHEMA_VERSION: u32 = 18;
+pub const LATEST_SCHEMA_VERSION: u32 = 19;
 
 pub const MIGRATION_1: &str = r#"
 BEGIN;
@@ -346,6 +346,21 @@ INSERT INTO schema_migrations(version, applied_at) VALUES(18, datetime('now'));
 COMMIT;
 "#;
 
+/// A grant is a profile's write access to one connection, every write asked: what it
+/// covers is what the profile sees, its tools say what it may change, and it is never
+/// spent. A one-write grant already spent is revoked first, so dropping its count does
+/// not bring it back; one not spent now asks.
+pub const MIGRATION_19: &str = r#"
+BEGIN;
+UPDATE mcp_grants SET revoked = 1 WHERE remaining_uses <= 0;
+UPDATE mcp_grants SET ask_secs = 120 WHERE ask_secs <= 0 AND revoked = 0;
+ALTER TABLE mcp_grants DROP COLUMN capability;
+ALTER TABLE mcp_grants DROP COLUMN selectors_json;
+ALTER TABLE mcp_grants DROP COLUMN remaining_uses;
+INSERT INTO schema_migrations(version, applied_at) VALUES(19, datetime('now'));
+COMMIT;
+"#;
+
 pub fn read_schema_version(conn: &rusqlite::Connection) -> u32 {
     conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
@@ -394,6 +409,7 @@ pub fn apply_up_to(conn: &rusqlite::Connection, target: u32) -> anyhow::Result<(
             16 => MIGRATION_16,
             17 => MIGRATION_17,
             18 => MIGRATION_18,
+            19 => MIGRATION_19,
             other => anyhow::bail!("missing migration {other}"),
         };
         conn.execute_batch(sql)?;

@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::error::{AppError, ErrorCategory};
 use crate::mcp::policy::{Decision, ObjectPolicy};
 use crate::mcp::profile::McpProfile;
-use crate::mcp::selector::{Effect, ObjectRef, Segment, Selector, SelectorRule};
+use crate::mcp::selector::ObjectRef;
 
 pub const WRITE_TOOLS: &[&str] = &[
     "data_insert",
@@ -16,31 +16,75 @@ pub const WRITE_TOOLS: &[&str] = &[
     "admin_terminate_session",
 ];
 
-/// Why a grant cannot give `profile` the write tool `tool`, or `None` when it can: the
-/// profile denies it, and the server never offers it; or it is data_execute_sql, which a
-/// profile allows only by name.
-pub fn why_not_grantable(profile: &McpProfile, tool: &str) -> Option<String> {
-    if !profile.tool_allowed(tool) {
-        return Some(format!(
-            "{} denies it: dexo mcp profile set --name {} --allow-tool {tool}",
-            profile.name, profile.name
-        ));
-    }
-    if tool == "data_execute_sql"
-        && !profile
-            .tool_rules
-            .iter()
-            .any(|rule| rule.tool == tool && rule.allowed)
-    {
-        return Some(format!(
-            "{} must allow it first: dexo mcp profile set --name {} --allow-tool data_execute_sql",
-            profile.name, profile.name
-        ));
-    }
-    None
+/// What a write access may change: rows, the schema, or server sessions. Each kind
+/// stands for its own tools, so DDL and admin writes need their own access (MCP-009,
+/// MCP-011).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum WriteKind {
+    Rows,
+    Schema,
+    Sessions,
 }
 
-/// The write tools a grant can give `profile`, in order: what New grant offers.
+impl WriteKind {
+    pub const ALL: [WriteKind; 3] = [Self::Rows, Self::Schema, Self::Sessions];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rows => "rows",
+            Self::Schema => "schema",
+            Self::Sessions => "sessions",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, AppError> {
+        match value.trim() {
+            "rows" => Ok(Self::Rows),
+            "schema" => Ok(Self::Schema),
+            "sessions" => Ok(Self::Sessions),
+            "all" | "*" => Err(AppError::new(
+                ErrorCategory::McpPolicy,
+                "name what it may change: rows, schema or sessions",
+            )),
+            other => Err(AppError::new(
+                ErrorCategory::Configuration,
+                format!("'{other}' is not something to change: use rows, schema or sessions"),
+            )),
+        }
+    }
+
+    pub fn tools(self) -> &'static [&'static str] {
+        match self {
+            Self::Rows => &[
+                "data_insert",
+                "data_update",
+                "data_delete",
+                "data_execute_sql",
+            ],
+            Self::Schema => &["schema_apply_ddl"],
+            Self::Sessions => &["admin_cancel_query", "admin_terminate_session"],
+        }
+    }
+
+    pub fn of_tool(tool: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.tools().contains(&tool))
+    }
+}
+
+/// Why a write access cannot give `profile` the write tool `tool`, or `None` when it can:
+/// the profile denies it, so the server never offers it.
+pub fn why_not_grantable(profile: &McpProfile, tool: &str) -> Option<String> {
+    (!profile.tool_allowed(tool)).then(|| {
+        format!(
+            "{} denies it: dexo mcp profile set --name {} --allow-tool {tool}",
+            profile.name, profile.name
+        )
+    })
+}
+
+/// The write tools a write access can give `profile`, in order.
 pub fn grantable_tools(profile: &McpProfile) -> Vec<&'static str> {
     WRITE_TOOLS
         .iter()
@@ -55,116 +99,61 @@ pub const MAX_TTL_SECS: i64 = 24 * 60 * 60;
 /// furthest time there is, so every check that a grant has not expired holds.
 pub const UNTIL_REVOKED: i64 = i64::MAX;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum GrantCapability {
-    DataWrite,
-    Ddl,
-    Admin,
-}
-
-impl GrantCapability {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::DataWrite => "data_write",
-            Self::Ddl => "ddl",
-            Self::Admin => "admin",
-        }
-    }
-
-    pub fn parse(value: &str) -> Result<Self, AppError> {
-        match value {
-            "data_write" => Ok(Self::DataWrite),
-            "ddl" => Ok(Self::Ddl),
-            "admin" => Ok(Self::Admin),
-            "all" => Err(AppError::new(
-                ErrorCategory::McpPolicy,
-                "wildcard capabilities are not allowed",
-            )),
-            other => Err(AppError::new(
-                ErrorCategory::Configuration,
-                format!("'{other}' is not a capability: use data_write, ddl or admin"),
-            )),
-        }
-    }
-
-    pub fn allows_tool(self, tool: &str) -> bool {
-        matches!(
-            (self, tool),
-            (
-                Self::DataWrite,
-                "data_insert" | "data_update" | "data_delete" | "data_execute_sql",
-            ) | (Self::Ddl, "schema_apply_ddl")
-                | (
-                    Self::Admin,
-                    "admin_cancel_query" | "admin_terminate_session"
-                )
-        )
-    }
-}
-
+/// A profile's write access to one connection: the tools of the kinds it was given, until
+/// it expires or is revoked. Every write it covers waits up to `ask_secs` for a person to
+/// approve it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Grant {
     pub id: Uuid,
     pub profile: String,
     pub connection: String,
-    pub selectors: Vec<SelectorRule>,
     pub tools: Vec<String>,
-    pub capability: GrantCapability,
     pub expires_at: i64,
-    pub remaining_uses: u32,
     pub revision: u64,
     pub revoked: bool,
-    /// Above zero, the grant asks: each write it covers waits up to this many seconds
-    /// for a person to approve it, and the grant is not spent by one.
-    #[serde(default)]
     pub ask_secs: u32,
 }
 
 impl Grant {
-    /// The grant made to ask, every write it covers waiting up to `timeout_secs` (1 s to
-    /// an hour) for a person's decision. An asking grant lasts until it expires.
-    pub fn asking(mut self, timeout_secs: u32) -> Self {
-        self.ask_secs = timeout_secs.clamp(1, crate::mcp::approval::MAX_TIMEOUT_SECS);
-        self.remaining_uses = u32::MAX;
-        self
-    }
-
-    pub fn asks(&self) -> bool {
-        self.ask_secs > 0
-    }
-
-    /// Made with `--expires never`: it ends only when it is revoked, or spent.
-    pub fn until_revoked(&self) -> bool {
-        self.expires_at == UNTIL_REVOKED
-    }
-
+    /// Write access for `profile` to `connection`, of `kinds`, for `ttl_secs` (or until
+    /// revoked), each write waiting up to `ask_secs` (1 s to an hour) for a person. A tool
+    /// the profile denies is left out; a kind left with none is refused.
     pub fn new(
         profile: &McpProfile,
         connection: impl Into<String>,
-        capability: GrantCapability,
-        tools: Vec<String>,
-        selectors: Vec<SelectorRule>,
+        kinds: &[WriteKind],
         now: i64,
         ttl_secs: i64,
+        ask_secs: u32,
     ) -> Result<Self, AppError> {
-        if tools.is_empty() || tools.iter().any(|tool| tool == "all" || tool == "*") {
+        if kinds.is_empty() {
             return Err(AppError::new(
                 ErrorCategory::McpPolicy,
-                "grant tools must be explicit",
+                "name what it may change: rows, schema or sessions",
             ));
         }
-        for tool in &tools {
-            if !WRITE_TOOLS.contains(&tool.as_str()) || !capability.allows_tool(tool) {
+        let mut tools = Vec::new();
+        for kind in kinds {
+            let allowed: Vec<String> = kind
+                .tools()
+                .iter()
+                .filter(|tool| profile.tool_allowed(tool))
+                .map(|tool| tool.to_string())
+                .collect();
+            if allowed.is_empty() {
                 return Err(AppError::new(
                     ErrorCategory::McpPolicy,
-                    format!("tool {tool} is not valid for this capability"),
+                    format!(
+                        "{} denies every tool that changes {}",
+                        profile.name,
+                        kind.as_str()
+                    ),
                 ));
             }
-            if let Some(why) = why_not_grantable(profile, tool) {
-                return Err(AppError::new(
-                    ErrorCategory::McpPolicy,
-                    format!("{tool}: {why}"),
-                ));
+            for tool in allowed {
+                if !tools.contains(&tool) {
+                    tools.push(tool);
+                }
             }
         }
         if ttl_secs <= 0 || (ttl_secs > MAX_TTL_SECS && ttl_secs != UNTIL_REVOKED) {
@@ -173,43 +162,43 @@ impl Grant {
                 "a grant lasts from 1 second to 24 hours, or until revoked: write the time as 90s, 15m, 2h, 1h30m or never",
             ));
         }
-
-        let policy = ObjectPolicy::new(profile.selectors.clone());
-        for rule in &selectors {
-            let sample = sample_object(&rule.selector);
-            if policy.decide(&sample) != Decision::Allow {
-                return Err(AppError::new(
-                    ErrorCategory::McpPolicy,
-                    format!(
-                        "{} is outside what the profile allows (or inside what it denies): a grant can only narrow the profile",
-                        rule.selector
-                    ),
-                ));
-            }
-        }
         Ok(Self {
             id: Uuid::new_v4(),
             profile: profile.name.clone(),
             connection: connection.into(),
-            selectors,
             tools,
-            capability,
             expires_at: now.saturating_add(ttl_secs),
-            remaining_uses: 1,
             revision: 1,
             revoked: false,
-            ask_secs: 0,
+            ask_secs: ask_secs.clamp(1, crate::mcp::approval::MAX_TIMEOUT_SECS),
         })
     }
 
-    pub fn active(&self, now: i64) -> bool {
-        self.remaining_uses > 0 && self.expires_at > now && !self.revoked
+    /// Made with `--expires never`: it ends only when it is revoked.
+    pub fn until_revoked(&self) -> bool {
+        self.expires_at == UNTIL_REVOKED
     }
 
-    /// A grant narrows the profile; it can never widen it. The profile's deny rules still
-    /// apply inside the grant's scope, and a grant issued for one connection is useless
-    /// on another. Admin actions target a server session, not an object, so an admin
-    /// grant is bounded by its connection alone.
+    /// The kinds its tools are of, in order.
+    pub fn kinds(&self) -> Vec<WriteKind> {
+        WriteKind::ALL
+            .into_iter()
+            .filter(|kind| {
+                kind.tools()
+                    .iter()
+                    .any(|tool| self.tools.iter().any(|t| t == tool))
+            })
+            .collect()
+    }
+
+    pub fn active(&self, now: i64) -> bool {
+        self.expires_at > now && !self.revoked
+    }
+
+    /// A grant narrows the profile; it can never widen it. It covers what the profile sees
+    /// on its one connection, the profile's deny rules included; a grant for one connection
+    /// is useless on another. Ending a session targets a server session, not an object,
+    /// so it is bounded by the connection alone.
     pub fn authorizes(
         &self,
         tool: &str,
@@ -221,10 +210,8 @@ impl Grant {
         self.active(now)
             && self.connection == connection
             && self.tools.iter().any(|name| name == tool)
-            && self.capability.allows_tool(tool)
-            && (self.capability == GrantCapability::Admin
-                || (ObjectPolicy::new(self.selectors.clone()).decide(target) == Decision::Allow
-                    && profile.decide(target) == Decision::Allow))
+            && (WriteKind::of_tool(tool) == Some(WriteKind::Sessions)
+                || profile.decide(target) == Decision::Allow)
     }
 }
 
@@ -265,44 +252,31 @@ pub fn parse_ttl(spec: &str) -> Result<i64, AppError> {
     Ok(total)
 }
 
-/// A grant as a person asks for one: `dexo mcp grant create` and the TUI's New MCP Grant
+/// Write access as a person asks for it: `dexo mcp grant create` and the TUI's Writes
 /// take the same fields and make the same grant.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct GrantRequest {
     pub connection: String,
-    pub capability: String,
-    pub tools: Vec<String>,
-    /// The objects the grant covers, each a selector inside what the profile sees.
-    pub selectors: Vec<String>,
-    /// How long the grant lasts, as `15m` or `2h`, or `never`: until it is revoked.
+    pub kinds: Vec<WriteKind>,
+    /// How long it lasts, as `15m` or `2h`, or `never`: until it is revoked.
     pub expires: String,
-    /// The connection or one of the selectors, typed again to confirm.
-    pub confirm_target: String,
-    /// Each write the grant covers waits up to this many seconds for a person to
-    /// approve it; without it, the grant is spent by one write.
+    /// How long each write waits for a person; the default without it.
     pub ask_secs: Option<u32>,
 }
 
 impl GrantRequest {
-    /// The grant, once the target was typed again and the connection is one the profile
-    /// may use and one that accepts writes at all. `saved` is the connection named.
+    /// The grant, once the connection is one the profile may use and one that accepts
+    /// writes at all. `saved` is the connection named.
     pub fn issue(
         &self,
         profile: &McpProfile,
         saved: &crate::connection_profile::ConnectionProfile,
         now: i64,
     ) -> Result<Grant, AppError> {
-        if self.confirm_target != self.connection && !self.selectors.contains(&self.confirm_target)
-        {
-            return Err(AppError::new(
-                ErrorCategory::Configuration,
-                format!("confirm: type {} exactly as written above", self.connection),
-            ));
-        }
         if self.connection.trim().is_empty() {
             return Err(AppError::new(
                 ErrorCategory::Configuration,
-                "name the connection the grant is for",
+                "name the connection it may write to",
             ));
         }
         if !profile.connections.is_empty()
@@ -322,49 +296,21 @@ impl GrantRequest {
             ));
         }
         crate::mcp::McpConnection::from_profile(saved)?.accepts_writes()?;
-        if self.selectors.is_empty() {
-            return Err(AppError::new(
-                ErrorCategory::McpPolicy,
-                "name the objects the grant covers, as db.public.orders or db.public.*",
-            ));
-        }
-        let selectors = self
-            .selectors
-            .iter()
-            .map(|selector| SelectorRule::parse(Effect::Allow, selector))
-            .collect::<Result<Vec<_>, _>>()?;
-        let grant = Grant::new(
+        Grant::new(
             profile,
             self.connection.clone(),
-            GrantCapability::parse(&self.capability)?,
-            self.tools.clone(),
-            selectors,
+            &self.kinds,
             now,
             parse_ttl(&self.expires)?,
-        )?;
-        Ok(match self.ask_secs {
-            Some(secs) => grant.asking(secs),
-            None => grant,
-        })
-    }
-}
-
-fn sample_object(selector: &Selector) -> ObjectRef {
-    ObjectRef {
-        path: selector
-            .segments
-            .iter()
-            .map(|segment| match segment {
-                Segment::Exact(name) => name.clone(),
-                Segment::Star => "probe".into(),
-            })
-            .collect(),
+            self.ask_secs
+                .unwrap_or(crate::mcp::approval::DEFAULT_TIMEOUT_SECS),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_TTL_SECS, Grant, GrantCapability, MAX_TTL_SECS, parse_ttl};
+    use super::{DEFAULT_TTL_SECS, Grant, MAX_TTL_SECS, WriteKind, parse_ttl};
     use crate::mcp::policy::ObjectPolicy;
     use crate::mcp::profile::{McpProfile, ToolRule};
     use crate::mcp::selector::{Effect, ObjectRef, SelectorRule};
@@ -376,6 +322,10 @@ mod tests {
             SelectorRule::parse(Effect::Deny, "db.public.secrets").unwrap(),
         ];
         profile
+    }
+
+    fn rows(now: i64, ttl: i64) -> Result<Grant, crate::AppError> {
+        Grant::new(&profile(), "local", &[WriteKind::Rows], now, ttl, 120)
     }
 
     #[test]
@@ -390,22 +340,11 @@ mod tests {
         for refused in ["15", "", "m", "1.5h", "15 min", "abc"] {
             assert!(parse_ttl(refused).is_err(), "{refused:?}");
         }
-        assert!(
-            Grant::new(
-                &profile(),
-                "local",
-                GrantCapability::DataWrite,
-                vec!["data_insert".into()],
-                vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-                0,
-                MAX_TTL_SECS + 1,
-            )
-            .is_err()
-        );
+        assert!(rows(0, MAX_TTL_SECS + 1).is_err());
     }
 
-    /// The CLI's and the TUI's grant: confirmed by typing the target, inside the
-    /// profile's connections, and asking before each write when told to.
+    /// The CLI's and the TUI's write access: inside the profile's connections, every write
+    /// asking, for a while or until revoked.
     #[test]
     fn a_grant_request_makes_the_grant_the_cli_makes() {
         use super::GrantRequest;
@@ -420,47 +359,31 @@ mod tests {
         );
         let request = GrantRequest {
             connection: "local".into(),
-            capability: "data_write".into(),
-            tools: vec!["data_insert".into()],
-            selectors: vec!["db.public.items".into()],
+            kinds: vec![WriteKind::Rows, WriteKind::Schema],
             expires: "15m".into(),
-            confirm_target: "local".into(),
             ask_secs: Some(90),
         };
-        let asking = request.issue(&profile(), &saved, 0).unwrap();
-        assert!(asking.asks());
-        assert_eq!(asking.ask_secs, 90);
-        assert_eq!(asking.expires_at, DEFAULT_TTL_SECS);
-        let once = GrantRequest {
+        let grant = request.issue(&profile(), &saved, 0).unwrap();
+        assert_eq!(grant.ask_secs, 90);
+        assert_eq!(grant.expires_at, DEFAULT_TTL_SECS);
+        assert_eq!(grant.kinds(), [WriteKind::Rows, WriteKind::Schema]);
+        assert!(grant.tools.iter().any(|tool| tool == "data_execute_sql"));
+        assert!(grant.tools.iter().any(|tool| tool == "schema_apply_ddl"));
+        let default_wait = GrantRequest {
             ask_secs: None,
             ..request.clone()
         }
         .issue(&profile(), &saved, 0)
         .unwrap();
-        assert!(!once.asks());
-        assert_eq!(once.remaining_uses, 1);
-        let unconfirmed = GrantRequest {
-            confirm_target: "loca".into(),
-            ..request.clone()
-        };
-        assert!(unconfirmed.issue(&profile(), &saved, 0).is_err());
+        assert_eq!(default_wait.ask_secs, 120);
         let mut elsewhere = profile();
         elsewhere.connections = vec!["staging".into()];
         assert!(request.issue(&elsewhere, &saved, 0).is_err());
-        // Several tables in one grant; none is refused.
-        let tables = GrantRequest {
-            selectors: vec!["db.public.items".into(), "db.public.orders".into()],
-            ..request.clone()
-        }
-        .issue(&profile(), &saved, 0)
-        .unwrap();
-        assert_eq!(tables.selectors.len(), 2);
         let nothing = GrantRequest {
-            selectors: Vec::new(),
+            kinds: Vec::new(),
             ..request.clone()
         };
         assert!(nothing.issue(&profile(), &saved, 0).is_err());
-        // Until revoked: it does not expire.
         let forever = GrantRequest {
             expires: "never".into(),
             ..request.clone()
@@ -470,92 +393,47 @@ mod tests {
         assert!(forever.until_revoked() && forever.active(i64::MAX - 1));
     }
 
-    /// An asking grant waits at least a second and at most an hour per write.
+    /// Each write waits at least a second and at most an hour.
     #[test]
     fn the_approval_wait_is_bounded() {
-        let grant = || {
-            Grant::new(
-                &profile(),
-                "local",
-                GrantCapability::DataWrite,
-                vec!["data_insert".into()],
-                vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-                0,
-                DEFAULT_TTL_SECS,
-            )
-            .unwrap()
+        let wait = |secs| {
+            Grant::new(&profile(), "local", &[WriteKind::Rows], 0, 60, secs)
+                .unwrap()
+                .ask_secs
         };
-        assert_eq!(grant().asking(0).ask_secs, 1);
-        assert_eq!(grant().asking(120).ask_secs, 120);
-        assert_eq!(grant().asking(u32::MAX).ask_secs, 3600);
+        assert_eq!(wait(0), 1);
+        assert_eq!(wait(120), 120);
+        assert_eq!(wait(u32::MAX), 3600);
     }
 
     #[test]
-    fn capabilities_are_independent() {
-        assert!(GrantCapability::DataWrite.allows_tool("data_insert"));
-        assert!(!GrantCapability::DataWrite.allows_tool("schema_apply_ddl"));
-        assert!(!GrantCapability::Ddl.allows_tool("admin_terminate_session"));
-        assert!(!GrantCapability::Admin.allows_tool("data_insert"));
+    fn kinds_are_independent_and_named() {
+        assert_eq!(WriteKind::of_tool("data_insert"), Some(WriteKind::Rows));
+        assert_eq!(
+            WriteKind::of_tool("schema_apply_ddl"),
+            Some(WriteKind::Schema)
+        );
+        assert_eq!(
+            WriteKind::of_tool("admin_terminate_session"),
+            Some(WriteKind::Sessions)
+        );
+        assert!(WriteKind::parse("all").is_err());
+        assert!(WriteKind::parse("*").is_err());
+        assert!(WriteKind::parse("ddl").is_err());
+        let grant = rows(0, DEFAULT_TTL_SECS).unwrap();
+        let target = ObjectRef::parse("db.public.items");
+        let policy = ObjectPolicy::new(profile().selectors);
+        assert!(!grant.authorizes("schema_apply_ddl", "local", &target, &policy, 0));
+        assert!(!grant.authorizes("admin_cancel_query", "local", &target, &policy, 0));
     }
 
+    /// It covers what the profile sees on its connection, while it lasts, and no more.
     #[test]
-    fn rejects_all_empty_tools_and_broader_scope() {
-        let profile = profile();
-        assert!(
-            Grant::new(
-                &profile,
-                "local",
-                GrantCapability::DataWrite,
-                vec![],
-                vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-                0,
-                DEFAULT_TTL_SECS,
-            )
-            .is_err()
-        );
-        assert!(
-            Grant::new(
-                &profile,
-                "local",
-                GrantCapability::DataWrite,
-                vec!["all".into()],
-                vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-                0,
-                DEFAULT_TTL_SECS,
-            )
-            .is_err()
-        );
-        assert!(
-            Grant::new(
-                &profile,
-                "local",
-                GrantCapability::DataWrite,
-                vec!["data_insert".into()],
-                vec![SelectorRule::parse(Effect::Allow, "db.*").unwrap()],
-                0,
-                DEFAULT_TTL_SECS,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn one_use_grant_authorizes_until_consumed() {
-        let grant = Grant::new(
-            &profile(),
-            "local",
-            GrantCapability::DataWrite,
-            vec!["data_insert".into()],
-            vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-            10,
-            DEFAULT_TTL_SECS,
-        )
-        .unwrap();
-        assert_eq!(grant.remaining_uses, 1);
+    fn a_grant_reaches_only_what_the_profile_sees() {
+        let grant = rows(10, DEFAULT_TTL_SECS).unwrap();
         let target = ObjectRef::parse("db.public.items");
         let policy = ObjectPolicy::new(profile().selectors);
         assert!(grant.authorizes("data_insert", "local", &target, &policy, 10));
-        assert!(!grant.authorizes("schema_apply_ddl", "local", &target, &policy, 10));
         assert!(!grant.authorizes(
             "data_insert",
             "local",
@@ -563,103 +441,39 @@ mod tests {
             &policy,
             10
         ));
+        assert!(!grant.authorizes(
+            "data_insert",
+            "local",
+            &ObjectRef::parse("db.other.t"),
+            &policy,
+            10
+        ));
         assert!(!grant.authorizes("data_insert", "local", &target, &policy, grant.expires_at));
         assert!(!grant.authorizes("data_insert", "other", &target, &policy, 10));
+        let mut revoked = grant.clone();
+        revoked.revoked = true;
+        assert!(!revoked.authorizes("data_insert", "local", &target, &policy, 10));
     }
 
-    #[test]
-    fn data_execute_sql_needs_profile_tool_rule() {
-        let mut profile = profile();
-        assert!(
-            Grant::new(
-                &profile,
-                "local",
-                GrantCapability::DataWrite,
-                vec!["data_execute_sql".into()],
-                vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-                0,
-                DEFAULT_TTL_SECS,
-            )
-            .is_err()
-        );
-        profile.tool_rules.push(ToolRule {
-            tool: "data_execute_sql".into(),
-            allowed: true,
-        });
-        assert!(
-            Grant::new(
-                &profile,
-                "local",
-                GrantCapability::DataWrite,
-                vec!["data_execute_sql".into()],
-                vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-                0,
-                DEFAULT_TTL_SECS,
-            )
-            .is_ok()
-        );
-    }
-
-    /// What New grant offers is what a grant can give: every write tool the profile does
-    /// not deny, and data_execute_sql only where a rule allows it by name; the rest each
-    /// say why.
+    /// A tool the profile denies is left out of the grant; a kind with none left is
+    /// refused.
     #[test]
     fn a_grant_gives_only_what_the_profile_lets_it() {
         use super::{grantable_tools, why_not_grantable};
         let mut profile = profile();
-        assert_eq!(
-            grantable_tools(&profile),
-            [
-                "data_insert",
-                "data_update",
-                "data_delete",
-                "schema_apply_ddl",
-                "admin_cancel_query",
-                "admin_terminate_session"
-            ]
-        );
-        assert!(
-            why_not_grantable(&profile, "data_execute_sql")
-                .is_some_and(|why| why.contains("--allow-tool data_execute_sql"))
-        );
+        assert_eq!(grantable_tools(&profile).len(), super::WRITE_TOOLS.len());
         profile.tool_rules.push(ToolRule {
             tool: "data_delete".into(),
             allowed: false,
         });
         assert!(!grantable_tools(&profile).contains(&"data_delete"));
-        // A denied tool is refused, not granted for nothing: the server never offers it.
-        let denied = Grant::new(
-            &profile,
-            "local",
-            GrantCapability::DataWrite,
-            vec!["data_delete".into()],
-            vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-            0,
-            DEFAULT_TTL_SECS,
-        );
-        assert!(denied.is_err());
-        for tool in grantable_tools(&profile) {
-            let capability = [
-                GrantCapability::DataWrite,
-                GrantCapability::Ddl,
-                GrantCapability::Admin,
-            ]
-            .into_iter()
-            .find(|capability| capability.allows_tool(tool))
-            .unwrap();
-            assert!(
-                Grant::new(
-                    &profile,
-                    "local",
-                    capability,
-                    vec![tool.into()],
-                    vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-                    0,
-                    DEFAULT_TTL_SECS,
-                )
-                .is_ok(),
-                "{tool}"
-            );
-        }
+        assert!(why_not_grantable(&profile, "data_delete").is_some());
+        let grant = Grant::new(&profile, "local", &[WriteKind::Rows], 0, 60, 120).unwrap();
+        assert!(!grant.tools.iter().any(|tool| tool == "data_delete"));
+        profile.tool_rules.push(ToolRule {
+            tool: "schema_apply_ddl".into(),
+            allowed: false,
+        });
+        assert!(Grant::new(&profile, "local", &[WriteKind::Schema], 0, 60, 120).is_err());
     }
 }

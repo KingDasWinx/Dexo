@@ -2920,16 +2920,16 @@ fn grant_lines(
         .into_iter()
         .map(|grant| crate::screens::mcp_profiles::GrantLine {
             id: grant.id.to_string(),
-            capability: grant.capability.as_str().into(),
+            capability: grant
+                .kinds()
+                .iter()
+                .map(|kind| kind.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
             tools: grant.tools.join(","),
             expires_in_secs: grant.expires_at.saturating_sub(now),
             connection: grant.connection.clone(),
-            selectors: grant
-                .selectors
-                .iter()
-                .map(|rule| rule.selector.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
+            selectors: String::new(),
             ask_secs: grant.ask_secs,
             until_revoked: grant.until_revoked(),
         })
@@ -3209,41 +3209,20 @@ fn create_mcp_grants(
     let Some(first) = grants.first() else {
         return Err("tools: pick at least one".into());
     };
-    let one = grants.len() == 1;
-    let lasts = match (first.until_revoked(), one) {
-        (true, true) => "lasts until it is revoked".to_string(),
-        (true, false) => "last until they are revoked".to_string(),
-        (false, one) => format!(
-            "{} in {}",
-            if one { "ends" } else { "end" },
-            crate::screens::mcp_profiles::duration_words(first.expires_at - now)
-        ),
-    };
-    let tools = grants
-        .iter()
-        .map(|grant| grant.tools.join(", "))
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let objects = requests[0].selectors.join(", ");
-    let connection = &requests[0].connection;
-    let what = if one {
-        "the grant".to_string()
+    let lasts = if first.until_revoked() {
+        "until it is revoked".to_string()
     } else {
-        format!("the {} grants", grants.len())
-    };
-    let message = if first.asks() {
         format!(
-            "Granted {tools} on {objects} ({connection}): each write waits up to {} for you under Agents, Approvals; {what} {lasts}.",
-            crate::screens::mcp_profiles::duration_words(i64::from(first.ask_secs)),
+            "for {}",
+            crate::screens::mcp_profiles::duration_words(first.expires_at - now)
         )
-    } else {
-        let uses = if one {
-            "for one write"
-        } else {
-            "one write each"
-        };
-        format!("Granted {tools} on {objects} ({connection}) {uses}; {what} {lasts}.")
     };
+    let message = format!(
+        "{profile} may write {} on {}, {lasts}: each write waits up to {} for you under Agents, Approvals.",
+        first.tools.join(", "),
+        first.connection,
+        crate::screens::mcp_profiles::duration_words(i64::from(first.ask_secs)),
+    );
     let ledger = dexo_storage::SqliteGrantLedger::open(&paths.database)
         .map_err(|error| error.to_string())?;
     for grant in grants {

@@ -87,24 +87,18 @@ fn mcp_grant_args_parse() {
         "assistant",
         "--connection",
         "local",
-        "--capability",
-        "data_write",
-        "--tool",
-        "data_insert",
-        "--selector",
-        "db.public.items",
+        "--allow",
+        "rows,schema",
         "--expires",
         "15m",
-        "--confirm-target",
-        "local",
     ]);
     assert!(matches!(
         create.command,
         Some(dexo_cli::args::Command::Mcp {
             command: McpCommand::Grant {
-                command: McpGrantCommand::Create { ref expires, .. }
+                command: McpGrantCommand::Create { ref expires, ref allow, .. }
             }
-        }) if expires == "15m"
+        }) if expires == "15m" && allow == &["rows", "schema"]
     ));
     let list = Args::parse_from(["dexo", "mcp", "grant", "list", "--profile", "assistant"]);
     assert!(matches!(
@@ -120,8 +114,10 @@ fn mcp_grant_args_parse() {
         "mcp",
         "grant",
         "revoke",
-        "--id",
-        "00000000-0000-0000-0000-000000000001",
+        "--profile",
+        "assistant",
+        "--connection",
+        "local",
     ]);
     assert!(matches!(
         revoke.command,
@@ -228,48 +224,39 @@ fn mcp_grant_lifecycle_and_audit_export() {
         || Ok(()),
     )
     .unwrap();
-    let missing_confirm = run_dispatch(
-        Args::parse_from([
-            "dexo",
-            "mcp",
-            "grant",
-            "create",
-            "--profile",
-            "assistant",
-            "--connection",
-            "local",
-            "--capability",
-            "data_write",
-            "--tool",
-            "data_insert",
-            "--selector",
-            "db.public.items",
-            "--expires",
-            "15m",
-        ]),
-        DriverRegistry::new(),
-        || Ok(()),
-    );
-    assert!(missing_confirm.is_err());
+    let create = |allow: &str| {
+        run_dispatch(
+            Args::parse_from([
+                "dexo",
+                "mcp",
+                "grant",
+                "create",
+                "--profile",
+                "assistant",
+                "--connection",
+                "local",
+                "--allow",
+                allow,
+                "--expires",
+                "15m",
+            ]),
+            DriverRegistry::new(),
+            || Ok(()),
+        )
+    };
+    assert!(create("all").is_err());
+    assert!(create("ddl").is_err());
+    create("rows").unwrap();
+    create("rows,schema").unwrap();
     run_dispatch(
         Args::parse_from([
             "dexo",
             "mcp",
             "grant",
-            "create",
+            "revoke",
             "--profile",
             "assistant",
             "--connection",
-            "local",
-            "--capability",
-            "data_write",
-            "--tool",
-            "data_insert",
-            "--selector",
-            "db.public.items",
-            "--expires",
-            "15m",
-            "--confirm-target",
             "local",
         ]),
         DriverRegistry::new(),

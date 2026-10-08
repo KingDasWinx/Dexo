@@ -8,7 +8,7 @@ expression: client.tools().await
       "destructiveHint": false,
       "readOnlyHint": false
     },
-    "description": "Cancel the running query of one server session. Needs an admin grant for this connection.",
+    "description": "Cancel the running query of one server session. Appears while a person has let this profile end sessions on this connection; every call waits for their approval.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -68,7 +68,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Terminate one server session. Needs an admin grant for this connection and `confirm_target` equal to `session_id`.",
+    "description": "Terminate one server session. Appears while a person has let this profile end sessions on this connection; every call waits for their approval, and needs `confirm_target` equal to `session_id`.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -171,7 +171,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Delete the one row named by `identity`. Appears only while a data_write grant covering `target` is active.",
+    "description": "Delete the one row named by `identity`. Appears while a person has let this profile change rows; every call waits for their approval.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -210,7 +210,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Run one INSERT, UPDATE or DELETE. Every table it touches must be inside the grant; needs the profile rule `--allow-tool data_execute_sql`.",
+    "description": "Run one INSERT, UPDATE or DELETE. Appears while a person has let this profile change rows; every table it touches must be one the profile sees, and every call waits for their approval.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -248,7 +248,7 @@ expression: client.tools().await
       "destructiveHint": false,
       "readOnlyHint": false
     },
-    "description": "Insert one row. Appears only while a data_write grant covering `target` is active; one successful call spends the grant.",
+    "description": "Insert one row. Appears while a person has let this profile change rows on a connection; every call waits for their approval on Dexo's Agents screen.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -332,7 +332,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Update the one row named by `identity`. Appears only while a data_write grant covering `target` is active.",
+    "description": "Update the one row named by `identity`. Appears while a person has let this profile change rows; every call waits for their approval.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -558,7 +558,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Apply one DDL statement. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.",
+    "description": "Apply one DDL statement. Appears while a person has let this profile change the schema; every call waits for their approval. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {

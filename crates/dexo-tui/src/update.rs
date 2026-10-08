@@ -16072,11 +16072,8 @@ mod tests {
         let effects = update(&mut model, key(KeyCode::Enter));
         let expected = dexo_app::mcp::GrantRequest {
             connection: "local".into(),
-            capability: "data_write".into(),
-            tools: vec!["data_insert".into()],
-            selectors: vec!["db.public.*".into()],
+            kinds: vec![dexo_app::mcp::WriteKind::Rows],
             expires: "15m".into(),
-            confirm_target: "local".into(),
             ask_secs: Some(90),
         };
         assert!(

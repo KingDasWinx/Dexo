@@ -9,8 +9,8 @@ use crate::args::{
 };
 use crate::presenter;
 use dexo_app::mcp::{
-    Effect, GrantCapability, GrantLedger, McpConnection, McpProfile, McpService, QueryMode,
-    SelectorRule, ToolRule, advertised_tools, known_tools,
+    Effect, GrantLedger, McpConnection, McpProfile, McpService, QueryMode, SelectorRule, ToolRule,
+    advertised_tools, known_tools,
 };
 use dexo_app::schema_diff::{RenameMapping, SchemaSnapshot, plan_migration, render_unquoted};
 use dexo_app::search_service::SearchService;
@@ -2103,103 +2103,78 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
         McpGrantCommand::Create {
             profile,
             connection,
-            capability,
-            tool,
-            selector,
+            allow,
             expires,
-            confirm_target,
-            ask,
             approval_timeout,
         } => {
             let loaded = load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
             let saved = ConnectionRepository::new(db.connection())
                 .get_by_name(&connection)?
                 .ok_or_else(|| anyhow::anyhow!("unknown connection '{connection}'"))?;
-            // The same request the TUI's New MCP Grant makes, so both make one grant.
+            let kinds = allow
+                .iter()
+                .map(|kind| dexo_app::mcp::WriteKind::parse(kind))
+                .collect::<Result<Vec<_>, _>>()?;
+            // The same request the TUI's Writes makes, so both make one grant.
             let grant = dexo_app::mcp::GrantRequest {
                 connection,
-                capability,
-                tools: tool,
-                selectors: selector,
+                kinds,
                 expires,
-                confirm_target: confirm_target.unwrap_or_default(),
-                ask_secs: ask.then_some(approval_timeout),
+                ask_secs: Some(approval_timeout),
             }
             .issue(&loaded, &saved, now)?;
-            let lasts = grant_lasts(&grant, now);
-            if grant.asks() {
-                println!(
-                    "granted {} {} on {}, {lasts}: each write waits up to {} for your approval under Agents, Approvals, in the TUI (grant id {})",
-                    grant.capability.as_str(),
-                    grant.tools.join(", "),
-                    grant.connection,
-                    span_words(i64::from(grant.ask_secs)),
-                    grant.id
-                );
-            } else {
-                println!(
-                    "granted {} {} on {}, {lasts}: one write, then it is spent (grant id {})",
-                    grant.capability.as_str(),
-                    grant.tools.join(", "),
-                    grant.connection,
-                    grant.id
-                );
-            }
+            println!(
+                "{profile} may change {} on {}, {}: each write waits up to {} for your approval under Agents, Approvals, in the TUI",
+                kinds_words(&grant),
+                grant.connection,
+                grant_lasts(&grant, now),
+                span_words(i64::from(grant.ask_secs)),
+            );
             ledger.insert_grant(grant)?;
         }
         McpGrantCommand::List { profile } => {
             load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
-            let grants = ledger.active_grants(&profile, now);
+            let mut grants = ledger.active_grants(&profile, now);
             if grants.is_empty() {
-                println!("{profile} has no grants: agents cannot write through it");
+                println!("{profile} may not write: agents only read through it");
             }
+            grants.sort_by(|a, b| a.connection.cmp(&b.connection));
             for grant in grants {
-                let uses = if grant.asks() {
-                    format!(
-                        "asks before each write ({})",
-                        span_words(i64::from(grant.ask_secs))
-                    )
-                } else {
-                    "one write, then it is spent".to_string()
-                };
                 println!(
-                    "{}  {} on {}  {} {}: {uses}, {}",
-                    grant.id,
-                    grant.tools.join(", "),
+                    "{}  {}  {}, each write waiting up to {}",
                     grant.connection,
-                    capability_label(grant.capability),
-                    grant
-                        .selectors
-                        .iter()
-                        .map(|rule| rule.selector.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    grant_lasts(&grant, now)
+                    kinds_words(&grant),
+                    grant_lasts(&grant, now),
+                    span_words(i64::from(grant.ask_secs)),
                 );
             }
         }
-        McpGrantCommand::Revoke { id } => {
-            anyhow::ensure!(
-                id.len() == 36 && id.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-'),
-                "no grant has the id '{id}': `dexo mcp grant list --profile NAME` shows them"
-            );
-            ledger.revoke_str(&id)?;
-            println!("revoked the grant {id}");
+        McpGrantCommand::Revoke {
+            profile,
+            connection,
+        } => {
+            load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
+            match ledger.revoke_connection(&profile, &connection)? {
+                0 => println!("{profile} could not write on {connection} already"),
+                _ => println!("{profile} may no longer write on {connection}"),
+            }
         }
         McpGrantCommand::RevokeAll { profile } => {
             ledger.revoke_profile(&profile)?;
-            println!("revoked every grant of {profile}");
+            println!("{profile} may no longer write anywhere");
         }
     }
     Ok(())
 }
 
-fn capability_label(capability: GrantCapability) -> &'static str {
-    match capability {
-        GrantCapability::DataWrite => "data_write",
-        GrantCapability::Ddl => "ddl",
-        GrantCapability::Admin => "admin",
-    }
+/// What a grant lets change, as `rows, schema`.
+fn kinds_words(grant: &dexo_app::mcp::Grant) -> String {
+    grant
+        .kinds()
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn mcp_audit(profile: Option<&str>) -> anyhow::Result<()> {

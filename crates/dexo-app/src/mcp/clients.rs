@@ -646,12 +646,12 @@ through the connections the profile `{profile}` allows, and nothing else.
 
 ## Writing
 
-Access is read-only. A write tool appears only while a person has granted it with
-`dexo mcp grant create`, for a connection and a set of tables, for a limited time.
-Some grants ask: then each write waits until the person approves it on Dexo's Agents
-screen, under Approvals, or is denied when the wait the person set on the grant runs out -- say
-what you are about to change and why before you call the tool. Every call is audited. Never retry a denied write with
-a different statement to get around the decision; ask the person instead.
+Access is read-only. A write tool appears only while a person has let the profile write
+to a connection -- rows, the schema or server sessions -- for a while. Every write then
+waits until the person approves it on Dexo's Agents screen, under Approvals, and is denied
+when they refuse it or the wait the person set on the grant runs out -- say what you are
+about to change and why before you call the tool. Every call is audited. Never retry a
+denied write with a different statement to get around the decision; ask the person instead.
 "
     )
 }

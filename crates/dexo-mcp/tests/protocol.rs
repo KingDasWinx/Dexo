@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use common::{Client, FakeBackend, connection, is_error, profile, text};
-use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, GrantCapability};
-use dexo_app::mcp::{Effect, GrantLedger, MemoryGrantLedger, SelectorRule};
+use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, WriteKind};
+use dexo_app::mcp::{GrantLedger, MemoryGrantLedger};
 use dexo_driver_api::DbValue;
 use dexo_test_support::FakeSession;
 use serde_json::json;
@@ -89,11 +89,10 @@ async fn a_grant_publishes_its_tool_and_revoking_removes_it() {
     let grant = Grant::new(
         &profile(),
         "local",
-        GrantCapability::DataWrite,
-        vec!["data_insert".into()],
-        vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+        &[WriteKind::Rows],
         dexo_mcp::tools_write::now_secs(),
         DEFAULT_TTL_SECS,
+        120,
     )
     .unwrap();
     let id = grant.id;
@@ -412,37 +411,19 @@ async fn tool_contract_is_versioned() {
     }
     let ledger = Arc::new(MemoryGrantLedger::default());
     let now = dexo_mcp::tools_write::now_secs();
-    for (capability, tools) in [
-        (
-            GrantCapability::DataWrite,
-            vec![
-                "data_insert",
-                "data_update",
-                "data_delete",
-                "data_execute_sql",
-            ],
-        ),
-        (GrantCapability::Ddl, vec!["schema_apply_ddl"]),
-        (
-            GrantCapability::Admin,
-            vec!["admin_cancel_query", "admin_terminate_session"],
-        ),
-    ] {
-        ledger
-            .insert_grant(
-                Grant::new(
-                    &everything,
-                    "local",
-                    capability,
-                    tools.into_iter().map(String::from).collect(),
-                    vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
-                    now,
-                    DEFAULT_TTL_SECS,
-                )
-                .unwrap(),
+    ledger
+        .insert_grant(
+            Grant::new(
+                &everything,
+                "local",
+                &WriteKind::ALL,
+                now,
+                DEFAULT_TTL_SECS,
+                120,
             )
-            .unwrap();
-    }
+            .unwrap(),
+        )
+        .unwrap();
     let mut client = Client::start(
         everything,
         vec![connection("local")],
@@ -595,11 +576,10 @@ async fn production_connections_refuse_writes_over_the_protocol() {
             Grant::new(
                 &profile(),
                 "local",
-                GrantCapability::DataWrite,
-                vec!["data_insert".into()],
-                vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+                &[WriteKind::Rows],
                 dexo_mcp::tools_write::now_secs(),
                 DEFAULT_TTL_SECS,
+                120,
             )
             .unwrap(),
         )
@@ -657,11 +637,11 @@ async fn missing_required_arguments_are_rejected() {
     }
 }
 
-/// E1: under an asking grant a write waits for a person -- runs once approved, is
+/// E1: under a grant every write waits for a person -- runs once approved, is
 /// refused when denied or when no one answers in time -- and the request keeps no SQL
 /// once it is decided.
 #[tokio::test]
-async fn an_asking_grant_waits_for_a_person() {
+async fn every_write_waits_for_a_person() {
     use dexo_app::mcp::{ApprovalDecision, GrantLedger};
     let (mut client, _, ledger) = client_with(FakeBackend::with_session("local", users())).await;
     ledger
@@ -669,14 +649,12 @@ async fn an_asking_grant_waits_for_a_person() {
             Grant::new(
                 &profile(),
                 "local",
-                GrantCapability::DataWrite,
-                vec!["data_insert".into()],
-                vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+                &[WriteKind::Rows],
                 dexo_mcp::tools_write::now_secs(),
                 DEFAULT_TTL_SECS,
+                2,
             )
-            .unwrap()
-            .asking(2),
+            .unwrap(),
         )
         .unwrap();
     assert!(
@@ -743,19 +721,17 @@ async fn an_asking_grant_waits_for_a_person() {
     assert!(ledger.pending_approvals(now).is_empty());
 }
 
-/// An asking grant on `users` that waits up to `secs` for each write.
+/// A grant to change rows that waits up to `secs` for each write.
 fn asking_grant(secs: u32) -> Grant {
     Grant::new(
         &profile(),
         "local",
-        GrantCapability::DataWrite,
-        vec!["data_insert".into()],
-        vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+        &[WriteKind::Rows],
         dexo_mcp::tools_write::now_secs(),
         DEFAULT_TTL_SECS,
+        secs,
     )
     .unwrap()
-    .asking(secs)
 }
 
 /// The first request waiting for a person, once the server has written it down.

@@ -871,18 +871,21 @@ impl GrantForm {
         if confirm != connection.name {
             return Err(format!("confirm: type {} to confirm", connection.name));
         }
-        Ok(chosen
+        let _ = selectors;
+        let kinds = chosen
             .into_iter()
-            .map(|(capability, tools)| dexo_app::mcp::GrantRequest {
-                connection: connection.name.clone(),
-                capability: capability.to_string(),
-                tools,
-                selectors: selectors.clone(),
-                expires: EXPIRES[self.expires].0.to_string(),
-                confirm_target: confirm.clone(),
-                ask_secs,
+            .map(|(capability, _)| match capability {
+                "ddl" => dexo_app::mcp::WriteKind::Schema,
+                "admin" => dexo_app::mcp::WriteKind::Sessions,
+                _ => dexo_app::mcp::WriteKind::Rows,
             })
-            .collect())
+            .collect();
+        Ok(vec![dexo_app::mcp::GrantRequest {
+            connection: connection.name.clone(),
+            kinds,
+            expires: EXPIRES[self.expires].0.to_string(),
+            ask_secs,
+        }])
     }
 }
 
@@ -1634,8 +1637,7 @@ mod tests {
         form.key(key(KeyCode::Left));
         form.pick(GrantRow::Tools, 0);
         form.confirm.set_text("pg-dev");
-        let request = form.requests().unwrap().remove(0);
-        assert_eq!(request.selectors, ["db.public.*"]);
+        assert!(form.requests().is_ok());
         assert_eq!(form.wants_tables(), None);
         // Only some: the connection's tables are read once.
         form.focus = GrantRow::Tables;
@@ -1667,7 +1669,7 @@ mod tests {
         );
         assert_eq!(form.requests().unwrap_err(), "tables: check at least one");
         form.pick(GrantRow::TablePick, 1);
-        assert_eq!(form.requests().unwrap()[0].selectors, ["db.public.items"]);
+        assert!(form.requests().is_ok());
         // A profile that sees nothing says how to fix it.
         form.pick(GrantRow::Profile, 1);
         form.everything = true;
@@ -1717,11 +1719,8 @@ mod tests {
         form.focus = GrantRow::Create;
         assert_eq!(form.key(key(KeyCode::Enter)), FormKey::Submit);
         let request = form.requests().unwrap().remove(0);
-        assert_eq!(request.tools, ["data_insert"]);
-        assert_eq!(
-            (request.selectors.as_slice(), request.expires.as_str()),
-            (["db.public.*".to_string()].as_slice(), "15m")
-        );
+        assert_eq!(request.kinds, [dexo_app::mcp::WriteKind::Rows]);
+        assert_eq!(request.expires, "15m");
         assert_eq!(request.ask_secs, Some(120));
     }
 
@@ -1754,42 +1753,6 @@ mod tests {
         assert_eq!(form.focus, GrantRow::Connection);
     }
 
-    /// Tools of two kinds checked make two grants, with the same tables and time.
-    #[test]
-    fn tools_of_two_kinds_make_two_grants() {
-        let mut form = form();
-        form.pick(GrantRow::Profile, 0);
-        form.pick(GrantRow::Tools, 0);
-        form.pick(GrantRow::Tools, 4);
-        form.confirm.set_text("pg-dev");
-        let requests = form.requests().unwrap();
-        let kinds: Vec<(&str, Vec<String>)> = requests
-            .iter()
-            .map(|request| (request.capability.as_str(), request.tools.clone()))
-            .collect();
-        assert_eq!(
-            kinds,
-            [
-                ("data_write", vec!["data_insert".to_string()]),
-                ("ddl", vec!["schema_apply_ddl".to_string()])
-            ]
-        );
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.selectors == ["db.public.*"])
-        );
-        let (allows, _) = form.result();
-        assert!(
-            allows.is_some_and(
-                |allows| allows.starts_with("2 grants: data_insert · schema_apply_ddl")
-            ),
-            "{:?}",
-            form.result()
-        );
-    }
-
-    /// A refusal puts the cursor on the row it is about, and a change takes it away.
     #[test]
     fn a_refusal_focuses_its_row() {
         use crossterm::event::KeyCode;

@@ -1,4 +1,4 @@
-//! A write an agent asked to make under an asking grant, waiting for a person. The MCP
+//! A write an agent asked to make under a grant, waiting for a person. The MCP
 //! server writes it and waits; the TUI's Agents screen, under Approvals, reads it and decides.
 //! The two processes meet only in the shared database.
 
@@ -184,7 +184,7 @@ mod tests {
     use super::{
         Answered, Approval, ApprovalDecision, HEARTBEAT_GRACE_SECS, KEEP_SETTLED_SECS, answer,
     };
-    use crate::mcp::grant::{Grant, GrantCapability};
+    use crate::mcp::grant::{Grant, WriteKind};
     use crate::mcp::ledger::{GrantLedger, MemoryGrantLedger};
     use crate::mcp::profile::McpProfile;
     use crate::mcp::selector::{Effect, SelectorRule};
@@ -241,17 +241,7 @@ mod tests {
 
         let mut profile = McpProfile::new("p");
         profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-        let grant = Grant::new(
-            &profile,
-            "c",
-            GrantCapability::DataWrite,
-            vec!["data_insert".into()],
-            vec![SelectorRule::parse(Effect::Allow, "db.public.t").unwrap()],
-            100,
-            900,
-        )
-        .unwrap()
-        .asking(60);
+        let grant = Grant::new(&profile, "c", &[WriteKind::Rows], 100, 900, 60).unwrap();
         ledger.insert_grant(grant.clone()).unwrap();
         let mut revoked = Approval::pending("p", "c", "data_insert", &arguments, vec![], 100, 60);
         revoked.grant = grant.id;

@@ -211,7 +211,9 @@ impl ServerHandler for DexoMcpServer {
             "Dexo database workbench, MCP profile '{}' (tool schema v{TOOL_SCHEMA_VERSION}). \
              Start with list_connections; every database tool takes an optional `connection`. \
              Reads run inside read-only transactions and return at most {} rows / {} bytes. \
-             Write tools appear only while a grant created with `dexo mcp grant create` is active.",
+             Write tools appear only while a person has given this profile write access to a \
+             connection, and every write waits for that person's approval on Dexo's Agents \
+             screen: it is refused when they deny it or do not answer in time.",
             profile.name, profile.limits.max_rows, profile.limits.max_bytes
         ))
     }

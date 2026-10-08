@@ -239,9 +239,9 @@ mod tests {
 
         let grant = uuid::Uuid::new_v4();
         conn.execute(
-            "INSERT INTO mcp_grants (id, profile_name, connection_name, capability, tools_json,
-                selectors_json, expires_at, remaining_uses, revision, revoked)
-             VALUES (?1, 'p', 'c', 'data_write', '[]', '[]', 1000, 1, 1, 1)",
+            "INSERT INTO mcp_grants (id, profile_name, connection_name, tools_json, expires_at,
+                revision, revoked)
+             VALUES (?1, 'p', 'c', '[]', 1000, 1, 1)",
             rusqlite::params![grant.to_string()],
         )
         .unwrap();

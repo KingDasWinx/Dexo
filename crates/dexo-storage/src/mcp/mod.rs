@@ -38,18 +38,12 @@ impl SqliteGrantLedger {
         })
     }
 
-    pub fn revoke_str(&self, id: &str) -> Result<(), AppError> {
-        let id = Uuid::parse_str(id)
-            .map_err(|error| AppError::new(ErrorCategory::Configuration, error.to_string()))?;
-        self.revoke(id)
-    }
-
     pub fn revoke_all(&self) -> anyhow::Result<usize> {
         self.revoking(grant_repo::revoke_all)
     }
 
-    /// Revokes, and denies the revoked grants' waiting writes in the same transaction,
-    /// so no one approves a write its grant no longer allows.
+    /// Revokes -- or replaces -- and denies the revoked grants' waiting writes in the same
+    /// transaction, so no one approves a write its grant no longer allows.
     fn revoking<T>(
         &self,
         revoke: impl FnOnce(&Connection) -> anyhow::Result<T>,
@@ -75,20 +69,18 @@ impl GrantLedger for SqliteGrantLedger {
     }
 
     fn insert_grant(&self, grant: Grant) -> Result<(), AppError> {
-        let conn = self.conn.lock().expect("sqlite");
-        grant_repo::insert(&conn, &grant).map_err(sql_err)
-    }
-
-    fn consume(&self, id: Uuid, now: i64) -> Result<Grant, AppError> {
-        let conn = self.conn.lock().expect("sqlite");
-        let tx = conn.unchecked_transaction().map_err(sql_err)?;
-        let grant = grant_repo::consume(&tx, id, now)?;
-        tx.commit().map_err(sql_err)?;
-        Ok(grant)
+        self.revoking(|conn| grant_repo::insert(conn, &grant))
+            .map(drop)
+            .map_err(sql_err)
     }
 
     fn revoke(&self, id: Uuid) -> Result<(), AppError> {
         self.revoking(|conn| grant_repo::revoke(conn, id))
+            .map_err(sql_err)
+    }
+
+    fn revoke_connection(&self, profile: &str, connection: &str) -> Result<usize, AppError> {
+        self.revoking(|conn| grant_repo::revoke_connection(conn, profile, connection))
             .map_err(sql_err)
     }
 
@@ -205,7 +197,7 @@ fn sql_err(error: impl std::fmt::Display) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::SqliteGrantLedger;
-    use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, GrantCapability};
+    use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, WriteKind};
     use dexo_app::mcp::ledger::GrantLedger;
     use dexo_app::mcp::profile::McpProfile;
     use dexo_app::mcp::selector::{Effect, SelectorRule};
@@ -276,64 +268,86 @@ mod tests {
         assert_eq!(super::audit_repo::list(&conn).unwrap().len(), 1);
     }
 
-    #[test]
-    fn consume_is_transactional_one_use() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-        crate::migrations::apply_pending(&conn).unwrap();
-        let ledger = SqliteGrantLedger {
-            conn: std::sync::Mutex::new(conn),
-        };
+    fn grant(connection: &str) -> Grant {
         let mut profile = McpProfile::new("assistant");
         profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-        let grant = Grant::new(
+        Grant::new(
             &profile,
-            "local",
-            GrantCapability::DataWrite,
-            vec!["data_insert".into()],
-            vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
+            connection,
+            &[WriteKind::Rows],
             0,
             DEFAULT_TTL_SECS,
+            120,
         )
-        .unwrap();
-        let id = grant.id;
-        ledger.insert_grant(grant).unwrap();
-        ledger.consume(id, 0).unwrap();
-        assert!(ledger.active_grants("assistant", 0).is_empty());
+        .unwrap()
     }
 
-    #[test]
-    fn concurrent_consume_only_one_succeeds() {
+    fn ledger() -> SqliteGrantLedger {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         crate::migrations::apply_pending(&conn).unwrap();
-        let ledger = std::sync::Arc::new(SqliteGrantLedger {
+        SqliteGrantLedger {
             conn: std::sync::Mutex::new(conn),
-        });
-        let mut profile = McpProfile::new("assistant");
-        profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-        let grant = Grant::new(
-            &profile,
+        }
+    }
+
+    /// One write access per profile and connection, in the database too: the new one
+    /// replaces the old, and what waited under the old one is denied.
+    #[test]
+    fn a_new_grant_replaces_the_one_on_its_connection() {
+        use dexo_app::mcp::approval::{Approval, ApprovalDecision};
+        let ledger = ledger();
+        let first = grant("local");
+        ledger.insert_grant(first.clone()).unwrap();
+        ledger.insert_grant(grant("other")).unwrap();
+        let mut waiting = Approval::pending(
+            "assistant",
             "local",
-            GrantCapability::DataWrite,
-            vec!["data_insert".into()],
-            vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
+            "data_insert",
+            &serde_json::Map::new(),
+            vec![],
             0,
-            DEFAULT_TTL_SECS,
-        )
-        .unwrap();
-        let id = grant.id;
-        ledger.insert_grant(grant).unwrap();
-        let a = {
-            let ledger = std::sync::Arc::clone(&ledger);
-            std::thread::spawn(move || ledger.consume(id, 0).is_ok())
-        };
-        let b = {
-            let ledger = std::sync::Arc::clone(&ledger);
-            std::thread::spawn(move || ledger.consume(id, 0).is_ok())
-        };
-        let wins = usize::from(a.join().unwrap()) + usize::from(b.join().unwrap());
-        assert_eq!(wins, 1);
+            60,
+        );
+        waiting.grant = first.id;
+        ledger.request_approval(&waiting).unwrap();
+        ledger.insert_grant(grant("local")).unwrap();
+        assert!(ledger.is_revoked(first.id));
+        assert_eq!(ledger.active_grants("assistant", 0).len(), 2);
+        assert_eq!(
+            ledger.approval(waiting.id).unwrap().decision,
+            ApprovalDecision::Denied
+        );
+        assert_eq!(ledger.revoke_connection("assistant", "local").unwrap(), 1);
+        assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
+    }
+
+    /// Migration 19: a one-write grant already spent stays gone, one not spent asks.
+    #[test]
+    fn a_spent_grant_does_not_come_back_with_migration_19() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::migrations::apply_up_to(&conn, 18).unwrap();
+        for (id, uses) in [
+            ("00000000-0000-0000-0000-000000000001", 0),
+            ("00000000-0000-0000-0000-000000000002", 1),
+        ] {
+            conn.execute(
+                "INSERT INTO mcp_grants (id, profile_name, connection_name, capability, tools_json,
+                    selectors_json, expires_at, remaining_uses, revision, revoked, ask_secs)
+                 VALUES (?1, 'assistant', 'local', 'data_write', '[\"data_insert\"]', '[]',
+                    1000, ?2, 1, 0, 0)",
+                rusqlite::params![id, uses],
+            )
+            .unwrap();
+        }
+        crate::migrations::apply_pending(&conn).unwrap();
+        let active = super::grant_repo::list_active(&conn, "assistant", 0).unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(
+            active[0].id.to_string(),
+            "00000000-0000-0000-0000-000000000002"
+        );
+        assert_eq!(active[0].ask_secs, 120);
     }
 
     #[test]
@@ -344,18 +358,7 @@ mod tests {
         {
             let _db = crate::Database::open(&path).unwrap();
             let ledger = SqliteGrantLedger::open(&path).unwrap();
-            let mut profile = McpProfile::new("assistant");
-            profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-            let grant = Grant::new(
-                &profile,
-                "local",
-                GrantCapability::DataWrite,
-                vec!["data_insert".into()],
-                vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-                0,
-                DEFAULT_TTL_SECS,
-            )
-            .unwrap();
+            let grant = grant("local");
             id = grant.id;
             ledger.insert_grant(grant).unwrap();
             assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
@@ -372,25 +375,8 @@ mod tests {
 
     #[test]
     fn revoke_all_clears_active_grants() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-        crate::migrations::apply_pending(&conn).unwrap();
-        let ledger = SqliteGrantLedger {
-            conn: std::sync::Mutex::new(conn),
-        };
-        let mut profile = McpProfile::new("assistant");
-        profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-        let grant = Grant::new(
-            &profile,
-            "local",
-            GrantCapability::DataWrite,
-            vec!["data_insert".into()],
-            vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-            0,
-            DEFAULT_TTL_SECS,
-        )
-        .unwrap();
-        ledger.insert_grant(grant).unwrap();
+        let ledger = ledger();
+        ledger.insert_grant(grant("local")).unwrap();
         assert_eq!(ledger.revoke_all().unwrap(), 1);
         assert!(ledger.active_grants("assistant", 0).is_empty());
     }
