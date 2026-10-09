@@ -69,6 +69,18 @@ impl AuditEvent {
         }
     }
 
+    /// A person let more of a write access run without asking.
+    pub fn bypass(grant: &Grant) -> Self {
+        Self {
+            request: "dexo bypass".into(),
+            status: format!(
+                "runs without asking: {}",
+                crate::mcp::bypass::operations_words(&grant.bypass)
+            ),
+            ..Self::access(grant, true)
+        }
+    }
+
     pub fn sanitize(mut self, mode: SqlAuditMode, sql: Option<&str>) -> Self {
         self.sql = match (mode, sql) {
             (SqlAuditMode::None, _) => None,

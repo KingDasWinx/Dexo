@@ -111,27 +111,28 @@ pub fn bypass_risk(operations: &[Operation], production: bool) -> Option<String>
     if operations.is_empty() {
         return None;
     }
-    let place = if production {
-        "on a production connection, "
-    } else {
-        ""
-    };
-    let destructive: Vec<Operation> = operations
+    let place = if production { " on production" } else { "" };
+    let harms: Vec<&str> = operations
         .iter()
-        .copied()
-        .filter(|operation| operation.destructive())
+        .filter_map(|operation| match operation {
+            Operation::EveryRow => Some("empty tables"),
+            Operation::Drop => Some("drop tables"),
+            Operation::Sessions => Some("end sessions"),
+            _ => None,
+        })
         .collect();
-    Some(if destructive.is_empty() {
-        format!(
-            "{place}{} run without asking: you see them only afterwards, in Activity",
-            operations_words(operations)
-        )
-    } else {
-        format!(
-            "{place}{} run without asking: an agent can empty or drop tables, or end sessions, before you see it",
-            operations_words(&destructive)
-        )
-    })
+    let consequence = match harms.as_slice() {
+        [] => "you see them only afterwards, in Activity".to_string(),
+        [one] => format!("an agent can {one} before you see it"),
+        [rest @ .., last] => format!(
+            "an agent can {} or {last} before you see it",
+            rest.join(", ")
+        ),
+    };
+    Some(format!(
+        "{} without asking{place}: {consequence}",
+        operations_words(operations)
+    ))
 }
 
 /// What a call of the write tool `tool` with `arguments` does, statement by statement for
@@ -288,6 +289,25 @@ mod tests {
     }
 
     /// A script runs without asking only when every operation of it may.
+    /// The risk names what it lets an agent do, and only that.
+    #[test]
+    fn the_risk_says_what_runs_without_asking_and_what_it_can_do() {
+        use super::bypass_risk;
+        assert_eq!(bypass_risk(&[], true), None);
+        assert_eq!(
+            bypass_risk(&[Operation::Insert], false).unwrap(),
+            "insert without asking: you see them only afterwards, in Activity"
+        );
+        assert_eq!(
+            bypass_risk(
+                &[Operation::Delete, Operation::EveryRow, Operation::Drop],
+                true
+            )
+            .unwrap(),
+            "delete, every-row, drop without asking on production: an agent can empty tables or drop tables before you see it"
+        );
+    }
+
     #[test]
     fn a_script_runs_without_asking_only_when_all_of_it_may() {
         use crate::mcp::grant::{DEFAULT_TTL_SECS, Grant, WriteKind};

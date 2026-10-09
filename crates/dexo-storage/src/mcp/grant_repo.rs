@@ -50,6 +50,18 @@ pub fn list_active(conn: &Connection, profile: &str, now: i64) -> anyhow::Result
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
+pub fn set_bypass(
+    conn: &Connection,
+    id: Uuid,
+    bypass: &[dexo_app::mcp::bypass::Operation],
+) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE mcp_grants SET bypass_json = ?2, revision = revision + 1 WHERE id = ?1",
+        params![id.to_string(), serde_json::to_string(bypass)?],
+    )?;
+    Ok(())
+}
+
 pub fn revoke(conn: &Connection, id: Uuid) -> anyhow::Result<()> {
     let changed = conn.execute(
         "UPDATE mcp_grants SET revoked = 1, revision = revision + 1 WHERE id = ?1 AND revoked = 0",

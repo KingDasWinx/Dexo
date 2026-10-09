@@ -80,6 +80,26 @@ impl GrantLedger for SqliteGrantLedger {
             .map_err(sql_err)
     }
 
+    fn add_bypass(
+        &self,
+        id: Uuid,
+        operations: &[dexo_app::mcp::bypass::Operation],
+    ) -> Result<(), AppError> {
+        let conn = self.conn.lock().expect("sqlite");
+        let tx = conn.unchecked_transaction().map_err(sql_err)?;
+        let grant = grant_repo::live(&tx)
+            .map_err(sql_err)?
+            .into_iter()
+            .find(|grant| grant.id == id)
+            .ok_or_else(|| AppError::new(ErrorCategory::McpPolicy, "not found"))?;
+        let mut more = grant.bypass.clone();
+        more.extend_from_slice(operations);
+        let grant = grant.with_bypass(&more);
+        grant_repo::set_bypass(&tx, id, &grant.bypass).map_err(sql_err)?;
+        audit_repo::insert(&tx, &AuditEvent::bypass(&grant)).map_err(sql_err)?;
+        tx.commit().map_err(sql_err)
+    }
+
     fn revoke_connection(&self, profile: &str, connection: &str) -> Result<usize, AppError> {
         self.revoking(|conn| grant_repo::revoke_connection(conn, profile, connection))
             .map_err(sql_err)

@@ -17,6 +17,12 @@ pub trait GrantLedger: Send + Sync {
     /// per profile and connection -- denying the writes that waited under the old one.
     fn insert_grant(&self, grant: Grant) -> Result<(), AppError>;
     fn revoke(&self, id: Uuid) -> Result<(), AppError>;
+    /// Lets `operations` of the live grant `id` run without asking from now on.
+    fn add_bypass(
+        &self,
+        id: Uuid,
+        operations: &[crate::mcp::bypass::Operation],
+    ) -> Result<(), AppError>;
     /// Takes back a profile's write access to one connection; how many grants went.
     fn revoke_connection(&self, profile: &str, connection: &str) -> Result<usize, AppError>;
     fn revoke_profile(&self, profile: &str) -> Result<usize, AppError>;
@@ -164,6 +170,25 @@ impl GrantLedger for MemoryGrantLedger {
         } else {
             Err(AppError::new(ErrorCategory::McpPolicy, "not found"))
         }
+    }
+
+    fn add_bypass(
+        &self,
+        id: Uuid,
+        operations: &[crate::mcp::bypass::Operation],
+    ) -> Result<(), AppError> {
+        let mut inner = self.inner.lock().expect("ledger");
+        let grant = inner
+            .grants
+            .iter_mut()
+            .find(|grant| grant.id == id && !grant.revoked)
+            .ok_or_else(|| AppError::new(ErrorCategory::McpPolicy, "not found"))?;
+        let mut more = grant.bypass.clone();
+        more.extend_from_slice(operations);
+        *grant = grant.clone().with_bypass(&more);
+        let event = AuditEvent::bypass(grant);
+        inner.audits.push(event);
+        Ok(())
     }
 
     fn revoke_connection(&self, profile: &str, connection: &str) -> Result<usize, AppError> {

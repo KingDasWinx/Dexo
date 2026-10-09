@@ -189,6 +189,7 @@ impl DexoMcpServer {
             .copied()
             .filter(|operation| !grant.bypass.contains(operation))
             .collect();
+        approval.operations = asked.clone();
         if !grant.bypass.is_empty() && !asked.is_empty() {
             approval.statement = format!(
                 "-- asks for: {} (the rest runs without asking)\n{}",

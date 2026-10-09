@@ -1,4 +1,4 @@
-pub const LATEST_SCHEMA_VERSION: u32 = 21;
+pub const LATEST_SCHEMA_VERSION: u32 = 22;
 
 pub const MIGRATION_1: &str = r#"
 BEGIN;
@@ -381,6 +381,14 @@ INSERT INTO schema_migrations(version, applied_at) VALUES(21, datetime('now'));
 COMMIT;
 "#;
 
+/// A request learns which operations it asks about, for "approve, and stop asking".
+pub const MIGRATION_22: &str = r#"
+BEGIN;
+ALTER TABLE mcp_approvals ADD COLUMN operations_json TEXT NOT NULL DEFAULT '[]';
+INSERT INTO schema_migrations(version, applied_at) VALUES(22, datetime('now'));
+COMMIT;
+"#;
+
 pub fn read_schema_version(conn: &rusqlite::Connection) -> u32 {
     conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
@@ -432,6 +440,7 @@ pub fn apply_up_to(conn: &rusqlite::Connection, target: u32) -> anyhow::Result<(
             19 => MIGRATION_19,
             20 => MIGRATION_20,
             21 => MIGRATION_21,
+            22 => MIGRATION_22,
             other => anyhow::bail!("missing migration {other}"),
         };
         conn.execute_batch(sql)?;

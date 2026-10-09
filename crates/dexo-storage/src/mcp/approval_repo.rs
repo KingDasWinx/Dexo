@@ -8,8 +8,8 @@ pub fn insert(conn: &Connection, approval: &Approval) -> anyhow::Result<()> {
     conn.execute(
         "INSERT INTO mcp_approvals (
             id, profile_name, connection_name, tool, statement, targets_json,
-            created_at, deadline, decision, grant_id, heartbeat
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            created_at, deadline, decision, grant_id, heartbeat, operations_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             approval.id.to_string(),
             approval.profile,
@@ -22,6 +22,7 @@ pub fn insert(conn: &Connection, approval: &Approval) -> anyhow::Result<()> {
             approval.decision.as_str(),
             approval.grant.to_string(),
             approval.heartbeat,
+            serde_json::to_string(&approval.operations)?,
         ],
     )?;
     Ok(())
@@ -150,7 +151,7 @@ pub fn deny_revoked(conn: &Connection) -> anyhow::Result<()> {
 }
 
 const SELECT: &str = "SELECT id, profile_name, connection_name, tool, statement, targets_json,
-        created_at, deadline, decision, grant_id, heartbeat FROM mcp_approvals";
+        created_at, deadline, decision, grant_id, heartbeat, operations_json FROM mcp_approvals";
 
 fn row_to_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<Approval> {
     Ok(Approval {
@@ -165,6 +166,7 @@ fn row_to_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<Approval> {
         decision: ApprovalDecision::parse(&row.get::<_, String>(8)?),
         grant: Uuid::parse_str(&row.get::<_, String>(9)?).unwrap_or_default(),
         heartbeat: row.get(10)?,
+        operations: serde_json::from_str(&row.get::<_, String>(11)?).unwrap_or_default(),
     })
 }
 

@@ -74,6 +74,10 @@ pub struct Approval {
     /// When the waiting call last said it is still there, in Unix seconds.
     #[serde(default)]
     pub heartbeat: i64,
+    /// What it asks about: the operations of the write its access does not let through.
+    /// Approving it with "and do not ask again" lets them through from then on.
+    #[serde(default)]
+    pub operations: Vec<crate::mcp::bypass::Operation>,
 }
 
 impl Approval {
@@ -98,6 +102,7 @@ impl Approval {
             decision: ApprovalDecision::Pending,
             grant: Uuid::nil(),
             heartbeat: now,
+            operations: Vec::new(),
         }
     }
 
