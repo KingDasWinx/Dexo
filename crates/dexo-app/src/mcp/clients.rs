@@ -743,6 +743,15 @@ let that kind of write run without asking, which they may for inserts, say, and 
 deletes. Say what you are about to change and why before you call the tool either way.
 Every call is audited. Never retry a denied write with a different statement to get around
 the decision; ask the person instead.
+
+- `data_execute_sql` runs a script: several INSERT, UPDATE, DELETE and, on Postgres,
+  TRUNCATE statements, as one transaction -- all of them or none -- under one approval.
+  Send a whole seed in one call, not one call per statement.
+- Pass `file` instead of `sql` to run a `.sql` file from the project folder, the folder
+  the server was started in, up to 1 MiB. It is read once: what the person approves is
+  what runs. Prefer it to copying the file's statements into `sql`.
+- No write tool listed means no write access: ask the person to give it on Dexo's Agents
+  screen, Profiles, `w`, rather than looking for another way to write.
 "
     )
 }
@@ -1132,6 +1141,8 @@ mod tests {
         profile.query_mode = crate::mcp::QueryMode::RawReadSql;
         let raw = super::skill_text(McpClient::ClaudeCode, &profile);
         assert!(raw.contains("query_execute_read"), "{raw}");
+        // A seed is one call, from its file.
+        assert!(raw.contains("Pass `file` instead of `sql`"), "{raw}");
     }
 
     /// A config names the `dexo` on PATH when it is the running binary through a link, as

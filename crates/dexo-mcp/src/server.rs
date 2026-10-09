@@ -243,7 +243,9 @@ impl ServerHandler for DexoMcpServer {
              Write tools appear only while a person has given this profile write access to a \
              connection, and each write waits for that person's approval on Dexo's Agents \
              screen -- refused when they deny it or do not answer in time -- unless they let \
-             that kind of write run without asking. Say what you are about to change either way.",
+             that kind of write run without asking. Say what you are about to change either way. \
+             data_execute_sql runs a whole script as one transaction, given as sql or as file: a \
+             .sql file in the project folder.",
             profile.name, profile.limits.max_rows, profile.limits.max_bytes
         ))
     }
