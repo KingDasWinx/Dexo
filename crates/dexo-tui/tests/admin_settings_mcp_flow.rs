@@ -458,6 +458,7 @@ fn selecting_a_profile_shows_its_own_writes() {
             access: Some(Access {
                 kinds,
                 expires_at: 900,
+                bypass: Vec::new(),
             }),
             ..ConnectionLine::default()
         }],

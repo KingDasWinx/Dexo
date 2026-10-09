@@ -5,6 +5,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use dexo_app::mcp::WriteKind;
+use dexo_app::mcp::bypass::Operation;
 use dexo_app::mcp::clients::McpClient;
 
 use crate::screens::mcp_clients::McpClients;
@@ -36,6 +37,8 @@ pub struct Access {
     pub kinds: Vec<WriteKind>,
     /// When it ends, in Unix seconds; `UNTIL_REVOKED` for one that does not.
     pub expires_at: i64,
+    /// What runs without asking.
+    pub bypass: Vec<Operation>,
 }
 
 impl Access {
@@ -56,9 +59,27 @@ impl Access {
         }
     }
 
-    /// `rows, schema · 28 min left`.
+    /// `rows, schema · 28 min left`, `rows · insert without asking · 28 min left`, or
+    /// `rows · without asking · 28 min left` when all of it runs without asking.
     pub fn words(&self, now: i64) -> String {
-        format!("{} · {}", kinds_words(&self.kinds), self.left(now))
+        let every = Operation::ALL
+            .into_iter()
+            .filter(|operation| self.kinds.contains(&operation.kind()))
+            .all(|operation| self.bypass.contains(&operation));
+        match (self.bypass.is_empty(), every) {
+            (true, _) => format!("{} · {}", kinds_words(&self.kinds), self.left(now)),
+            (false, true) => format!(
+                "{} · without asking · {}",
+                kinds_words(&self.kinds),
+                self.left(now)
+            ),
+            (false, false) => format!(
+                "{} · {} without asking · {}",
+                kinds_words(&self.kinds),
+                dexo_app::mcp::bypass::operations_words(&self.bypass),
+                self.left(now)
+            ),
+        }
     }
 }
 
@@ -72,6 +93,8 @@ pub struct ConnectionLine {
     pub refused: Option<String>,
     /// A PostgreSQL connection: its tables are `database.schema.table`.
     pub postgres: bool,
+    /// Production: write access to it is given with its name typed.
+    pub production: bool,
     pub access: Option<Access>,
     /// Not one of the profile's connections any more, shown for the write access still
     /// on it, which `r` takes back; Edit does not check it again.
@@ -152,6 +175,16 @@ impl McpProfileSummary {
     }
 
     /// How many of its connections it may write to now.
+    /// Some of its writes run without asking.
+    pub fn unasked(&self) -> bool {
+        self.connections.iter().any(|connection| {
+            connection
+                .access
+                .as_ref()
+                .is_some_and(|access| !access.bypass.is_empty())
+        })
+    }
+
     pub fn writes(&self) -> usize {
         self.connections
             .iter()
@@ -294,9 +327,11 @@ impl McpProfilesScreen {
                     environment: "local".into(),
                     refused: None,
                     postgres: true,
+                    production: false,
                     access: Some(Access {
                         kinds: vec![WriteKind::Rows],
                         expires_at: 900,
+                        bypass: Vec::new(),
                     }),
                     unlisted: false,
                 }],
@@ -1164,9 +1199,59 @@ pub const LASTS: [(&str, &str, &str); 6] = [
 pub enum WritesRow {
     Connection,
     Kinds,
+    Preset,
+    Bypass,
     Lasts,
+    Confirm,
     Cancel,
     Create,
+}
+
+/// Ready-made sets of what runs without asking: the name, what it lets through, and
+/// what that means. An operation of a kind not given is left out of each.
+pub const PRESETS: [(&str, &[Operation], &str); 5] = [
+    ("None", &[], "every write asks you first"),
+    (
+        "Inserts",
+        &[Operation::Insert],
+        "inserts run without asking",
+    ),
+    (
+        "Changes",
+        &[Operation::Insert, Operation::Update, Operation::Delete],
+        "inserts, and updates and deletes of the rows they pick, run without asking",
+    ),
+    (
+        "Safe",
+        &[
+            Operation::Insert,
+            Operation::Update,
+            Operation::Delete,
+            Operation::Create,
+        ],
+        "all that destroys nothing runs without asking",
+    ),
+    (
+        "All",
+        &Operation::ALL,
+        "every write runs without asking: emptying and dropping tables too",
+    ),
+];
+
+/// An operation as the grid shows it, and what it covers.
+pub fn operation_label(operation: Operation) -> (&'static str, &'static str) {
+    match operation {
+        Operation::Insert => ("insert", "INSERT, and adding one row"),
+        Operation::Update => ("update", "UPDATE with a WHERE that picks rows"),
+        Operation::Delete => ("delete", "DELETE with a WHERE that picks rows"),
+        Operation::EveryRow => (
+            "every row ⚠",
+            "UPDATE or DELETE without a WHERE that picks rows, and TRUNCATE",
+        ),
+        Operation::Create => ("create", "CREATE TABLE, INDEX or VIEW, and ALTER that adds"),
+        Operation::Drop => ("drop ⚠", "DROP, and ALTER ... DROP"),
+        Operation::Sessions => ("sessions ⚠", "cancelling a query, ending a session"),
+    }
 }
 
 /// Writes (`w`): what the profile may change on one connection, and for how long; every
@@ -1184,7 +1269,14 @@ pub struct WritesForm {
     pub kinds: Vec<WriteKind>,
     pub checked: Vec<WriteKind>,
     pub cursor: usize,
+    /// What runs without asking, and the box the grid's cursor is on.
+    pub bypass: Vec<Operation>,
+    pub bypass_cursor: usize,
+    /// The preset last chosen: two can let the same through when a kind is not given.
+    pub chosen_preset: Option<usize>,
     pub lasts: usize,
+    /// A production connection's name, typed.
+    pub confirm: TextInput,
     pub focus: WritesRow,
     pub error: Option<(WritesRow, String)>,
     pub busy: bool,
@@ -1235,7 +1327,11 @@ impl WritesForm {
             kinds: profile.kinds.clone(),
             checked: vec![WriteKind::Rows],
             cursor: 0,
+            bypass: Vec::new(),
+            bypass_cursor: 0,
+            chosen_preset: None,
             lasts: 1,
+            confirm: TextInput::new(""),
             focus: WritesRow::Kinds,
             error: None,
             busy: false,
@@ -1256,15 +1352,89 @@ impl WritesForm {
             self.lasts = 1;
         }
         if let Some(access) = self.current() {
+            let bypass = access.bypass.clone();
             self.checked = access
                 .kinds
                 .iter()
                 .copied()
                 .filter(|kind| kinds.contains(kind))
                 .collect();
+            self.bypass = bypass;
         } else {
             self.checked.retain(|kind| kinds.contains(kind));
+            self.bypass.clear();
         }
+        self.keep_bypass();
+        self.chosen_preset = None;
+        // A name typed for one connection does not confirm the next.
+        self.confirm = TextInput::new("");
+    }
+
+    /// The operations of the kinds checked: what may run without asking.
+    pub fn operations(&self) -> Vec<Operation> {
+        Operation::ALL
+            .into_iter()
+            .filter(|operation| self.checked.contains(&operation.kind()))
+            .collect()
+    }
+
+    /// What runs without asking stays within what it may change.
+    fn keep_bypass(&mut self) {
+        let operations = self.operations();
+        self.bypass
+            .retain(|operation| operations.contains(operation));
+        self.bypass.sort();
+        self.bypass_cursor = self.bypass_cursor.min(operations.len().saturating_sub(1));
+    }
+
+    /// The preset the checked operations are, if they are one: the one chosen, while it
+    /// still is.
+    pub fn preset(&self) -> Option<usize> {
+        let operations = self.operations();
+        let matches = |at: usize| {
+            let mut lets: Vec<Operation> = PRESETS[at]
+                .1
+                .iter()
+                .copied()
+                .filter(|operation| operations.contains(operation))
+                .collect();
+            lets.sort();
+            lets == self.bypass
+        };
+        self.chosen_preset
+            .filter(|at| matches(*at))
+            .or_else(|| (0..PRESETS.len()).find(|at| matches(*at)))
+    }
+
+    fn apply_preset(&mut self, at: usize) {
+        self.error = None;
+        let at = at.min(PRESETS.len() - 1);
+        self.bypass = PRESETS[at].1.to_vec();
+        self.keep_bypass();
+        self.chosen_preset = Some(at);
+    }
+
+    fn toggle_bypass(&mut self, at: usize) {
+        self.error = None;
+        self.chosen_preset = None;
+        let operations = self.operations();
+        self.bypass_cursor = at.min(operations.len().saturating_sub(1));
+        if let Some(operation) = operations.get(self.bypass_cursor).copied() {
+            match self.bypass.iter().position(|on| *on == operation) {
+                Some(found) => {
+                    self.bypass.remove(found);
+                }
+                None => self.bypass.push(operation),
+            }
+        }
+        self.keep_bypass();
+    }
+
+    /// The connection picked is production: giving it writes asks for its name.
+    pub fn production(&self) -> bool {
+        self.offered
+            .get(self.connection)
+            .is_some_and(|line| line.production)
     }
 
     /// The write access the picked connection has now: what Create replaces.
@@ -1280,13 +1450,16 @@ impl WritesForm {
     }
 
     pub fn rows(&self) -> Vec<WritesRow> {
-        vec![
-            WritesRow::Connection,
-            WritesRow::Kinds,
-            WritesRow::Lasts,
-            WritesRow::Cancel,
-            WritesRow::Create,
-        ]
+        let mut rows = vec![WritesRow::Connection, WritesRow::Kinds];
+        if !self.operations().is_empty() {
+            rows.extend([WritesRow::Preset, WritesRow::Bypass]);
+        }
+        rows.push(WritesRow::Lasts);
+        if self.production() {
+            rows.push(WritesRow::Confirm);
+        }
+        rows.extend([WritesRow::Cancel, WritesRow::Create]);
+        rows
     }
 
     pub fn index_of(&self, row: WritesRow) -> usize {
@@ -1308,6 +1481,7 @@ impl WritesForm {
                 None => self.checked.push(kind),
             }
         }
+        self.keep_bypass();
     }
 
     /// Picks option `option` of `row`.
@@ -1321,6 +1495,8 @@ impl WritesForm {
                 self.load_current();
             }
             WritesRow::Kinds => self.toggle(option),
+            WritesRow::Preset => self.apply_preset(option),
+            WritesRow::Bypass => self.toggle_bypass(option),
             WritesRow::Lasts => self.lasts = option.min(LASTS.len() - 1),
             _ => {}
         }
@@ -1347,6 +1523,35 @@ impl WritesForm {
             }
             (WritesRow::Kinds, KeyCode::Char(' ') | KeyCode::Enter) => {
                 self.toggle(self.cursor);
+                return FormKey::Stay;
+            }
+            (WritesRow::Preset, KeyCode::Left) => {
+                let at = self.preset().map_or(0, |at| at.saturating_sub(1));
+                self.apply_preset(at);
+                return FormKey::Stay;
+            }
+            (WritesRow::Preset, KeyCode::Right) => {
+                let at = self.preset().map_or(0, |at| at + 1);
+                self.apply_preset(at);
+                return FormKey::Stay;
+            }
+            (WritesRow::Preset, KeyCode::Char(' ')) => {
+                let at = self.preset().map_or(0, |at| (at + 1) % PRESETS.len());
+                self.apply_preset(at);
+                return FormKey::Stay;
+            }
+            (WritesRow::Bypass, code)
+                if grid_key(&[self.operations().len()], &mut self.bypass_cursor, code) =>
+            {
+                return FormKey::Stay;
+            }
+            (WritesRow::Bypass, KeyCode::Char(' ') | KeyCode::Enter) => {
+                self.toggle_bypass(self.bypass_cursor);
+                return FormKey::Stay;
+            }
+            (WritesRow::Confirm, code) if !moves_focus(code) && code != KeyCode::Enter => {
+                self.confirm.handle_key(key);
+                self.error = None;
                 return FormKey::Stay;
             }
             (WritesRow::Lasts, KeyCode::Left) => {
@@ -1379,9 +1584,16 @@ impl WritesForm {
             }
             None => FormKey::Stay,
         };
+        let from_below = matches!(key.code, KeyCode::Up | KeyCode::BackTab);
         if self.focus == WritesRow::Kinds && was != WritesRow::Kinds {
-            let from_below = matches!(key.code, KeyCode::Up | KeyCode::BackTab);
             enter_grid(&[self.kinds.len()], &mut self.cursor, from_below);
+        }
+        if self.focus == WritesRow::Bypass && was != WritesRow::Bypass {
+            enter_grid(
+                &[self.operations().len()],
+                &mut self.bypass_cursor,
+                from_below,
+            );
         }
         outcome
     }
@@ -1403,7 +1615,20 @@ impl WritesForm {
                 ("Tab", "next"),
                 ("Esc", "cancel"),
             ],
-            WritesRow::Lasts => &[("←/→", "choose"), ("Tab", "next"), ("Esc", "cancel")],
+            WritesRow::Lasts | WritesRow::Preset => {
+                &[("←/→", "choose"), ("Tab", "next"), ("Esc", "cancel")]
+            }
+            WritesRow::Bypass => &[
+                ("↑/↓/←/→", "move"),
+                ("Space", "check"),
+                ("Tab", "next"),
+                ("Esc", "cancel"),
+            ],
+            WritesRow::Confirm => &[
+                ("Enter/Tab", "next"),
+                ("Shift+Tab", "back"),
+                ("Esc", "cancel"),
+            ],
             WritesRow::Create => &[("Enter", "allow"), ("←/→", "switch"), ("Esc", "cancel")],
             WritesRow::Cancel => &[("Enter", "cancel"), ("←/→", "switch")],
         }
@@ -1423,9 +1648,19 @@ impl WritesForm {
         if self.checked.contains(&WriteKind::Sessions) {
             does.push("end sessions".to_string());
         }
+        let asks = if self.bypass.is_empty() {
+            "asking you before each write".to_string()
+        } else if self.bypass.len() == self.operations().len() {
+            "without asking you".to_string()
+        } else {
+            format!(
+                "{} without asking, asking you before the rest",
+                dexo_app::mcp::bypass::operations_words(&self.bypass)
+            )
+        };
         (!does.is_empty()).then(|| {
             format!(
-                "{} may {} in {}, asking you before each write, {}.",
+                "{} may {} in {}, {asks}, {}.",
                 self.profile,
                 does.join(" and "),
                 self.connection_name(),
@@ -1444,12 +1679,20 @@ impl WritesForm {
         if kinds.is_empty() {
             return Err((WritesRow::Kinds, "check what it may change".into()));
         }
+        let name = self.connection_name();
+        if self.production() && self.confirm.as_str().trim() != name {
+            return Err((
+                WritesRow::Confirm,
+                format!("type {name} to confirm writes on production"),
+            ));
+        }
         Ok(dexo_app::mcp::GrantRequest {
-            connection: self.connection_name(),
+            connection: name.clone(),
             kinds,
             expires: LASTS[self.lasts].0.to_string(),
             ask_secs: None,
-            ..Default::default()
+            bypass: self.bypass.clone(),
+            confirm: self.production().then_some(name),
         })
     }
 
@@ -1626,6 +1869,7 @@ mod tests {
             environment: "local".into(),
             refused: refused.map(str::to_string),
             postgres: true,
+            production: false,
             access: None,
             unlisted: false,
         }
@@ -1644,6 +1888,48 @@ mod tests {
             ],
             kinds: WriteKind::ALL.to_vec(),
         }
+    }
+
+    /// A preset checks what runs without asking, within what it may change; production
+    /// asks for its name, and the request carries both.
+    #[test]
+    fn what_runs_without_asking_is_picked_by_preset_or_by_box() {
+        use dexo_app::mcp::bypass::Operation;
+        let mut summary = profile();
+        summary.connections[1] = ConnectionLine {
+            production: true,
+            ..line("pg-prod", None)
+        };
+        let mut form = WritesForm::new(&summary, Some("pg-dev")).unwrap();
+        assert_eq!(form.checked, [WriteKind::Rows]);
+        assert_eq!(form.preset(), Some(0), "every write asks to begin with");
+        form.pick(WritesRow::Preset, 2);
+        assert_eq!(
+            form.bypass,
+            [Operation::Insert, Operation::Update, Operation::Delete]
+        );
+        // "All" of rows is every operation on rows, and nothing of a kind not given.
+        form.pick(WritesRow::Preset, 4);
+        assert_eq!(form.bypass, form.operations());
+        assert!(!form.bypass.contains(&Operation::Drop));
+        // A box unchecked is no preset; taking rows away takes their operations.
+        form.pick(WritesRow::Bypass, 3);
+        assert_eq!(form.preset(), Some(2), "all but every row is Changes");
+        form.pick(WritesRow::Bypass, 0);
+        assert_eq!(form.preset(), None);
+        form.toggle(0);
+        assert!(form.bypass.is_empty() && form.operations().is_empty());
+        form.toggle(0);
+        form.pick(WritesRow::Preset, 1);
+        let request = form.request().unwrap();
+        assert_eq!(request.bypass, [Operation::Insert]);
+        assert_eq!(request.confirm, None);
+        // On production the name is typed first.
+        form.pick(WritesRow::Connection, 1);
+        assert!(form.rows().contains(&WritesRow::Confirm));
+        assert_eq!(form.request().unwrap_err().0, WritesRow::Confirm);
+        form.confirm = TextInput::new("pg-prod");
+        assert_eq!(form.request().unwrap().confirm.as_deref(), Some("pg-prod"));
     }
 
     /// What a profile sees is read from its selectors, and saved as the same ones; a deny
@@ -1709,6 +1995,7 @@ mod tests {
         summary.connections[0].access = Some(Access {
             kinds: vec![WriteKind::Schema],
             expires_at: dexo_app::mcp::grant::UNTIL_REVOKED,
+            bypass: Vec::new(),
         });
         let mut form = WritesForm::new(&summary, Some("pg-dev")).unwrap();
         assert_eq!(form.offered.len(), 1);

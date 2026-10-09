@@ -93,10 +93,17 @@ pub fn approval_buttons(model: &Model) -> Vec<Button> {
     if audit.current().is_none() || audit.deciding.is_some() {
         return Vec::new();
     }
-    vec![
+    let mut buttons = vec![
         Button::new(KeyCode::Char('a'), "Approve"),
         Button::new(KeyCode::Char('d'), "Deny"),
-    ]
+    ];
+    if audit
+        .current()
+        .is_some_and(|request| !request.operations.is_empty())
+    {
+        buttons.push(Button::new(KeyCode::Char('A'), "Approve, stop asking"));
+    }
+    buttons
 }
 
 /// Who may ask for a write, a line each: what the empty queue has to say.
@@ -527,6 +534,9 @@ fn profiles_list(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap
             // A disabled profile serves no agent, whatever access it keeps.
             let state = if !profile.enabled {
                 Span::styled("disabled", style(Role::Muted))
+            } else if profile.writes() > 0 && profile.unasked() {
+                // Something of it runs without asking: said where the list is read.
+                Span::styled("✎ writes, auto", style(Role::Warning))
             } else if profile.writes() > 0 {
                 Span::raw("✎ writes")
             } else {
@@ -667,7 +677,11 @@ fn sheet(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         heading(
             model,
             "CONNECTIONS",
-            "each write asks you first · w writes · r revoke",
+            if profile.unasked() {
+                "some writes run without asking · w writes · r revoke"
+            } else {
+                "each write asks you first · w writes · r revoke"
+            },
         ),
     ));
     // The walk is marked while the keys are on it, not under a question.
@@ -1201,6 +1215,53 @@ fn writes_form(frame: &mut Frame, area: Rect, model: &Model, form: &WritesForm, 
         let (label, covers) = crate::screens::mcp_profiles::kind_label(*kind);
         lines.aside(format!("{label}: {covers}"), muted);
     }
+    let operations = form.operations();
+    if !operations.is_empty() {
+        use crate::screens::mcp_profiles::{PRESETS, operation_label};
+        lines.section(model, "WITHOUT ASKING");
+        let names: Vec<&str> = PRESETS.iter().map(|(name, _, _)| *name).collect();
+        lines.segmented(
+            model,
+            at(WritesRow::Preset),
+            "Preset",
+            &names,
+            form.preset().unwrap_or(usize::MAX),
+            focused(WritesRow::Preset),
+            "",
+        );
+        lines.aside(
+            match form.preset() {
+                Some(at) => PRESETS[at].2.to_string(),
+                None => format!(
+                    "{} run without asking",
+                    dexo_app::mcp::bypass::operations_words(&form.bypass)
+                ),
+            },
+            muted,
+        );
+        let items: Vec<(String, bool)> = operations
+            .iter()
+            .map(|operation| {
+                (
+                    operation_label(*operation).0.to_string(),
+                    form.bypass.contains(operation),
+                )
+            })
+            .collect();
+        lines.grid(
+            model,
+            at(WritesRow::Bypass),
+            "Runs",
+            &[(String::new(), items)],
+            focused(WritesRow::Bypass).then_some(form.bypass_cursor),
+        );
+        if focused(WritesRow::Bypass)
+            && let Some(operation) = operations.get(form.bypass_cursor)
+        {
+            let (label, covers) = operation_label(*operation);
+            lines.aside(format!("{label}: {covers}"), muted);
+        }
+    }
     lines.section(model, "HOW LONG");
     let options: Vec<&str> = crate::screens::mcp_profiles::LASTS
         .iter()
@@ -1215,6 +1276,18 @@ fn writes_form(frame: &mut Frame, area: Rect, model: &Model, form: &WritesForm, 
         focused(WritesRow::Lasts),
         "",
     );
+    let production = form.production();
+    if production {
+        lines.section(model, "CONFIRM");
+        lines.confirm(
+            model,
+            at(WritesRow::Confirm),
+            &form.connection_name(),
+            &form.confirm,
+            focused(WritesRow::Confirm),
+            invalid(WritesRow::Confirm),
+        );
+    }
     lines.error(
         model,
         form.error.as_ref().map(|(_, message)| message.as_str()),
@@ -1224,15 +1297,40 @@ fn writes_form(frame: &mut Frame, area: Rect, model: &Model, form: &WritesForm, 
         Some(result) => lines.note(result, panel::fg(model, Role::Foreground)),
         None => lines.note("check what it may change", muted),
     }
-    lines.note(
-        format!(
-            "Each write waits up to {} on Approvals, then is refused.",
-            crate::screens::mcp_profiles::duration_words(i64::from(
-                dexo_app::mcp::approval::DEFAULT_TIMEOUT_SECS
-            ))
-        ),
-        muted,
-    );
+    if form.bypass.len() < operations.len() {
+        lines.note(
+            format!(
+                "A write that asks waits up to {} on Approvals, then is refused.",
+                crate::screens::mcp_profiles::duration_words(i64::from(
+                    dexo_app::mcp::approval::DEFAULT_TIMEOUT_SECS
+                ))
+            ),
+            muted,
+        );
+    }
+    // What it risks, in words, before it is given.
+    if let Some(risk) = dexo_app::mcp::bypass::bypass_risk(&form.bypass, production) {
+        let destructive = form.bypass.iter().any(|operation| operation.destructive());
+        lines.note(
+            format!("! {risk}"),
+            panel::bold(
+                model,
+                if destructive {
+                    Role::Error
+                } else {
+                    Role::Warning
+                },
+            ),
+        );
+    } else if production {
+        lines.note(
+            format!(
+                "! {} is production: every write asks you first",
+                form.connection_name()
+            ),
+            panel::bold(model, Role::Warning),
+        );
+    }
     if let Some(access) = form.current() {
         lines.note(
             format!(
@@ -1259,6 +1357,14 @@ fn writes_form(frame: &mut Frame, area: Rect, model: &Model, form: &WritesForm, 
     } else {
         "Allow writes"
     };
+    let mut row = buttons(
+        focused(WritesRow::Cancel),
+        focused(WritesRow::Create),
+        label,
+    );
+    if production {
+        row[1].tone = Role::Warning;
+    }
     panel::draw(
         frame,
         area,
@@ -1266,11 +1372,7 @@ fn writes_form(frame: &mut Frame, area: Rect, model: &Model, form: &WritesForm, 
         hits,
         &format!("Writes of {}", form.profile),
         lines,
-        &buttons(
-            focused(WritesRow::Cancel),
-            focused(WritesRow::Create),
-            label,
-        ),
+        &row,
         form.hints(),
     );
 }

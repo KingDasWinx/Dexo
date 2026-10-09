@@ -35,6 +35,7 @@ fn assistant(name: &str) -> McpProfileSummary {
             access: Some(Access {
                 kinds: vec![WriteKind::Rows],
                 expires_at: 1700,
+                bypass: Vec::new(),
             }),
             ..ConnectionLine::default()
         }],

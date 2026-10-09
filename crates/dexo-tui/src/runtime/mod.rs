@@ -943,9 +943,11 @@ impl WorkbenchRuntime {
                 }
             }
             crate::Effect::LoadMcpAudit => self.load_mcp_audit().await,
-            crate::Effect::SettleApproval { id, approve } => {
-                self.settle_approval(id, approve).await
-            }
+            crate::Effect::SettleApproval {
+                id,
+                approve,
+                stop_asking,
+            } => self.settle_approval(id, approve, stop_asking).await,
             crate::Effect::CheckApprovals => self.check_approvals().await,
             crate::Effect::SetMcpProfileEnabled { name, enabled } => {
                 self.set_mcp_profile_enabled(name, enabled).await
@@ -2708,8 +2710,9 @@ impl WorkbenchRuntime {
         self.off_the_loop(|| mcp_audit_loaded().into_iter().collect());
     }
 
-    async fn settle_approval(&self, id: uuid::Uuid, approve: bool) {
+    async fn settle_approval(&self, id: uuid::Uuid, approve: bool, stop_asking: bool) {
         self.off_the_loop(move || {
+            use dexo_app::mcp::GrantLedger;
             use dexo_app::mcp::approval::{Answered, answer};
             let Ok(paths) = AppPaths::discover() else {
                 return Vec::new();
@@ -2717,7 +2720,20 @@ impl WorkbenchRuntime {
             let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
                 return Vec::new();
             };
+            // Read before it is settled: what it asked about, and under which access.
+            let request = ledger.approval(id);
             let message = match answer(&ledger, id, approve, unix_now()) {
+                Ok(Answered::Taken) if approve && stop_asking => match request {
+                    Some(request) => match ledger.add_bypass(request.grant, &request.operations) {
+                        Ok(()) => format!(
+                            "Approved: the agent's write runs now, and {} lets {} run without asking from now on.",
+                            request.connection,
+                            dexo_app::mcp::bypass::operations_words(&request.operations)
+                        ),
+                        Err(error) => format!("Approved; asking stays on: {error}"),
+                    },
+                    None => "Approved: the agent's write runs now.".into(),
+                },
                 Ok(Answered::Taken) if approve => "Approved: the agent's write runs now.".into(),
                 Ok(Answered::Taken) => "Denied: the agent is told no.".into(),
                 Ok(Answered::AlreadyDecided) => {
@@ -2936,9 +2952,7 @@ fn mcp_connection_lines(
         .into_iter()
         .filter_map(|saved| {
             let meta = dexo_app::mcp::McpConnection::from_profile(&saved).ok()?;
-            let refused = if meta.environment == dexo_app::Environment::Production {
-                Some("production never takes agents' writes".to_string())
-            } else if meta.read_only {
+            let refused = if meta.read_only {
                 Some("its policy keeps it read-only".to_string())
             } else {
                 meta.accepts_writes().err().map(|error| error.to_string())
@@ -2950,6 +2964,7 @@ fn mcp_connection_lines(
                     environment: saved.environment,
                     refused,
                     postgres: meta.dialect == dexo_sql::Dialect::Postgres,
+                    production: meta.environment == dexo_app::Environment::Production,
                     access: None,
                     unlisted: false,
                 },
@@ -2981,6 +2996,7 @@ fn access_on(
     Some(crate::screens::mcp_profiles::Access {
         kinds,
         expires_at: last.expires_at,
+        bypass: last.bypass.clone(),
     })
 }
 

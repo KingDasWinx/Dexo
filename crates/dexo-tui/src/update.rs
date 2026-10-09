@@ -4452,9 +4452,7 @@ fn mcp_connection_choices(model: &Model) -> Vec<crate::screens::mcp_profiles::Co
             Some(crate::screens::mcp_profiles::ConnectionChoice {
                 name: row.profile.name.clone(),
                 environment: row.profile.environment.clone(),
-                refused: if meta.environment == dexo_app::Environment::Production {
-                    Some("production never takes agents' writes".to_string())
-                } else if meta.read_only {
+                refused: if meta.read_only {
                     Some("its policy keeps it read-only".to_string())
                 } else {
                     meta.accepts_writes().err().map(|error| error.to_string())
@@ -4729,6 +4727,7 @@ fn mouse_mcp_audit(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             Some(deciding) => vec![Effect::SettleApproval {
                 id: deciding.id,
                 approve: deciding.approve,
+                stop_asking: !deciding.stop_asking.is_empty(),
             }],
             None => Vec::new(),
         },
@@ -5693,8 +5692,13 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
                 match crate::widgets::form::confirm_key(&mut deciding.focus, &key) {
                     FooterKey::Submit => {
                         let (id, approve) = (deciding.id, deciding.approve);
+                        let stop_asking = !deciding.stop_asking.is_empty();
                         screen.deciding = None;
-                        vec![Effect::SettleApproval { id, approve }]
+                        vec![Effect::SettleApproval {
+                            id,
+                            approve,
+                            stop_asking,
+                        }]
                     }
                     FooterKey::Cancel => {
                         screen.deciding = None;
@@ -5749,6 +5753,21 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
                         screen.deciding = Some(crate::screens::mcp_audit::Deciding {
                             id: request.id,
                             approve: true,
+                            stop_asking: Vec::new(),
+                            focus: FooterFocus::Submit,
+                        });
+                    }
+                }
+                // Approve, and let what it asked about run without asking from now on.
+                KeyCode::Char('A') => {
+                    if let Some(request) = screen
+                        .current()
+                        .filter(|request| !request.operations.is_empty())
+                    {
+                        screen.deciding = Some(crate::screens::mcp_audit::Deciding {
+                            id: request.id,
+                            approve: true,
+                            stop_asking: request.operations.clone(),
                             focus: FooterFocus::Submit,
                         });
                     }
@@ -5758,6 +5777,7 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
                         return Some(vec![Effect::SettleApproval {
                             id: request.id,
                             approve: false,
+                            stop_asking: false,
                         }]);
                     }
                 }
@@ -15940,7 +15960,7 @@ mod tests {
         assert!(model.mcp_audit.deciding.is_some());
         assert!(matches!(
             update(&mut model, key(KeyCode::Enter)).as_slice(),
-            [Effect::SettleApproval { id, approve: true }] if *id == request.id
+            [Effect::SettleApproval { id, approve: true, .. }] if *id == request.id
         ));
         // Esc on the question approves nothing either.
         update(&mut model, key(KeyCode::Char('a')));
@@ -15985,8 +16005,11 @@ mod tests {
         );
         update(&mut model, key(KeyCode::Char('w')));
         assert!(matches!(model.mcp_profiles.form, Some(Form::Writes(_))));
-        // Rows are checked; on to how long, then past Cancel to the button.
-        update(&mut model, key(KeyCode::Tab));
+        // Rows are checked; past what runs without asking -- nothing, every write asks --
+        // on to how long, then past Cancel to the button.
+        for _ in 0..3 {
+            update(&mut model, key(KeyCode::Tab));
+        }
         assert!(update(&mut model, key(KeyCode::Enter)).is_empty());
         update(&mut model, key(KeyCode::Tab));
         let effects = update(&mut model, key(KeyCode::Enter));

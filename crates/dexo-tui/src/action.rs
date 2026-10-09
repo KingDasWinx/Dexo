@@ -955,6 +955,8 @@ pub enum Effect {
     SettleApproval {
         id: uuid::Uuid,
         approve: bool,
+        /// Approving also lets what it asked about run without asking from now on.
+        stop_asking: bool,
     },
     /// Whether any agent's write waits for approval, for a toast.
     CheckApprovals,

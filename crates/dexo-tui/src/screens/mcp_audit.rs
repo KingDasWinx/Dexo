@@ -10,6 +10,8 @@ use crate::widgets::form::{FooterFocus, footer_line};
 pub struct Deciding {
     pub id: uuid::Uuid,
     pub approve: bool,
+    /// Approving it also lets these run without asking from now on, on its connection.
+    pub stop_asking: Vec<dexo_app::mcp::bypass::Operation>,
     pub focus: FooterFocus,
 }
 
@@ -276,13 +278,19 @@ impl McpAuditScreen {
         let Some(deciding) = &self.deciding else {
             return lines;
         };
-        let question = if deciding.approve {
-            "Run this write now?"
-        } else {
-            "Refuse this write?"
+        let operations = dexo_app::mcp::bypass::operations_words(&deciding.stop_asking);
+        let question = match (deciding.approve, deciding.stop_asking.is_empty()) {
+            (true, true) => "Run this write now?".to_string(),
+            (true, false) => format!(
+                "Run this write now, and from now on let {operations} run here without asking?"
+            ),
+            (false, _) => "Refuse this write?".to_string(),
         };
         // The request it settles is the one right above it, in the same pane.
-        push_wrapped(&mut lines, "", "", question, width);
+        push_wrapped(&mut lines, "", "", &question, width);
+        if let Some(risk) = dexo_app::mcp::bypass::bypass_risk(&deciding.stop_asking, false) {
+            push_wrapped(&mut lines, "", "", &format!("! {risk}"), width);
+        }
         lines.push(footer_line(
             if deciding.approve { "Approve" } else { "Deny" },
             deciding.focus,
@@ -373,6 +381,7 @@ mod tests {
         screen.deciding = Some(Deciding {
             id: b.id,
             approve: true,
+            stop_asking: Vec::new(),
             focus: FooterFocus::Cancel,
         });
         assert!(!screen.load(vec![b.clone(), c.clone()], 1002));
@@ -431,6 +440,7 @@ mod tests {
         screen.deciding = Some(Deciding {
             id: a.id,
             approve: true,
+            stop_asking: Vec::new(),
             focus: FooterFocus::Cancel,
         });
         let question = screen.decision_lines(100).join("\n");
@@ -469,6 +479,7 @@ mod tests {
         screen.deciding = Some(Deciding {
             id: a.id,
             approve: true,
+            stop_asking: Vec::new(),
             focus: FooterFocus::Cancel,
         });
         assert!(screen.load(Vec::new(), 1002));
