@@ -259,6 +259,61 @@ expression: client.tools().await
       "destructiveHint": false,
       "readOnlyHint": false
     },
+    "description": "Load a CSV, TSV, JSON or JSON Lines file from the project folder into one table, as one transaction: every row, or at the first bad one none of them, said by its line. Appears while a person has let this profile change rows; asked to approve, the person sees the file's row count, columns and first rows, and the import runs only the file they approved.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "description": "The data file, by its path inside the project folder the server was started in: .csv, .tsv, .json (an array of objects) or .jsonl, at most 32 MiB.",
+          "type": "string"
+        },
+        "format": {
+          "description": "csv, tsv, json or jsonl; the file's extension says when left out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mapping": {
+          "description": "A file column into a table column, as `source=target`; `source=` leaves it out. Each column goes to the table's column of its own name otherwise.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "description": "Unique id for this import. Retrying with the same id and the same file returns the first result instead of importing twice.",
+          "type": "string"
+        },
+        "target": {
+          "description": "The table the rows go into, such as `public.customers`; it must be one the profile sees.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "target",
+        "file"
+      ],
+      "type": "object"
+    },
+    "name": "data_import"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": false
+    },
     "description": "Insert one row. Appears while a person has let this profile change rows on a connection; each call waits for their approval on Dexo's Agents screen, unless they let it run without asking.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -173,6 +173,10 @@ pub fn answer(
 
 /// The SQL a call carries, or its arguments in one line when it carries none.
 fn statement_of(arguments: &serde_json::Map<String, serde_json::Value>) -> String {
+    // An import shows what it read of its file, not the file.
+    if let Some(summary) = arguments.get("summary").and_then(serde_json::Value::as_str) {
+        return summary.to_string();
+    }
     if let Some(sql) = arguments.get("sql").and_then(serde_json::Value::as_str) {
         // A script read from a file says which, above what it read.
         return match arguments.get("file").and_then(serde_json::Value::as_str) {

@@ -62,6 +62,22 @@ pub struct DataDeleteInput {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DataImportInput {
+    /// Connection name from `list_connections`; optional when the profile has exactly one.
+    pub connection: Option<String>,
+    /// Unique id for this import. Retrying with the same id and the same file returns the first result instead of importing twice.
+    pub operation_id: String,
+    /// The table the rows go into, such as `public.customers`; it must be one the profile sees.
+    pub target: String,
+    /// The data file, by its path inside the project folder the server was started in: .csv, .tsv, .json (an array of objects) or .jsonl, at most 32 MiB.
+    pub file: String,
+    /// csv, tsv, json or jsonl; the file's extension says when left out.
+    pub format: Option<String>,
+    /// A file column into a table column, as `source=target`; `source=` leaves it out. Each column goes to the table's column of its own name otherwise.
+    pub mapping: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DataSqlInput {
     /// Connection name from `list_connections`; optional when the profile has exactly one.
     pub connection: Option<String>,

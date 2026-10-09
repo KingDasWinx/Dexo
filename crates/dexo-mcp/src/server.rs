@@ -245,7 +245,8 @@ impl ServerHandler for DexoMcpServer {
              screen -- refused when they deny it or do not answer in time -- unless they let \
              that kind of write run without asking. Say what you are about to change either way. \
              data_execute_sql runs a whole script as one transaction, given as sql or as file: a \
-             .sql file in the project folder.",
+             .sql file in the project folder; data_import loads a CSV or JSON file from there \
+             into a table.",
             profile.name, profile.limits.max_rows, profile.limits.max_bytes
         ))
     }

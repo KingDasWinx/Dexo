@@ -22,7 +22,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::render::text_result;
 use crate::schema::{
-    AdminActionInput, DataDeleteInput, DataInsertInput, DataSqlInput, DataUpdateInput, DdlInput,
+    AdminActionInput, DataDeleteInput, DataImportInput, DataInsertInput, DataSqlInput,
+    DataUpdateInput, DdlInput,
 };
 use crate::server::DexoMcpServer;
 use crate::tools_read::finish;
@@ -39,9 +40,13 @@ impl DexoMcpServer {
             .ok()
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
-        if name == "data_execute_sql"
-            && let Err(error) = take_script_file(&mut arguments)
-        {
+        let read = match name {
+            "data_execute_sql" => take_script_file(&mut arguments),
+            "data_import" => dexo_app::mcp::clients::Places::discover()
+                .and_then(|places| take_import_file(&mut arguments, &places)),
+            _ => Ok(()),
+        };
+        if let Err(error) = read {
             return crate::error::app_error(&error);
         }
         // A write waits for a person first, before the connection is taken: the session
@@ -353,8 +358,9 @@ fn confirmed(name: &str, arguments: &Map<String, Value>) -> Result<(), AppError>
 /// The most a script file may hold.
 const MAX_SCRIPT_FILE_BYTES: u64 = 1024 * 1024;
 
-/// A script given as `file` becomes its `sql`, read once: what the person approves, and
-/// what an operation id is held to, is what runs, not the file as it is by then.
+/// The most a data file to import may hold.
+const MAX_IMPORT_FILE_BYTES: u64 = 32 * 1024 * 1024;
+
 /// Why a write may run: a person approved its request, or its write access lets its
 /// operations run without asking.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -363,6 +369,8 @@ pub enum Clearance {
     Bypassed,
 }
 
+/// A script given as `file` becomes its `sql`, read once: what the person approves, and
+/// what an operation id is held to, is what runs, not the file as it is by then.
 fn take_script_file(arguments: &mut Map<String, Value>) -> Result<(), AppError> {
     let invalid = |why: &str| AppError::new(ErrorCategory::Configuration, why);
     let sql = arguments.get("sql").and_then(Value::as_str);
@@ -382,18 +390,65 @@ fn take_script_file(arguments: &mut Map<String, Value>) -> Result<(), AppError> 
     }
 }
 
-/// A `.sql` file inside the folder the server was started in -- the project an agent
-/// works in -- so the errors a script's parse reports are no way to read the rest of the
-/// disk. A server started in `/` or the home folder has no project folder to read from.
+/// A `.sql` file inside the project folder, as text.
 fn read_script(
     project: &std::path::Path,
     home: &std::path::Path,
     file: &str,
 ) -> Result<String, AppError> {
+    let bytes = read_project_file(project, home, file, &["sql"], MAX_SCRIPT_FILE_BYTES)?;
+    String::from_utf8(bytes).map_err(|_| {
+        AppError::new(
+            ErrorCategory::Configuration,
+            format!("{file} is not UTF-8 text"),
+        )
+    })
+}
+
+/// The format a data file is read as: `format` when given, else its extension's.
+fn import_format(
+    file: &str,
+    format: Option<&str>,
+) -> Result<dexo_app::transfer::TransferFormat, AppError> {
+    use dexo_app::transfer::TransferFormat;
+    let named = format.map(str::to_ascii_lowercase).or_else(|| {
+        std::path::Path::new(file)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+    });
+    match named.as_deref() {
+        Some("csv") => Ok(TransferFormat::Csv),
+        Some("tsv") => Ok(TransferFormat::Tsv),
+        Some("json") => Ok(TransferFormat::Json),
+        Some("jsonl" | "ndjson") => Ok(TransferFormat::Jsonl),
+        _ => Err(AppError::new(
+            ErrorCategory::Configuration,
+            format!("{file}: name its format -- csv, tsv, json or jsonl"),
+        )),
+    }
+}
+
+/// A file named `file` inside the folder the server was started in -- the project an
+/// agent works in -- of one of `extensions`, at most `max` bytes, so what a file's errors
+/// report is no way to read the rest of the disk. A server started in `/` or the home
+/// folder has no project folder to read from.
+fn read_project_file(
+    project: &std::path::Path,
+    home: &std::path::Path,
+    file: &str,
+    extensions: &[&str],
+    max: u64,
+) -> Result<Vec<u8>, AppError> {
     let invalid = |why: String| AppError::new(ErrorCategory::Configuration, why);
+    let kinds = extensions
+        .iter()
+        .map(|extension| format!(".{extension}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     let refused = || {
         invalid(format!(
-            "{file} is not a .sql file in the project folder {}",
+            "{file} is not a {kinds} file in the project folder {}",
             project.display()
         ))
     };
@@ -406,22 +461,141 @@ fn read_script(
     }
     // Resolved first, links and `..` included, so the checks are on the file that is read.
     let real = std::fs::canonicalize(root.join(file)).map_err(|_| refused())?;
-    let is_sql = real
+    let allowed = real
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("sql"));
-    if !real.starts_with(&root) || !is_sql || !real.is_file() {
+        .is_some_and(|extension| {
+            extensions
+                .iter()
+                .any(|allowed| extension.eq_ignore_ascii_case(allowed))
+        });
+    if !real.starts_with(&root) || !allowed || !real.is_file() {
         return Err(refused());
     }
     let size = std::fs::metadata(&real).map_err(|_| refused())?.len();
-    if size > MAX_SCRIPT_FILE_BYTES {
+    if size > max {
         return Err(invalid(format!(
-            "{file} holds {size} bytes; a script file holds 1 MiB at most"
+            "{file} holds {size} bytes; it may hold {} at most",
+            if max >= 1024 * 1024 {
+                format!("{} MiB", max / (1024 * 1024))
+            } else {
+                format!("{max} bytes")
+            }
         )));
     }
-    let bytes = std::fs::read(&real)
-        .map_err(|error| AppError::new(ErrorCategory::Storage, format!("{file}: {error}")))?;
-    String::from_utf8(bytes).map_err(|_| invalid(format!("{file} is not UTF-8 text")))
+    std::fs::read(&real)
+        .map_err(|error| AppError::new(ErrorCategory::Storage, format!("{file}: {error}")))
+}
+
+/// The file an import names, read once to be shown and approved: its hash, its rows'
+/// count and columns, and a summary for the person deciding. Run, it is read again, and
+/// refused if it is not the file that was approved.
+fn take_import_file(
+    arguments: &mut Map<String, Value>,
+    places: &dexo_app::mcp::clients::Places,
+) -> Result<(), AppError> {
+    let file = arguments
+        .get("file")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let target = arguments
+        .get("target")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let format = import_format(&file, arguments.get("format").and_then(Value::as_str))?;
+    let bytes = read_project_file(
+        &places.project,
+        &places.home,
+        &file,
+        &["csv", "tsv", "json", "jsonl", "ndjson"],
+        MAX_IMPORT_FILE_BYTES,
+    )?;
+    let decoded = dexo_app::transfer::decode_bytes(&bytes, format)
+        .map_err(|error| AppError::new(ErrorCategory::Configuration, format!("{file}: {error}")))?;
+    let preview: Vec<String> = decoded
+        .rows
+        .iter()
+        .take(3)
+        .map(|(_, values)| {
+            values
+                .iter()
+                .map(dexo_app::data::display_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .collect();
+    let summary = format!(
+        "-- import {file} into {target}: {} rows, as {}\n-- columns: {}\n{}",
+        decoded.rows.len(),
+        format.name(),
+        decoded.columns.join(", "),
+        preview
+            .iter()
+            .map(|row| format!("-- {row}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    arguments.insert(
+        "sha256".into(),
+        Value::String(dexo_app::mcp::operation::content_hash(&bytes)),
+    );
+    arguments.insert("rows".into(), Value::from(decoded.rows.len()));
+    arguments.insert("summary".into(), Value::String(summary));
+    Ok(())
+}
+
+/// The file an approved import named, read again: refused when it is not the one the
+/// person approved.
+fn approved_import(
+    arguments: &Value,
+    places: &dexo_app::mcp::clients::Places,
+) -> Result<
+    (
+        dexo_app::transfer::DecodedFile,
+        Vec<dexo_app::transfer::ColumnMapping>,
+    ),
+    AppError,
+> {
+    let invalid = |why: String| AppError::new(ErrorCategory::Configuration, why);
+    let file = arguments
+        .get("file")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let format = import_format(file, arguments.get("format").and_then(Value::as_str))?;
+    let bytes = read_project_file(
+        &places.project,
+        &places.home,
+        file,
+        &["csv", "tsv", "json", "jsonl", "ndjson"],
+        MAX_IMPORT_FILE_BYTES,
+    )?;
+    if arguments.get("sha256").and_then(Value::as_str)
+        != Some(dexo_app::mcp::operation::content_hash(&bytes).as_str())
+    {
+        return Err(AppError::new(
+            ErrorCategory::Conflict,
+            format!(
+                "{file} changed after it was approved; call again to have it approved as it is"
+            ),
+        ));
+    }
+    let decoded = dexo_app::transfer::decode_bytes(&bytes, format)
+        .map_err(|error| invalid(format!("{file}: {error}")))?;
+    let mapping: Vec<String> = arguments
+        .get("mapping")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mapping = dexo_app::transfer::parse_mapping(&mapping).map_err(invalid)?;
+    Ok((decoded, mapping))
 }
 
 /// What the audit names a write by: its `target`, or for a script that gave none, the
@@ -489,6 +663,17 @@ impl DexoMcpServer {
         cancel: CancellationToken,
     ) -> CallToolResult {
         self.write("data_insert", input.connection.clone(), &input, cancel)
+            .await
+    }
+
+    /// Load a CSV, TSV, JSON or JSON Lines file from the project folder into one table, as one transaction: every row, or at the first bad one none of them, said by its line. Appears while a person has let this profile change rows; asked to approve, the person sees the file's row count, columns and first rows, and the import runs only the file they approved.
+    #[tool(annotations(read_only_hint = false, destructive_hint = false))]
+    async fn data_import(
+        &self,
+        Parameters(input): Parameters<DataImportInput>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        self.write("data_import", input.connection.clone(), &input, cancel)
             .await
     }
 
@@ -872,6 +1057,27 @@ async fn execute(
                             .join(", ")
                     ),
                 },
+            ))
+        }
+        "data_import" => {
+            if cancelled() {
+                return Ok((SideEffect::RolledBack, "rolled_back".into()));
+            }
+            let places = dexo_app::mcp::clients::Places::discover()?;
+            let (file, mapping) = approved_import(value, &places)?;
+            let target = value
+                .get("target")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let rows = service
+                .import_file(session, connection, target, file, &mapping)
+                .await?;
+            Ok((
+                SideEffect::Committed,
+                format!(
+                    "{rows} row{} imported into {target}, in one transaction",
+                    if rows == 1 { "" } else { "s" }
+                ),
             ))
         }
         "schema_apply_ddl" => apply_ddl(value, session, connection, cancelled()).await,
@@ -1597,6 +1803,57 @@ mod tests {
                 "{arguments:?}"
             );
         }
+    }
+
+    /// An import reads its file from the project folder once, shows the person what it
+    /// holds, and runs only that file: one changed after the approval is refused.
+    #[test]
+    fn an_import_runs_only_the_file_that_was_approved() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("shop");
+        std::fs::create_dir_all(project.join("data")).unwrap();
+        let csv = project.join("data/customers.csv");
+        std::fs::write(&csv, "id,email\n1,ana@x.io\n2,bo@x.io\n").unwrap();
+        let places = dexo_app::mcp::clients::Places {
+            project: project.clone(),
+            home: home.path().to_path_buf(),
+            config: home.path().join(".config"),
+        };
+        let mut arguments =
+            json!({"operation_id": "i-1", "target": "customers", "file": "data/customers.csv"})
+                .as_object()
+                .cloned()
+                .unwrap();
+        super::take_import_file(&mut arguments, &places).unwrap();
+        assert_eq!(arguments["rows"], json!(2));
+        let summary = arguments["summary"].as_str().unwrap();
+        assert!(
+            summary.starts_with("-- import data/customers.csv into customers: 2 rows, as CSV"),
+            "{summary}"
+        );
+        assert!(summary.contains("-- columns: id, email") && summary.contains("-- 1, ana@x.io"));
+        let value = serde_json::Value::Object(arguments.clone());
+        let (file, mapping) = super::approved_import(&value, &places).unwrap();
+        assert_eq!(file.columns, ["id", "email"]);
+        assert_eq!(file.rows.len(), 2);
+        assert!(mapping.is_empty());
+        std::fs::write(&csv, "id,email\n1,ana@x.io\n2,eve@x.io\n").unwrap();
+        let error = super::approved_import(&value, &places).unwrap_err();
+        assert!(
+            error.to_string().contains("changed after it was approved"),
+            "{error}"
+        );
+        // Only a data file of the project folder.
+        let mut outside = json!({"target": "t", "file": "../secret.csv"})
+            .as_object()
+            .cloned()
+            .unwrap();
+        assert!(super::take_import_file(&mut outside, &places).is_err());
+        let mut script = json!({"target": "t", "file": "seed.sql"})
+            .as_object()
+            .cloned()
+            .unwrap();
+        assert!(super::take_import_file(&mut script, &places).is_err());
     }
 
     /// A seed is one call: every statement in one transaction, committed once.

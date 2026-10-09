@@ -148,7 +148,7 @@ pub fn operations_of(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
     let mut operations = match tool {
-        "data_insert" => vec![Operation::Insert],
+        "data_insert" | "data_import" => vec![Operation::Insert],
         "data_update" => vec![Operation::Update],
         "data_delete" => vec![Operation::Delete],
         "admin_cancel_query" | "admin_terminate_session" => vec![Operation::Sessions],

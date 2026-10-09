@@ -149,6 +149,95 @@ pub async fn import_file(
     }
 }
 
+/// A file read whole: its columns, and each row with the line it starts on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DecodedFile {
+    pub columns: Vec<String>,
+    pub rows: Vec<(usize, Vec<DbValue>)>,
+}
+
+/// `bytes` read as `format`, all of it: for an import that is approved whole, then run.
+pub fn decode_bytes(bytes: &[u8], format: TransferFormat) -> Result<DecodedFile, String> {
+    let mut file = DecodedFile::default();
+    decode_stream(
+        format,
+        &FormatOptions::default(),
+        &mut || -> std::io::Result<Box<dyn Read>> {
+            Ok(Box::new(std::io::Cursor::new(bytes.to_vec())))
+        },
+        BATCH,
+        &mut |decoded| {
+            match decoded {
+                Decoded::Columns(columns) => file.columns = columns,
+                Decoded::Rows(rows) => file.rows.extend(rows),
+            }
+            true
+        },
+    )
+    .map_err(|error| {
+        format!(
+            "it could not be read as {}: {error}. Choose the format that matches the file",
+            format.name()
+        )
+    })?;
+    Ok(file)
+}
+
+/// `file` into `target` inside the transaction the caller holds, its columns fitted to
+/// the table: every row, or at the first bad one an error naming its line -- and the
+/// caller's rollback undoes the batches before it. Nothing is skipped or set aside.
+pub async fn insert_decoded(
+    writer: &dyn BulkWriter,
+    catalog: Option<&dyn CatalogReader>,
+    target: &QualifiedName,
+    file: DecodedFile,
+    mapping: &[ColumnMapping],
+) -> Result<u64, crate::AppError> {
+    let invalid =
+        |message: String| crate::AppError::new(crate::ErrorCategory::Configuration, message);
+    let (columns, sources) = map_columns(&file.columns, mapping).map_err(invalid)?;
+    let table = target.display_unquoted();
+    let (columns, blank_is_null) = match catalog {
+        Some(catalog) => fit_columns(
+            &table,
+            &columns,
+            &target_columns(catalog, &table).await.map_err(invalid)?,
+        )
+        .map_err(invalid)?,
+        None => {
+            let keep = vec![false; columns.len()];
+            (columns, keep)
+        }
+    };
+    let rows: Vec<(usize, Vec<DbValue>, Vec<String>)> = file
+        .rows
+        .into_iter()
+        .map(|(line, values)| {
+            let mut values: Vec<DbValue> = sources
+                .iter()
+                .map(|&source| values.get(source).cloned().unwrap_or(DbValue::Null))
+                .collect();
+            blank_to_null(&mut values, &blank_is_null);
+            (line, values, Vec::new())
+        })
+        .collect();
+    let mut written = 0;
+    for chunk in rows.chunks(BATCH) {
+        let batch: Vec<Vec<DbValue>> = chunk.iter().map(|(_, values, _)| values.clone()).collect();
+        written += writer
+            .insert_in_transaction(target, &columns, &batch)
+            .await
+            .map_err(|error| {
+                let message = describe_failure(chunk, &error);
+                crate::AppError::new(
+                    crate::query_service::map_driver_error(error).category(),
+                    message,
+                )
+            })?;
+    }
+    Ok(written)
+}
+
 /// The reader's next batch, None at the end; a cancel is seen while it reads.
 async fn next(
     rx: &mut Receiver<Result<Decoded, String>>,
@@ -468,6 +557,56 @@ mod tests {
 
     fn table() -> QualifiedName {
         QualifiedName::new(None::<String>, None::<String>, "t")
+    }
+
+    /// Writes inside the caller's transaction only, and refuses `BAD` as FakeWriter does.
+    #[derive(Default)]
+    struct InTransaction {
+        rows: std::sync::Mutex<usize>,
+    }
+
+    #[async_trait::async_trait]
+    impl BulkWriter for InTransaction {
+        async fn insert_batch(
+            &self,
+            _table: &QualifiedName,
+            _columns: &[String],
+            _rows: &[Vec<DbValue>],
+        ) -> Result<u64, DriverError> {
+            panic!("an approved import never commits a batch on its own");
+        }
+
+        async fn insert_in_transaction(
+            &self,
+            table: &QualifiedName,
+            columns: &[String],
+            rows: &[Vec<DbValue>],
+        ) -> Result<u64, DriverError> {
+            let written = FakeWriter.insert_batch(table, columns, rows).await?;
+            *self.rows.lock().unwrap() += rows.len();
+            Ok(written)
+        }
+    }
+
+    /// A file approved whole goes in inside the caller's transaction, renamed as asked;
+    /// a bad row stops it, said by its line.
+    #[tokio::test]
+    async fn an_approved_file_goes_in_inside_the_callers_transaction() {
+        use super::{decode_bytes, insert_decoded};
+        let file = decode_bytes(b"qty,note\n1,a\n2,b\n", TransferFormat::Csv).unwrap();
+        assert_eq!(file.columns, ["qty", "note"]);
+        let writer = InTransaction::default();
+        let mapping = crate::transfer::parse_mapping(&["note=".into()]).unwrap();
+        let written = insert_decoded(&writer, None, &table(), file, &mapping)
+            .await
+            .unwrap();
+        assert_eq!(written, 2);
+        let bad = decode_bytes(b"qty\n1\nBAD\n3\n", TransferFormat::Csv).unwrap();
+        let error = insert_decoded(&InTransaction::default(), None, &table(), bad, &[])
+            .await
+            .unwrap_err();
+        assert!(error.to_string().starts_with("Line 3:"), "{error}");
+        assert!(decode_bytes(b"[1, 2", TransferFormat::Json).is_err());
     }
 
     fn rows() -> Vec<(usize, Vec<DbValue>, Vec<String>)> {

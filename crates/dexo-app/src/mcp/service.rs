@@ -135,6 +135,67 @@ impl McpService {
         Ok(affected)
     }
 
+    /// A file's rows into the table `target` names, as one transaction: every row, or at
+    /// the first bad one none of them, said by its line. The table is held to the profile
+    /// like any write's.
+    pub async fn import_file(
+        &self,
+        session: &dyn Session,
+        connection: &McpConnection,
+        target: &str,
+        file: crate::transfer::DecodedFile,
+        mapping: &[crate::transfer::ColumnMapping],
+    ) -> Result<u64, AppError> {
+        let reference = connection.qualify(&ObjectRef::parse(target).path);
+        if self.policy().decide(&reference) != Decision::Allow {
+            return Err(hidden());
+        }
+        let writer = session.bulk().ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Capability,
+                "this connection cannot import files",
+            )
+        })?;
+        let transactions = session.transactions().ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Capability,
+                "this connection cannot import a file as one transaction",
+            )
+        })?;
+        transactions
+            .begin(TransactionMode::ReadWrite)
+            .await
+            .map_err(map_driver_error)?;
+        // Postgres names a table by its schema: the database is the session's, and a name
+        // that spells it out is one the catalog does not find.
+        let mut table = connection.qualified_name(&reference);
+        if connection.dialect == dexo_sql::Dialect::Postgres {
+            table = dexo_driver_api::QualifiedName::new(
+                None::<String>,
+                table.schema().map(str::to_string),
+                table.object(),
+            );
+        }
+        let written =
+            crate::transfer::insert_decoded(writer, session.catalog(), &table, file, mapping).await;
+        match written {
+            Ok(rows) => {
+                transactions.commit().await.map_err(map_driver_error)?;
+                Ok(rows)
+            }
+            Err(error) => {
+                let _ = transactions.rollback().await;
+                Err(AppError::new(
+                    error.category(),
+                    format!(
+                        "{}; nothing was written",
+                        error.to_string().trim_end_matches('.')
+                    ),
+                ))
+            }
+        }
+    }
+
     /// One statement, to completion: the old adapter dropped the stream unread, so a
     /// constraint violation was reported as "sql applied".
     async fn run_write(&self, session: &dyn Session, sql: &str) -> Result<u64, AppError> {

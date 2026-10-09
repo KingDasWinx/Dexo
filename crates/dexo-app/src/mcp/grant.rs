@@ -8,6 +8,7 @@ use crate::mcp::selector::ObjectRef;
 
 pub const WRITE_TOOLS: &[&str] = &[
     "data_insert",
+    "data_import",
     "data_update",
     "data_delete",
     "data_execute_sql",
@@ -57,6 +58,7 @@ impl WriteKind {
         match self {
             Self::Rows => &[
                 "data_insert",
+                "data_import",
                 "data_update",
                 "data_delete",
                 "data_execute_sql",

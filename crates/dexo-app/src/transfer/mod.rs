@@ -13,8 +13,8 @@ pub use codec::{
 pub use detect::{Detection, detect};
 pub use export::{ExportError, ExportProgress, RecordingSink, export_row_batches, export_rows};
 pub use import::{
-    ErrorStrategy, ImportReport, ImportRequest, ImportSource, TargetColumn, import_file,
-    import_rows, target_columns,
+    DecodedFile, ErrorStrategy, ImportReport, ImportRequest, ImportSource, TargetColumn,
+    decode_bytes, import_file, import_rows, insert_decoded, target_columns,
 };
 pub use map::{ColumnMapping, map_columns, parse_mapping};
 pub use native_tool::{

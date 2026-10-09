@@ -37,6 +37,11 @@ pub fn payload_hash(value: &serde_json::Value) -> String {
     format!("{digest:x}")
 }
 
+/// The SHA-256 of `bytes`, in hex: a file as it was when it was approved.
+pub fn content_hash(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 pub fn replay_or_conflict(
     existing: &OperationRecord,
     payload_hash: &str,

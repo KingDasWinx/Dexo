@@ -750,6 +750,9 @@ the decision; ask the person instead.
 - Pass `file` instead of `sql` to run a `.sql` file from the project folder, the folder
   the server was started in, up to 1 MiB. It is read once: what the person approves is
   what runs. Prefer it to copying the file's statements into `sql`.
+- `data_import` loads a CSV, TSV, JSON or JSON Lines file from the project folder into one
+  table, as one transaction. The person approves it seeing its row count, columns and
+  first rows; `mapping` renames or leaves out the file's columns.
 - No write tool listed means no write access: ask the person to give it on Dexo's Agents
   screen, Profiles, `w`, rather than looking for another way to write.
 "
