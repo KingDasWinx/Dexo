@@ -19,8 +19,8 @@ cargo run -p dexo-tui --example agents_styles    # n, Enter, w and a open the fo
 │                   ┌──────────────────────────────────────────┐     │
 │   Connection      │ pg-dev        development ✎ has writes ▼ │     │
 │                   └──────────────────────────────────────────┘     │
-│                    pg-prod is not offered: production never takes  │
-│                    agents' writes                                  │
+│                    pg-ro is not offered: its policy keeps it        │
+│                    read-only                                       │
 │                    covers everything assistant sees there          │
 │ WHAT                                                               │
 │ › May              [x] change rows         [x] change schema       │

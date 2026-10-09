@@ -158,7 +158,7 @@ dexo mcp profile enable --name assistant --confirm
 dexo mcp setup --client claude-code --profile assistant   # or codex, cursor, claude-desktop, gemini-cli, windsurf, vscode
 ```
 
-The agent reads only what the profile allows. To let it write, give it write access to a connection for a while (`w` on Agents' Profiles, or `dexo mcp grant create`); each write then waits for your approval on the Agents screen (<kbd>Ctrl</kbd>+<kbd>G</kbd> <kbd>a</kbd>). See the [MCP guide](docs/src/mcp.md).
+The agent reads only what the profile allows. To let it write, give it write access to a connection for a while (`w` on Agents' Profiles, or `dexo mcp grant create`); each write then waits for your approval on the Agents screen (<kbd>Ctrl</kbd>+<kbd>G</kbd> <kbd>a</kbd>), unless you let inserts, say, run without asking. See the [MCP guide](docs/src/mcp.md).
 
 ## Compatibility
 
