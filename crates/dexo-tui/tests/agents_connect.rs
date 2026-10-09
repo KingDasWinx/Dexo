@@ -44,6 +44,7 @@ fn row(client: McpClient, state: ClientState) -> ClientRow {
         client,
         path: format!("/home/u/{}.json", client.id()),
         skill: (client == McpClient::ClaudeCode).then(|| "/p/.claude/skills/dexo/SKILL.md".into()),
+        skill_state: Default::default(),
         state,
         found: client == McpClient::ClaudeCode,
     }
@@ -273,4 +274,58 @@ fn the_first_visit_opens_on_profiles() {
         },
     );
     assert_eq!(model.agents_view, AgentsView::Profiles);
+}
+
+/// A skill file older than what Dexo writes now says so on the agent's row, and u writes
+/// it again for the profile as it is.
+#[test]
+fn an_outdated_skill_is_said_and_u_writes_it_again() {
+    use dexo_app::mcp::clients::SkillState;
+    let mut model = agents(vec![assistant()]);
+    let mut claude = row(
+        McpClient::ClaudeCode,
+        ClientState::SetUp {
+            command: "/usr/bin/dexo".into(),
+            profile: Some("assistant".into()),
+        },
+    );
+    claude.skill_state = SkillState::Outdated;
+    update(
+        &mut model,
+        Action::McpClientsLoaded {
+            clients: vec![claude],
+            command: "/usr/bin/dexo".into(),
+            project: "/p".into(),
+        },
+    );
+    press(&mut model, KeyCode::Tab);
+    let mut effects = Vec::new();
+    for _ in 0..6 {
+        effects = press(&mut model, KeyCode::Char('u'));
+        if !effects.is_empty() {
+            break;
+        }
+        press(&mut model, KeyCode::Down);
+    }
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::RefreshMcpSkill { client: McpClient::ClaudeCode, profile }] if profile == "assistant"
+        ),
+        "{effects:?}"
+    );
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 40)).unwrap();
+    let mut hits = dexo_tui::mouse::HitMap::default();
+    terminal
+        .draw(|frame| dexo_tui::render::render(frame, &model, &mut hits))
+        .unwrap();
+    let shown: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(shown.contains("skill outdated"), "the row says it");
+    assert!(shown.contains("u update its skill"), "the hints say how");
 }

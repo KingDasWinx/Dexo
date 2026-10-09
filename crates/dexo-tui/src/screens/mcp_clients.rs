@@ -12,6 +12,8 @@ pub struct ClientRow {
     pub path: String,
     /// Where its skill goes, when it has a place for one.
     pub skill: Option<String>,
+    /// Its skill file against what Dexo would write for the profile it starts.
+    pub skill_state: dexo_app::mcp::clients::SkillState,
     pub state: ClientState,
     /// The agent is on this machine: its command on PATH, or its config's folder there.
     pub found: bool,

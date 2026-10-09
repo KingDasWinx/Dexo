@@ -1147,6 +1147,11 @@ pub enum Effect {
     },
     /// Reads each agent's config for Dexo's entry.
     LoadMcpClients,
+    /// Writes an agent's skill file again, for `profile` as it is now.
+    RefreshMcpSkill {
+        client: dexo_app::mcp::clients::McpClient,
+        profile: String,
+    },
     /// Writes an agent's config to start Dexo with `profile`, enabling it.
     ConnectMcpAgent {
         client: dexo_app::mcp::clients::McpClient,

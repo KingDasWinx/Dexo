@@ -1874,6 +1874,14 @@ fn mcp_doctor(name: Option<&str>, json: bool, probe: bool) -> anyhow::Result<()>
                 ),
             }
         }
+        for (client, path) in outdated_skills(profile) {
+            println!(
+                "  skill outdated: {} -- dexo mcp setup --client {} --profile {} --skill writes it again",
+                path.display(),
+                client.id(),
+                profile.name
+            );
+        }
     }
     let Some(probed) = probed else {
         return Ok(());
@@ -1900,10 +1908,15 @@ fn mcp_doctor(name: Option<&str>, json: bool, probe: bool) -> anyhow::Result<()>
     }
     for client in probed["clients"].as_array().into_iter().flatten() {
         println!(
-            "client {}: {} ({})",
+            "client {}: {} ({}){}",
             client["client"].as_str().unwrap_or(""),
             client["path"].as_str().unwrap_or(""),
-            client["detail"].as_str().unwrap_or("")
+            client["detail"].as_str().unwrap_or(""),
+            match client["skill"].as_str() {
+                Some("outdated") => ", skill outdated",
+                Some("current") => ", skill current",
+                _ => "",
+            }
         );
     }
     Ok(())
@@ -1957,8 +1970,17 @@ fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Re
                 backup.display()
             ),
         }
-        if let Some(skill_path) = &done.skill {
-            println!("wrote {}", skill_path.display());
+        match &done.skill {
+            Some((path, Written::Unchanged)) => {
+                println!("skill already current: {}", path.display())
+            }
+            Some((path, Written::Created)) => println!("wrote {}", path.display()),
+            Some((path, Written::Replaced(backup))) => println!(
+                "wrote {} (the old one is {})",
+                path.display(),
+                backup.display()
+            ),
+            None => {}
         }
     }
     if skill && skill_file.is_none() {
@@ -1980,6 +2002,28 @@ fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Re
 
 /// `dexo mcp doctor --probe`: each enabled profile's server started and asked for its
 /// tools the way an agent would, then every client's config checked for Dexo.
+/// The skill files of the clients set up for `profile` that say something else than Dexo
+/// would write for it now: an older Dexo wrote them, or the profile changed since.
+fn outdated_skills(
+    profile: &McpProfile,
+) -> Vec<(dexo_app::mcp::clients::McpClient, std::path::PathBuf)> {
+    use dexo_app::mcp::clients::{ClientState, McpClient, Places, SkillState};
+    let Ok(places) = Places::discover() else {
+        return Vec::new();
+    };
+    McpClient::ALL
+        .into_iter()
+        .filter(|client| {
+            matches!(
+                client.state(&places),
+                ClientState::SetUp { profile: Some(name), .. } if name == profile.name
+            )
+        })
+        .filter(|client| client.skill_state(&places, profile) == SkillState::Outdated)
+        .filter_map(|client| client.skill_path(&places).map(|path| (client, path)))
+        .collect()
+}
+
 fn mcp_probe(name: Option<&str>) -> anyhow::Result<serde_json::Value> {
     use dexo_app::mcp::clients::{McpClient, Places, read_config, resolve_command};
     let paths = AppPaths::discover()?;
@@ -2041,12 +2085,27 @@ fn mcp_probe(name: Option<&str>) -> anyhow::Result<serde_json::Value> {
                     ),
                 },
             };
+            // Its skill file, against what Dexo would write for the profile it starts.
+            let skill = match client.state(&places) {
+                dexo_app::mcp::clients::ClientState::SetUp {
+                    profile: Some(name),
+                    ..
+                } => repo.get_by_name(&name).ok().flatten().map(|profile| {
+                    match client.skill_state(&places, &profile) {
+                        dexo_app::mcp::clients::SkillState::Absent => "absent",
+                        dexo_app::mcp::clients::SkillState::Current => "current",
+                        dexo_app::mcp::clients::SkillState::Outdated => "outdated",
+                    }
+                }),
+                _ => None,
+            };
             serde_json::json!({
                 "client": client.id(),
                 "path": path.display().to_string(),
                 "status": status,
                 "command": command,
                 "detail": detail,
+                "skill": skill,
             })
         })
         .collect();

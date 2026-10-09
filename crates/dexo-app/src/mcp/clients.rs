@@ -39,7 +39,21 @@ pub enum ClientState {
 pub struct SetUp {
     pub config: PathBuf,
     pub written: Written,
-    pub skill: Option<PathBuf>,
+    /// The skill file, and what writing it came to.
+    pub skill: Option<(PathBuf, Written)>,
+}
+
+/// A client's skill file against the text Dexo writes for its profile now: the text
+/// changes with Dexo and with the profile -- its tools, its reads -- and the file does not.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SkillState {
+    /// No skill file: the client has no place for one, or none was written.
+    #[default]
+    Absent,
+    Current,
+    /// It says something else: written by an older Dexo, for the profile as it was, or
+    /// edited by hand.
+    Outdated,
 }
 
 /// What writing a file came to.
@@ -230,10 +244,7 @@ impl McpClient {
             .map_err(in_file)?;
         let written = write_with_backup(&config, &merged).map_err(in_file)?;
         let skill = match skill.then(|| self.skill_path(places)).flatten() {
-            Some(path) => {
-                write_with_backup(&path, &skill_text(self, profile))?;
-                Some(path)
-            }
+            Some(path) => Some((path, self.refresh_skill(places, profile)?)),
             None => None,
         };
         Ok(SetUp {
@@ -268,6 +279,31 @@ impl McpClient {
             Self::Cursor => Some(places.project.join(".cursor/rules/dexo.mdc")),
             Self::ClaudeDesktop | Self::GeminiCli | Self::Windsurf | Self::VsCode => None,
         }
+    }
+
+    /// Its skill file, against what Dexo would write for `profile`.
+    pub fn skill_state(self, places: &Places, profile: &McpProfile) -> SkillState {
+        let Some(path) = self.skill_path(places) else {
+            return SkillState::Absent;
+        };
+        match std::fs::read_to_string(&path) {
+            Err(_) => SkillState::Absent,
+            Ok(text) if text == skill_text(self, profile) => SkillState::Current,
+            Ok(_) => SkillState::Outdated,
+        }
+    }
+
+    /// Writes its skill file for `profile` again, the old one kept beside it.
+    pub fn refresh_skill(self, places: &Places, profile: &McpProfile) -> Result<Written, AppError> {
+        let path = self.skill_path(places).ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Capability,
+                format!("{} has no place for a skill file", self.name()),
+            )
+        })?;
+        write_with_backup(&path, &skill_text(self, profile)).map_err(|error| {
+            AppError::new(error.category(), format!("{}: {error}", path.display()))
+        })
     }
 
     /// `existing` with Dexo's server entry in it, every other key left as it was. A file
@@ -1056,6 +1092,35 @@ mod tests {
         );
     }
 
+    /// A skill file written for the profile as it was reads as outdated once the profile
+    /// changes, and writing it again makes it current, the old one kept.
+    #[test]
+    fn a_skill_file_is_outdated_once_its_text_would_change() {
+        use super::{Places, SkillState};
+        let dir = tempfile::tempdir().unwrap();
+        let places = Places {
+            project: dir.path().join("project"),
+            home: dir.path().join("home"),
+            config: dir.path().join("config"),
+        };
+        let mut profile = crate::mcp::McpProfile::new("agent");
+        let client = McpClient::ClaudeCode;
+        assert_eq!(client.skill_state(&places, &profile), SkillState::Absent);
+        client.refresh_skill(&places, &profile).unwrap();
+        assert_eq!(client.skill_state(&places, &profile), SkillState::Current);
+        profile.query_mode = crate::mcp::QueryMode::RawReadSql;
+        assert_eq!(client.skill_state(&places, &profile), SkillState::Outdated);
+        assert!(matches!(
+            client.refresh_skill(&places, &profile).unwrap(),
+            super::Written::Replaced(_)
+        ));
+        assert_eq!(client.skill_state(&places, &profile), SkillState::Current);
+        assert_eq!(
+            McpClient::Windsurf.skill_state(&places, &profile),
+            SkillState::Absent
+        );
+    }
+
     /// The skill names the tools the profile is offered: a structured-only one is not told
     /// to run SQL, and the snapshot diff is named.
     #[test]
@@ -1145,7 +1210,7 @@ mod tests {
             matches!(done.written, super::Written::Replaced(_)),
             "the old file is kept"
         );
-        assert!(done.skill.as_ref().is_some_and(|path| path.is_file()));
+        assert!(done.skill.as_ref().is_some_and(|(path, _)| path.is_file()));
         assert_eq!(
             McpClient::ClaudeCode.state(&places),
             ClientState::SetUp {

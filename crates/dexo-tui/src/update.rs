@@ -5885,6 +5885,15 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
                         }
                     }
                 }
+                // The walked agent's skill file, written again for the profile as it is.
+                KeyCode::Char('u') => match (walked, model.mcp_profiles.name()) {
+                    (Some(Row::Agent(client)), Some(profile)) => {
+                        return Some(vec![Effect::RefreshMcpSkill { client, profile }]);
+                    }
+                    _ => model
+                        .messages
+                        .info("Walk to the agent first: Tab, then u.".into()),
+                },
                 KeyCode::Char('y') => match (walked, model.mcp_profiles.name()) {
                     (Some(Row::Agent(agent)), Some(profile)) => {
                         return Some(copy_agent_command(model, agent, &profile));

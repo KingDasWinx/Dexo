@@ -761,7 +761,15 @@ fn sheet(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
     for agent in agents {
         let row = Row::Agent(agent.client);
-        let room = width.saturating_sub(3 + 2 + 16);
+        // A skill file that says something else than Dexo would write now is said, with
+        // the key that writes it again.
+        let outdated = agent.skill_state == dexo_app::mcp::clients::SkillState::Outdated;
+        let note = if outdated {
+            " · skill outdated: u"
+        } else {
+            ""
+        };
+        let room = width.saturating_sub(3 + 2 + 16 + note.chars().count());
         lines.push((
             place(row),
             walked(
@@ -772,6 +780,7 @@ fn sheet(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                         crate::widgets::document_tabs::cut_middle(&agent.path, room.max(8)),
                         style(Role::Muted),
                     ),
+                    Span::styled(note, style(Role::Warning)),
                 ],
                 current == Some(row),
                 width,
@@ -1526,6 +1535,14 @@ pub fn hints(model: &Model) -> String {
         AgentsView::Profiles => match walked_row(model) {
             Some(Row::Connection(_)) => {
                 "Up/Down walk  w writes  r revoke  Enter edit  Esc the list".into()
+            }
+            Some(Row::Agent(agent))
+                if model.mcp_clients.get(agent).is_some_and(|row| {
+                    row.skill_state == dexo_app::mcp::clients::SkillState::Outdated
+                }) =>
+            {
+                "Up/Down walk  u update its skill  a set up again  y copy its command  Esc the list"
+                    .into()
             }
             Some(Row::Agent(_)) => {
                 "Up/Down walk  a set up again  y copy its command  Esc the list".into()

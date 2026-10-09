@@ -923,6 +923,14 @@ impl WorkbenchRuntime {
                     let _ = action_tx.blocking_send(mcp_clients());
                 });
             }
+            crate::Effect::RefreshMcpSkill { client, profile } => {
+                self.off_the_loop(move || {
+                    let message = match refresh_mcp_skill(client, &profile) {
+                        Ok(message) | Err(message) => message,
+                    };
+                    vec![Action::McpStatus { message }, mcp_clients()]
+                });
+            }
             crate::Effect::ConnectMcpAgent {
                 client,
                 profile,
@@ -3108,6 +3116,7 @@ fn mcp_clients() -> Action {
                         client,
                         path: client.id().into(),
                         skill: None,
+                        skill_state: Default::default(),
                         state: dexo_app::mcp::clients::ClientState::Unusable(error.to_string()),
                         found: false,
                     })
@@ -3117,16 +3126,41 @@ fn mcp_clients() -> Action {
             };
         }
     };
+    // Each skill file is held to the text for the profile its client starts, as it is now.
+    let profiles = AppPaths::discover()
+        .ok()
+        .and_then(|paths| Database::open(&paths.database).ok())
+        .and_then(|db| {
+            dexo_storage::McpProfileRepository::new(db.connection())
+                .list()
+                .ok()
+        })
+        .unwrap_or_default();
     let clients = McpClient::ALL
         .into_iter()
-        .map(|client| crate::screens::mcp_clients::ClientRow {
-            client,
-            path: home_relative(&client.config_path(&places), &places.home),
-            skill: client
-                .skill_path(&places)
-                .map(|path| home_relative(&path, &places.home)),
-            state: client.state(&places),
-            found: client.installed(&places),
+        .map(|client| {
+            let state = client.state(&places);
+            let skill_state = match &state {
+                dexo_app::mcp::clients::ClientState::SetUp {
+                    profile: Some(name),
+                    ..
+                } => profiles
+                    .iter()
+                    .find(|profile| &profile.name == name)
+                    .map(|profile| client.skill_state(&places, profile))
+                    .unwrap_or_default(),
+                _ => Default::default(),
+            };
+            crate::screens::mcp_clients::ClientRow {
+                client,
+                path: home_relative(&client.config_path(&places), &places.home),
+                skill: client
+                    .skill_path(&places)
+                    .map(|path| home_relative(&path, &places.home)),
+                skill_state,
+                state,
+                found: client.installed(&places),
+            }
         })
         .collect();
     Action::McpClientsLoaded {
@@ -3134,6 +3168,37 @@ fn mcp_clients() -> Action {
         command: dexo_command().unwrap_or_else(|_| "dexo".into()),
         project: home_relative(&places.project, &places.home),
     }
+}
+
+/// `client`'s skill file written again for `profile` as it is now, the old one kept.
+fn refresh_mcp_skill(
+    client: dexo_app::mcp::clients::McpClient,
+    profile: &str,
+) -> Result<String, String> {
+    use dexo_app::mcp::clients::{Places, Written};
+    let text = |error: dexo_app::AppError| error.to_string();
+    let places = Places::discover().map_err(text)?;
+    let paths = AppPaths::discover().map_err(|error| error.to_string())?;
+    let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
+    let profile = dexo_storage::McpProfileRepository::new(db.connection())
+        .get_by_name(profile)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("{profile} is not a profile any more"))?;
+    let path = client
+        .skill_path(&places)
+        .map(|path| home_relative(&path, &places.home))
+        .unwrap_or_default();
+    Ok(
+        match client.refresh_skill(&places, &profile).map_err(text)? {
+            Written::Unchanged => format!("{path} was already current."),
+            Written::Created => format!("✓ {path} written."),
+            Written::Replaced(backup) => format!(
+                "✓ {path} updated for {}; the old one is {}.",
+                profile.name,
+                home_relative(&backup, &places.home)
+            ),
+        },
+    )
 }
 
 /// A path as people read it: under the home folder, from `~`.
@@ -3288,8 +3353,12 @@ fn write_agent_config(
             shown(backup)
         ),
     }];
-    if let Some(skill) = &done.skill {
-        lines.push(format!("✓ {} written", shown(skill)));
+    match &done.skill {
+        Some((skill, dexo_app::mcp::clients::Written::Unchanged)) => {
+            lines.push(format!("✓ {} already current", shown(skill)));
+        }
+        Some((skill, _)) => lines.push(format!("✓ {} written", shown(skill))),
+        None => {}
     }
     lines.push(if client == McpClient::ClaudeCode {
         "→ restart Claude Code here, and approve the project's servers".to_string()
