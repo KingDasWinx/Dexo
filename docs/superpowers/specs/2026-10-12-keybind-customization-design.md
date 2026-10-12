@@ -76,8 +76,8 @@ the default profile it types an `r`.
 Both sides are keys, not commands. One character alone is taken as written, case kept:
 `"N" = "J"` and `"shift+n" = "shift+j"` are the same line. Anything longer is the chord
 syntax of the other sections (`ctrl+u`, `esc`, `space`). `""` on the right undoes a remap
-an earlier line, or the base, made. The section is read only with the Vim profile; with
-another it does nothing, and the docs say so.
+the base made (TOML refuses the same key twice in one table). The section is read only
+with the Vim profile; with another it does nothing, and the docs say so.
 
 ### Keymap
 
