@@ -6505,13 +6505,13 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     let revision = model.active_document().sql.revision();
     // Vim mode has the keys the keymap left, before the plain editor does.
     // On "nothing open" too: `i` and the typing after it make the document there.
-    if crate::screens::vim::active(model)
+    let key = if crate::screens::vim::active(model)
         && model.effective_focus() == Focus::Editor
         && !model.active_document().kind.is_table()
         && !model.find.open
     {
         match crate::screens::vim::handle_key(model, key) {
-            crate::screens::vim::Outcome::Pass => {}
+            crate::screens::vim::Outcome::Pass(key) => key,
             crate::screens::vim::Outcome::Done => {
                 if model.active_document().sql.revision() != revision {
                     crate::screens::editor::refresh_intelligence(model, false);
@@ -6526,7 +6526,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 return effects;
             }
         }
-    }
+    } else {
+        key
+    };
     // With the find bar open, the keys it does not take still reach the keymap above,
     // never the text underneath.
     if !model.active_document().kind.is_table()
