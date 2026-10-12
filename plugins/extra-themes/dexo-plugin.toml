@@ -7,7 +7,7 @@ description = "Solarized Dark and Light, One Dark, Rosé Pine, Kanagawa and Ever
 authors = ["KingDasWinx"]
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/KingDasWinx/Dexo"
-min_dexo = "1.5.0"
+min_dexo = "1.4.3"
 
 [theme]
 themes = ["themes/*.toml"]

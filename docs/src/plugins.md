@@ -92,7 +92,7 @@ description = "Open DuckDB files, CSV, Parquet and JSON"
 authors = ["KingDasWinx"]
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/KingDasWinx/Dexo"
-min_dexo = "1.5.0"              # the oldest Dexo it runs on
+min_dexo = "1.4.3"              # the oldest Dexo it runs on
 
 [driver]
 protocol = 1                    # the plugin protocol version it speaks
@@ -129,7 +129,7 @@ fn main() {
 
 JSON-RPC 2.0, one message per line. Dexo sends requests, and the plugin answers each by its `id`, in any order. stdout carries only the protocol; stderr is the plugin's log, whose last lines Dexo shows when it fails. A line over 64 MB is an error.
 
-1. **Handshake.** `initialize` with `{"dexo_version": "1.5.0", "protocols": [1]}`, answered within 10 seconds with `{"protocol": 1, "driver_version": "1.0.0", "drivers": ["duckdb"]}`: a protocol it was offered, and every driver its manifest declares.
+1. **Handshake.** `initialize` with `{"dexo_version": "1.4.3", "protocols": [1]}`, answered within 10 seconds with `{"protocol": 1, "driver_version": "1.0.0", "drivers": ["duckdb"]}`: a protocol it was offered, and every driver its manifest declares.
 2. **Sessions.** `session/open` carries the connection request, password and other secrets included, and answers `{"session", "capabilities", "families", "server_session_id"?, "transaction"?}`. `families` lists what the session answers beyond queries: `catalog`, `data`, `bulk`, `explain`, `transactions`, `cancel`. `session/close` ends it.
 3. **Calls on a session** take `{"session": "s1", "args": ...}`:
 
