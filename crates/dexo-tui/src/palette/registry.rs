@@ -1,7 +1,7 @@
 use dexo_driver_api::TransactionState;
 
 use super::{CommandSpec, FlowIntent, PaletteEntry, PaletteInvocation, Requirement};
-use crate::action::{Action, FocusTarget};
+use crate::action::{Action, EditorMotion, FocusTarget};
 use crate::model::{GridSelection, Model, Screen};
 
 fn command_spec_list() -> Vec<CommandSpec> {
@@ -1576,6 +1576,128 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::EditorSelectAll),
         },
         CommandSpec {
+            id: "editor.left",
+            title: "Cursor Left",
+            keywords: &["move", "character"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(EditorMotion::Left)),
+        },
+        CommandSpec {
+            id: "editor.right",
+            title: "Cursor Right",
+            keywords: &["move", "character"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(EditorMotion::Right)),
+        },
+        CommandSpec {
+            id: "editor.up",
+            title: "Cursor Up",
+            keywords: &["move", "line"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(EditorMotion::Up)),
+        },
+        CommandSpec {
+            id: "editor.down",
+            title: "Cursor Down",
+            keywords: &["move", "line"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(EditorMotion::Down)),
+        },
+        CommandSpec {
+            id: "editor.word_left",
+            title: "Word Left",
+            keywords: &["move", "word"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(EditorMotion::WordLeft)),
+        },
+        CommandSpec {
+            id: "editor.word_right",
+            title: "Word Right",
+            keywords: &["move", "word"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(EditorMotion::WordRight)),
+        },
+        CommandSpec {
+            id: "editor.line_start",
+            title: "Line Start",
+            keywords: &["move", "home"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(EditorMotion::LineStart)),
+        },
+        CommandSpec {
+            id: "editor.line_end",
+            title: "Line End",
+            keywords: &["move", "end"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(EditorMotion::LineEnd)),
+        },
+        CommandSpec {
+            id: "editor.document_start",
+            title: "Document Start",
+            keywords: &["move", "top"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(
+                EditorMotion::DocumentStart,
+            )),
+        },
+        CommandSpec {
+            id: "editor.document_end",
+            title: "Document End",
+            keywords: &["move", "bottom"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(EditorMotion::DocumentEnd)),
+        },
+        CommandSpec {
+            id: "editor.page_up",
+            title: "Page Up",
+            keywords: &["move", "scroll"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(EditorMotion::PageUp)),
+        },
+        CommandSpec {
+            id: "editor.page_down",
+            title: "Page Down",
+            keywords: &["move", "scroll"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorMove(EditorMotion::PageDown)),
+        },
+        CommandSpec {
+            id: "editor.delete_forward",
+            title: "Delete Character",
+            keywords: &["delete", "forward"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorDeleteForward { word: false }),
+        },
+        CommandSpec {
+            id: "editor.delete_word_forward",
+            title: "Delete Word",
+            keywords: &["delete", "word"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorDeleteForward { word: true }),
+        },
+        CommandSpec {
+            id: "editor.kill_line",
+            title: "Kill Line",
+            keywords: &["delete", "line", "emacs"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorKillLine),
+        },
+        CommandSpec {
             id: "editor.format",
             title: "Format SQL",
             keywords: &["pretty", "indent", "prettier"],
@@ -1664,6 +1786,21 @@ fn hidden(id: &str) -> bool {
             | "explorer.page_down"
             | "explorer.collapse"
             | "explorer.open"
+            | "editor.left"
+            | "editor.right"
+            | "editor.up"
+            | "editor.down"
+            | "editor.word_left"
+            | "editor.word_right"
+            | "editor.line_start"
+            | "editor.line_end"
+            | "editor.document_start"
+            | "editor.document_end"
+            | "editor.page_up"
+            | "editor.page_down"
+            | "editor.delete_forward"
+            | "editor.delete_word_forward"
+            | "editor.kill_line"
             // the document strip's own cursor: it only means something with the strip
             // focused, where the arrows and Enter are the keys
             | "document.activate_tab"

@@ -8,6 +8,23 @@ use std::sync::Arc;
 use crate::runtime::{OperationId, OperationKey, SessionId};
 use crate::screens::transfer::TransferMode;
 
+/// Where `Action::EditorMove` takes the cursor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EditorMotion {
+    Left,
+    Right,
+    Up,
+    Down,
+    WordLeft,
+    WordRight,
+    LineStart,
+    LineEnd,
+    DocumentStart,
+    DocumentEnd,
+    PageUp,
+    PageDown,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Key(KeyEvent),
@@ -581,6 +598,15 @@ pub enum Action {
         replace: bool,
     },
     EditorRedo,
+    /// A motion of the plain editor, for a keymap that moves without the arrows: the
+    /// Emacs profile's Ctrl+N, Ctrl+P and the rest.
+    EditorMove(EditorMotion),
+    /// The character after the cursor, or with `word` the word.
+    EditorDeleteForward {
+        word: bool,
+    },
+    /// Emacs's Ctrl+K: to the end of the line, or at the end the line break.
+    EditorKillLine,
     EditorSelectAll,
     AcceptCompletion,
     InsertSnippet,

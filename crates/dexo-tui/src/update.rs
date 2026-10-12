@@ -2372,6 +2372,31 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             crate::screens::editor::refresh_intelligence(model, false);
             Vec::new()
         }
+        // The plain editor's own keys, wherever the plain editor would read them: with
+        // the find bar open they reach the keymap past the bar, and Ctrl+K deleted a line
+        // of the document behind it.
+        Action::EditorMove(_) | Action::EditorDeleteForward { .. } | Action::EditorKillLine
+            if model.focus != Focus::Editor
+                || model.find.open
+                || model.active_document().kind.is_table() =>
+        {
+            Vec::new()
+        }
+        Action::EditorMove(motion) => {
+            crate::screens::editor::motion(model, motion);
+            crate::screens::vim::after_pass(model);
+            Vec::new()
+        }
+        Action::EditorDeleteForward { word } => {
+            crate::screens::editor::delete(model, word);
+            crate::screens::editor::refresh_intelligence(model, false);
+            Vec::new()
+        }
+        Action::EditorKillLine => {
+            crate::screens::editor::kill_line(model);
+            crate::screens::editor::refresh_intelligence(model, false);
+            Vec::new()
+        }
         Action::EditorSelectAll => {
             crate::screens::editor::select_all(model);
             Vec::new()

@@ -1068,9 +1068,6 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
-    if model.keymap.name == "emacs" && emacs_key(model, key) {
-        return true;
-    }
     // Sideways keys mean "not this": they close the popup even when the cursor has
     // nowhere to go, like Right at the end of the text.
     let sideways = matches!(
@@ -1365,7 +1362,7 @@ fn backspace(model: &mut Model, word: bool) {
     shift_snippet_stops(model, mark);
 }
 
-fn delete(model: &mut Model, word: bool) {
+pub(crate) fn delete(model: &mut Model, word: bool) {
     let mark = edit_mark(model);
     end_typing(model);
     let doc = model.active_document_mut();
@@ -1694,9 +1691,9 @@ fn move_line_edge(model: &mut Model, home: bool, shift: bool, document: bool) {
     apply_move(doc, if home { line_start } else { line_end }, shift);
 }
 
-/// Ctrl+K in the Emacs profile: from the cursor to the end of the line, and at the end
-/// of a line the newline after it, so the next line comes up.
-fn kill_line(model: &mut Model) {
+/// Kill Line, Emacs's Ctrl+K: from the cursor to the end of the line, and at the end of
+/// a line the newline after it, so the next line comes up.
+pub(crate) fn kill_line(model: &mut Model) {
     let mark = edit_mark(model);
     end_typing(model);
     let doc = model.active_document_mut();
@@ -1715,38 +1712,28 @@ fn kill_line(model: &mut Model) {
     shift_snippet_stops(model, mark);
 }
 
-/// The Emacs profile's motion and kill keys. The keymap has no commands for moving the
-/// cursor -- the arrows are the editor's own keys -- so these are read here, once the
-/// keymap has passed them by. They were only the overlay on the default profile before:
-/// Ctrl+A selected everything, Ctrl+F opened Find, and Alt+F typed an f.
-fn emacs_key(model: &mut Model, key: KeyEvent) -> bool {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let KeyCode::Char(letter) = key.code else {
-        return false;
-    };
+/// A motion a keymap binds -- the Emacs profile's Ctrl+N, Ctrl+P and the rest -- as the
+/// arrow keys make it. With the completion popup open, Up and Down walk the popup, as
+/// the arrows do. The keymap reads these keys first, so they never type.
+pub(crate) fn motion(model: &mut Model, motion: crate::action::EditorMotion) {
+    use crate::action::EditorMotion;
     let popup = model.editor.completion_open;
-    match (ctrl, alt, letter.to_ascii_lowercase()) {
-        (true, false, 'a') => move_line_edge(model, true, false, false),
-        (true, false, 'e') => move_line_edge(model, false, false, false),
-        (true, false, 'b') => move_chars(model, -1, false, false),
-        (true, false, 'f') => move_chars(model, 1, false, false),
-        (true, false, 'n') if popup => move_completion(model, 1),
-        (true, false, 'p') if popup => move_completion(model, -1),
-        (true, false, 'n') => move_vertical(model, 1, false),
-        (true, false, 'p') => move_vertical(model, -1, false),
-        (true, false, 'd') => delete(model, false),
-        (true, false, 'k') => kill_line(model),
-        (true, false, 'v') => page(model, 1, false),
-        (false, true, 'f') => move_chars(model, 1, false, true),
-        (false, true, 'b') => move_chars(model, -1, false, true),
-        (false, true, 'd') => delete(model, true),
-        (false, true, 'v') => page(model, -1, false),
-        (false, true, '<') => move_line_edge(model, true, false, true),
-        (false, true, '>') => move_line_edge(model, false, false, true),
-        _ => return false,
+    match motion {
+        EditorMotion::Left => move_chars(model, -1, false, false),
+        EditorMotion::Right => move_chars(model, 1, false, false),
+        EditorMotion::WordLeft => move_chars(model, -1, false, true),
+        EditorMotion::WordRight => move_chars(model, 1, false, true),
+        EditorMotion::Up if popup => move_completion(model, -1),
+        EditorMotion::Down if popup => move_completion(model, 1),
+        EditorMotion::Up => move_vertical(model, -1, false),
+        EditorMotion::Down => move_vertical(model, 1, false),
+        EditorMotion::LineStart => move_line_edge(model, true, false, false),
+        EditorMotion::LineEnd => move_line_edge(model, false, false, false),
+        EditorMotion::DocumentStart => move_line_edge(model, true, false, true),
+        EditorMotion::DocumentEnd => move_line_edge(model, false, false, true),
+        EditorMotion::PageUp => page(model, -1, false),
+        EditorMotion::PageDown => page(model, 1, false),
     }
-    true
 }
 
 fn move_vertical(model: &mut Model, delta: i32, shift: bool) {
