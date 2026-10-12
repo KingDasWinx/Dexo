@@ -43,8 +43,12 @@ that **types** goes to the editor and never reaches the keymap.
 - *takes text*: `effective_focus() == Focus::Editor`, the active document is not a
   table, `find` is closed, `pending_chord` is empty, and either Vim is not active or
   `vim::mode(model) == Mode::Insert`.
-- *types*: modifiers are empty or `SHIFT` alone, and the code is `Char`, `Enter`, `Tab`,
-  `BackTab`, `Backspace` or `Delete`. The same keys `TextInput::edit_for` calls plain.
+- *types* (`keymap::types`): a `Char` with modifiers empty or `SHIFT` alone, or `Enter`,
+  `Tab`, `Backspace` or `Delete` with no modifier. With Shift those four stay chords a
+  keymap can bind (Shift+Enter to run), and the editor still reads them when none does.
+- With the Default and Emacs keymaps the editor always takes text, so an `[editor]`
+  binding that starts with a typing key never runs; `keymap::load` uses the file and
+  reports the first such line as a warning.
 - Arrows, Home, End, PageUp, PageDown, function keys and Esc keep going through the
   keymap first. No built-in profile binds them in `[editor]`, so nothing changes there,
   and they stay bindable.
@@ -76,8 +80,9 @@ the default profile it types an `r`.
 Both sides are keys, not commands. One character alone is taken as written, case kept:
 `"N" = "J"` and `"shift+n" = "shift+j"` are the same line. Anything longer is the chord
 syntax of the other sections (`ctrl+u`, `esc`, `space`). `""` on the right undoes a remap
-the base made (TOML refuses the same key twice in one table). The section is read only
-with the Vim profile; with another it does nothing, and the docs say so.
+the base made (TOML refuses the same key twice in one table); two spellings of one key
+(`"N"` and `"shift+n"`) remapped two ways are refused, naming both lines. The section is
+read and checked only with the Vim profile; with another it is kept and does nothing.
 
 ### Keymap
 
@@ -111,10 +116,11 @@ with the Vim profile; with another it does nothing, and the docs say so.
 `let key = model.keymap.vim_key(key);`. So:
 
 - Normal and Visual read the remapped key: motions, operators, counts, text objects.
-- In Insert mode only the Esc test sees it (`ctrl+c` → `esc` works); the typed keys reach
-  the editor as `update` holds them, untranslated.
-- `pending_keys` keeps the original keys. `.` replays them through `handle_key`, which
-  translates again; the recording code does not change.
+- In Insert mode only the Esc test sees it; the typed keys reach the editor as pressed.
+  In Normal and Visual mode a key Vim passes on (an arrow, Home, End) goes to the editor
+  as translated: `Outcome::Pass` carries the key.
+- `pending_keys` keeps the translated keys, which is what `.`'s count logic reads; while
+  `.` replays them, `handle_key` does not translate again.
 - The `:` and `/` lines are typed before this point and are not remapped.
 
 ## 3. Editor motions as commands
