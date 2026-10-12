@@ -482,20 +482,49 @@ pub fn load(profile: &str, data_dir: &std::path::Path) -> (Keymap, Option<String
             return (base, Some(message));
         }
     };
+    let place = |line: Option<usize>| match line {
+        Some(line) => format!("{} line {line}", path.display()),
+        None => path.display().to_string(),
+    };
     match merge_overlay(&base, &src) {
-        Ok(keymap) => (keymap, None),
+        Ok(keymap) => {
+            let note = typed_binding(&base.name, &src)
+                .map(|error| format!("{}: {error}", place(error.line)));
+            (keymap, note)
+        }
         Err(error) => {
-            let place = match error.line {
-                Some(line) => format!("{} line {line}", path.display()),
-                None => path.display().to_string(),
-            };
             let message = format!(
-                "{place}: {error}; the {} keymap is used as it is",
+                "{}: {error}; the {} keymap is used as it is",
+                place(error.line),
                 base.name
             );
             (base, Some(message))
         }
     }
+}
+
+/// An `[editor]` binding that starts with a key the editor types, in a keymap where the
+/// editor always takes text: it never runs. Vim's Normal mode reads such a key, so the Vim
+/// keymap has none to report. The file is still used; this says why the key does nothing.
+fn typed_binding(profile: &str, src: &str) -> Option<KeymapError> {
+    if profile == "vim" {
+        return None;
+    }
+    let (_, entries, _) = entries(src).ok()?;
+    let entry = entries.into_iter().find(|entry| {
+        entry.binding.context == KeyContext::Editor
+            && !entry.binding.command.is_empty()
+            && types(&entry.binding.chord.keys[0])
+    })?;
+    Some(KeymapError {
+        field: format!("[editor] {}", entry.spec),
+        reason: format!(
+            "the editor types `{}` with the {profile} keymap, so {} never runs there; give it a modifier",
+            key_label(&entry.binding.chord.keys[0]),
+            entry.binding.command
+        ),
+        line: Some(entry.line),
+    })
 }
 
 /// An overlay in the profiles' format over `base`: a chord it binds replaces the
