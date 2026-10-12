@@ -1,5 +1,103 @@
 # Changelog
 
+## 1.4.3
+
+### Features
+
+- Dexo trusts the plugin index's signing key, and the next one for a rotation
+- The editor's motions are commands any keymap binds; the Emacs profile binds its own
+- [vim] in keymap.toml remaps the keys Vim reads, for another layout
+- Data_import loads a CSV or JSON file from the project folder into a table, as one transaction
+- A bulk insert can run inside the caller's transaction
+- An outdated skill file is said, and written again in one key
+- Writes chooses what runs without asking, production takes writes once its name is typed, and A approves and stops asking
+- A request says what it asks about, and write access can learn to stop asking
+- Grant create --bypass names what runs without asking, and --confirm types a production connection's name
+- A write the person let through runs without asking
+- Write access names the operations that run without asking, and production takes writes once its name is typed
+- Schema_overview shows a whole schema in one call
+- Data_execute_sql runs a .sql file from the project folder
+- Data_execute_sql runs a script as one transaction, under one approval
+- The guard inspects a script of data writes statement by statement, and takes TRUNCATE without CASCADE on Postgres
+- Agents in three views, a profile on one page, its forms beside the list
+- A write access per connection, every write asked
+- New grant lists every tool in one grid, a grant made for each kind checked
+- A grant covers everything the profile sees or the tables checked, and can last until revoked
+- New grant and a profile's connections in the form design
+- The DuckDB and extra-themes plugins, their release workflow, and the docs
+- Offer a missing driver's plugin where it is wanted; palette commands; daily plugin check
+- Install, update, enable, remove and apply plugins; install from a file with trust
+- A Plugins screen: installed and available plugins, the index's state, Ctrl+G p
+- Install and update from the signed index; dexo plugin doctor
+- A signed plugin index, cached a day, and capped downloads
+- Theme plugins' themes in the theme picker, saved as plugin:<id>/<name>
+- Dexo plugin list, info, install --trust, remove, enable and disable
+- Install, update and remove plugins atomically, with state and locks
+- Plugin manifests, checked strictly, and package extraction that cannot escape
+- DuckDB leaves the binary and runs as a plugin executable
+- Plugin processes with a minimal environment; a misbehaving test plugin
+- A proxy driver for plugins; SQLite's contract passes through it
+- The host side: JSON-RPC client, handshake, idle exit and restart budget
+- The SDK serves catalog, data, bulk, explain and transactions
+- The plugin SDK serves sessions and paged queries over stdio
+- The driver plugin protocol: JSON-RPC lines, handshake, pages, wire types
+- Owned descriptors, announced plugin drivers and a shared registry
+- Serde on the wire types: tagged values, base64 bytes, driver errors
+
+### Fixes
+
+- A cancelled count never answers, though it wakes on the interrupt first
+- Publish-plugin.sh tags a plugin whose manifest already has the version
+- The DuckDB and extra-themes plugins run on Dexo 1.4.3, the release that ships them
+- The editor commands leave the document behind Vim's : line, and Normal mode stays on a character
+- The Emacs motions answer with Shift held, as they did before they were commands
+- [vim] is checked only with the Vim keymap, and two spellings of one key are refused
+- Keymap.toml says when an [editor] key is one the editor types and never runs
+- Shift+Enter, Shift+Tab, Shift+Backspace and Shift+Delete stay bindable while the editor takes text
+- A [vim] remap to an arrow moves in Normal mode, and . replays what Vim read
+- A key that types is typed while the editor takes text, whatever the keymap binds it to
+- The skill and the server's instructions say a seed is one call, from its file
+- Schema_overview reads cleanly -- a MySQL primary key is not named twice, auto_increment shows as the default, constraints stand apart from the table
+- A broken constraint or a deadlock is a conflict, not bad SQL
+- Each Agents view starts on its list, a busy form takes no second click, numbers follow the clock, and Edit takes back what it says it does
+- A deleted profile takes its grants and waiting writes, a profile saves in one transaction, the skill file names the profile's own tools
+- Policy, show and doctor say what a profile may write, and the mcp commands say the truth and check their names
+- A session MCP opens pins search_path to the schema the policy judged bare names by
+- Catalog_list carries the ids it says to follow, names are the paths objects occupy, errors keep their category
+- A write is confirmed before it is put to a person, never run twice by a retry, and refused once its approval no longer stands
+- The tool list is announced on every change, over subscriptions/listen from protocol 2026-07-28, and the sessions list comes with the right to end them
+- Migration 20 revokes write access given before the redesign
+- A database from a newer Dexo is refused, not moved aside and replaced by its backup
+- The guard refuses Unicode-escaped identifiers, holds DDL to the tables it references, denies currval
+- Every list, and a resource read, says how long it keeps and who may keep it
+- Set Up an Agent from the palette waits for the agents' configs as well as the profiles
+- New grant offers only the tools a grant can give the profile
+- New grant and a profile's connections go back to the pane beside the list
+- Dexo plugin update --all updates every plugin it can and names the ones it could not
+- A download is written into staging and unpacked from there, never whole in memory
+- A signed index older than the one already verified is refused
+- An opening session holds off the idle stop, a handshake death counts as a crash, nothing blocks a worker
+- A change to the plugins' state waits a moment for another's instead of refusing
+- A cursor answered after its query was given up on is closed
+- A row too large for one answer fails its result, not the whole plugin
+- A driver that panics answers an internal error instead of nothing
+- One plugin job at a time, and a package read for a closed prompt is dropped
+- A bare plugin id installs from the index even beside a file of that name
+- A package is capped as it unpacks, headers included, and a local one by its size
+- A connection on any driver a plugin brings can be saved and tested
+- A plugin's log is read to its end, lossily, a line at most 8 KB
+- A disabled plugin's driver says to enable it, and the offer enables it
+- A server that stops answering fails the download, and Esc stops it at once
+- A plugin cannot bring a driver Dexo has, or one another plugin brings
+- Refuse a package this Dexo cannot run as it is unpacked, before asking to trust it
+- The warning for a theme whose pack went shows over the outcome
+- The plugin removal question wraps instead of being cut
+- A plugin's download size in KB when it is under a megabyte
+
+### Other changes
+
+- Update .gitignore
+
 ## 1.4.2
 
 ### Features
