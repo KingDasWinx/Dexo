@@ -61,6 +61,9 @@ impl std::fmt::Display for KeymapError {
 pub struct Keymap {
     pub name: String,
     pub bindings: Vec<Binding>,
+    /// `[vim]`: the key Vim reads for a key pressed, by the pressed key's label. Empty in
+    /// the built-in profiles; keymap.toml fills it for another layout.
+    pub vim: HashMap<String, KeySpec>,
 }
 
 /// Selectable keymaps, as `(profile, label)`.
@@ -172,6 +175,26 @@ impl Keymap {
 
     pub fn command_ids(&self) -> Vec<&str> {
         self.bindings.iter().map(|b| b.command.as_str()).collect()
+    }
+
+    /// The key Vim reads for `key`: what `[vim]` remaps it to, or `key` itself. On a
+    /// Colemak layout `m` is `h`.
+    pub fn vim_key(&self, key: KeyEvent) -> KeyEvent {
+        let spec = KeySpec {
+            modifiers: key.modifiers,
+            code: key.code,
+        };
+        let Some(to) = self.vim.get(&key_label(&spec)) else {
+            return key;
+        };
+        // Vim reads a capital as the shifted command: `J` joins, where `j` moves.
+        let code = match to.code {
+            KeyCode::Char(ch) if to.modifiers.contains(KeyModifiers::SHIFT) => {
+                KeyCode::Char(ch.to_ascii_uppercase())
+            }
+            code => code,
+        };
+        KeyEvent::new(code, to.modifiers)
     }
 
     pub fn is_prefix(&self, chord: &Chord, active: KeyContext) -> bool {
@@ -296,9 +319,21 @@ struct Entry {
     line: usize,
 }
 
-/// A keymap file's `profile` name and its entries, in file order. An entry whose
-/// command is `""` (an overlay's unbind) is kept, with that empty command.
-fn entries(src: &str) -> Result<(Option<String>, Vec<Entry>), KeymapError> {
+/// One `key = "key"` of a `[vim]` section: the pressed key as written and by its label,
+/// the key Vim reads for it -- `None` for `""`, which undoes a remap -- and the line.
+struct Remap {
+    spec: String,
+    label: String,
+    to: Option<KeySpec>,
+    line: usize,
+}
+
+/// A keymap file read: its `profile` name, its entries and its `[vim]` remaps.
+type Sections = (Option<String>, Vec<Entry>, Vec<Remap>);
+
+/// A keymap file's `profile` name, its entries and its `[vim]` remaps, in file order. An
+/// entry whose command is `""` (an overlay's unbind) is kept, with that empty command.
+fn entries(src: &str) -> Result<Sections, KeymapError> {
     let line_of = |offset: usize| crate::theme::line_at(src, offset);
     let table = toml::de::DeTable::parse(src).map_err(|error| KeymapError {
         field: "keymap".into(),
@@ -307,6 +342,7 @@ fn entries(src: &str) -> Result<(Option<String>, Vec<Entry>), KeymapError> {
     })?;
     let mut profile = None;
     let mut entries = Vec::new();
+    let mut remaps = Vec::new();
     // The map is sorted by key; the file's order is what its lines are read in.
     let mut sections: Vec<_> = table.get_ref().iter().collect();
     sections.sort_by_key(|(key, _)| key.span().start);
@@ -315,6 +351,48 @@ fn entries(src: &str) -> Result<(Option<String>, Vec<Entry>), KeymapError> {
         let line = line_of(key.span().start);
         if section == "profile" {
             profile = value.get_ref().as_str().map(str::to_string);
+            continue;
+        }
+        if section == "vim" {
+            let toml::de::DeValue::Table(map) = value.get_ref() else {
+                return Err(KeymapError {
+                    field: section,
+                    reason: "a section must be a table of key = key".into(),
+                    line: Some(line),
+                });
+            };
+            let mut map: Vec<_> = map.iter().collect();
+            map.sort_by_key(|(spec, _)| spec.span().start);
+            for (spec, target) in map {
+                let line = line_of(spec.span().start);
+                let spec = spec.get_ref().to_string();
+                let field = format!("[vim] {spec}");
+                let target = target.get_ref().as_str().ok_or_else(|| KeymapError {
+                    field: field.clone(),
+                    reason: "the key Vim reads must be a string".into(),
+                    line: Some(line),
+                })?;
+                let from = parse_vim_key(&spec).map_err(|reason| KeymapError {
+                    field: field.clone(),
+                    reason,
+                    line: Some(line),
+                })?;
+                let to = if target.is_empty() {
+                    None
+                } else {
+                    Some(parse_vim_key(target).map_err(|reason| KeymapError {
+                        field: field.clone(),
+                        reason,
+                        line: Some(line),
+                    })?)
+                };
+                remaps.push(Remap {
+                    label: key_label(&from),
+                    spec,
+                    to,
+                    line,
+                });
+            }
             continue;
         }
         let context = parse_context(&section).map_err(|error| KeymapError {
@@ -371,14 +449,18 @@ fn entries(src: &str) -> Result<(Option<String>, Vec<Entry>), KeymapError> {
             });
         }
     }
-    Ok((profile, entries))
+    Ok((profile, entries, remaps))
 }
 
 pub fn parse_keymap(src: &str) -> Result<Keymap, KeymapError> {
-    let (profile, entries) = entries(src)?;
+    let (profile, entries, remaps) = entries(src)?;
     Ok(Keymap {
         name: profile.unwrap_or_else(|| "custom".into()),
         bindings: entries.into_iter().map(|entry| entry.binding).collect(),
+        vim: remaps
+            .into_iter()
+            .filter_map(|remap| Some((remap.label, remap.to?)))
+            .collect(),
     })
 }
 
@@ -419,9 +501,11 @@ pub fn load(profile: &str, data_dir: &std::path::Path) -> (Keymap, Option<String
 /// An overlay in the profiles' format over `base`: a chord it binds replaces the
 /// profile's binding of that chord in that section, and `""` unbinds it. A chord that
 /// starts a longer one where both apply is refused: Dexo would wait for the rest of the
-/// longer chord, and the shorter would never fire.
+/// longer chord, and the shorter would never fire. A `[vim]` line replaces the base's
+/// remap of that key, and `""` removes it; a remapped key the editor or global section
+/// binds is refused, since the keymap reads it first.
 pub fn merge_overlay(base: &Keymap, src: &str) -> Result<Keymap, KeymapError> {
-    let (_, entries) = entries(src)?;
+    let (_, entries, remaps) = entries(src)?;
     let mut keymap = base.clone();
     for entry in &entries {
         let command = entry.binding.command.as_str();
@@ -475,6 +559,31 @@ pub fn merge_overlay(base: &Keymap, src: &str) -> Result<Keymap, KeymapError> {
             });
         }
     }
+    for remap in &remaps {
+        keymap.vim.remove(&remap.label);
+        if let Some(to) = &remap.to {
+            keymap.vim.insert(remap.label.clone(), to.clone());
+        }
+    }
+    // A remapped key the keymap also binds, alone or as the start of a chord, in the
+    // editor or everywhere: the keymap reads it first, and Vim would never see it.
+    for remap in remaps.iter().filter(|remap| remap.to.is_some()) {
+        if let Some(bound) = keymap.bindings.iter().find(|binding| {
+            matches!(binding.context, KeyContext::Global | KeyContext::Editor)
+                && key_label(&binding.chord.keys[0]) == remap.label
+        }) {
+            return Err(KeymapError {
+                field: format!("[vim] {}", remap.spec),
+                reason: format!(
+                    "`{}` is bound to {} in [{}], which wins over the remap; unbind one with \"\"",
+                    chord_label(&bound.chord),
+                    bound.command,
+                    section_name(bound.context)
+                ),
+                line: Some(remap.line),
+            });
+        }
+    }
     Ok(keymap)
 }
 
@@ -489,6 +598,19 @@ fn section_name(context: KeyContext) -> &'static str {
         KeyContext::DocumentTabs => "tabs",
         KeyContext::Palette => "palette",
         KeyContext::Modal => "modal",
+    }
+}
+
+/// A key as a `[vim]` line writes it: one character is that character, case kept --
+/// `"N" = "J"` -- and anything longer is a chord's key, `ctrl+u` or `esc`.
+fn parse_vim_key(spec: &str) -> Result<KeySpec, String> {
+    let mut chars = spec.chars();
+    match (chars.next(), chars.next()) {
+        (Some(ch), None) => Ok(KeySpec {
+            modifiers: KeyModifiers::NONE,
+            code: KeyCode::Char(ch),
+        }),
+        _ => parse_key(spec),
     }
 }
 
@@ -1349,6 +1471,7 @@ profile = "overlap"
     fn active_context_ambiguity_is_reported() {
         let keymap = Keymap {
             name: "broken".into(),
+            vim: Default::default(),
             bindings: vec![
                 super::Binding {
                     chord: parse_chord("x").unwrap(),
@@ -1516,6 +1639,60 @@ profile = "overlap"
         assert!(super::load("default", dir.path()).1.is_some());
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(super::load("default", dir.path()).1, None);
+    }
+
+    /// `[vim]` remaps the keys Vim reads: a character as written, a chord's key, `""` to
+    /// undo one the base made; the built-in profiles have none; a remapped key that
+    /// [global] or [editor] binds is refused, one that [results] binds is not.
+    #[test]
+    fn a_vim_section_remaps_the_keys_vim_reads() {
+        assert!(Keymap::default_profile().vim.is_empty());
+        assert!(Keymap::vim_profile().vim.is_empty());
+        let vim = Keymap::vim_profile();
+        let merged = super::merge_overlay(
+            &vim,
+            "[vim]\n\"m\" = \"h\"\n\"N\" = \"J\"\n\"ctrl+u\" = \"ctrl+r\"\n",
+        )
+        .unwrap();
+        let read = |code, modifiers| merged.vim_key(KeyEvent::new(code, modifiers));
+        assert_eq!(
+            read(KeyCode::Char('m'), KeyModifiers::NONE).code,
+            KeyCode::Char('h')
+        );
+        assert_eq!(
+            read(KeyCode::Char('N'), KeyModifiers::SHIFT).code,
+            KeyCode::Char('J')
+        );
+        let redo = read(KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert_eq!(
+            (redo.code, redo.modifiers),
+            (KeyCode::Char('r'), KeyModifiers::CONTROL)
+        );
+        assert_eq!(
+            read(KeyCode::Char('e'), KeyModifiers::NONE).code,
+            KeyCode::Char('e')
+        );
+        // `""` undoes a remap the base made.
+        let base = parse_keymap("profile = \"vim\"\n[vim]\n\"e\" = \"k\"\n").unwrap();
+        assert_eq!(base.vim.len(), 1);
+        let undone = super::merge_overlay(&base, "[vim]\n\"e\" = \"\"\n").unwrap();
+        assert!(undone.vim.is_empty());
+        let error = super::merge_overlay(
+            &vim,
+            "[global]\n\"e\" = \"focus.explorer\"\n[vim]\n\"e\" = \"k\"\n",
+        )
+        .unwrap_err();
+        assert_eq!((error.line, error.field.as_str()), (Some(4), "[vim] e"));
+        assert!(error.reason.contains("focus.explorer"), "{error}");
+        assert!(
+            super::merge_overlay(
+                &vim,
+                "[results]\n\"k\" = \"results.up\"\n[vim]\n\"k\" = \"n\"\n"
+            )
+            .is_ok()
+        );
+        let error = super::merge_overlay(&vim, "[vim]\n\"m\" = 3\n").unwrap_err();
+        assert_eq!(error.line, Some(2));
     }
 
     /// Terminals send Shift+Tab as BackTab; the keymap writes it `shift+tab`, and with

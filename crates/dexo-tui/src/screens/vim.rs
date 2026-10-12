@@ -1,7 +1,8 @@
 //! Vim mode, when the keymap profile is `vim`: Normal, Insert, Visual and Visual-line.
 //! `update` gives it each editor key after the keymap has had its chance at Ctrl, Alt
 //! and function-key chords, so the palette, running a statement and quitting still work
-//! in every mode. In Insert mode it lets the keys through to the plain editor.
+//! in every mode. In Insert mode it lets the keys through to the plain editor. A `[vim]`
+//! section in keymap.toml renames the keys it reads, for another layout.
 
 use std::ops::Range;
 
@@ -155,6 +156,11 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
     if model.vim.prompt.is_some() {
         return prompt_key(model, key);
     }
+    // The key as keymap.toml's `[vim]` has Vim read it: `m` is `h` on a Colemak layout.
+    // Insert mode types the key as pressed; only the Esc that leaves it is read here.
+    // `.` replays the keys as pressed, through this same translation.
+    let pressed = key;
+    let key = model.keymap.vim_key(key);
     if model.vim.mode == Mode::Insert {
         if key.code == KeyCode::Esc {
             model.editor.completion_open = false;
@@ -200,7 +206,7 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
         }
         KeyCode::Char(ch) => {
             model.vim.pending.push(ch);
-            model.vim.pending_keys.push(key);
+            model.vim.pending_keys.push(pressed);
             command(model)
         }
         // The arrows and friends move as in any editor; Normal mode stays on a char.
