@@ -386,8 +386,27 @@ fn entries(src: &str) -> Result<Sections, KeymapError> {
                         line: Some(line),
                     })?)
                 };
+                let label = key_label(&from);
+                // `"N"` and `"shift+n"` are two keys to TOML and one key to Vim.
+                let shown = |to: &Option<KeySpec>| to.as_ref().map_or("\"\"".into(), key_label);
+                if let Some(first) = remaps
+                    .iter()
+                    .find(|seen: &&Remap| seen.label == label && seen.to != to)
+                {
+                    return Err(KeymapError {
+                        field,
+                        reason: format!(
+                            "is the key `{}` on line {}, which Vim reads as {}, and here as {}; keep one",
+                            first.spec,
+                            first.line,
+                            shown(&first.to),
+                            shown(&to)
+                        ),
+                        line: Some(line),
+                    });
+                }
                 remaps.push(Remap {
-                    label: key_label(&from),
+                    label,
                     spec,
                     to,
                     line,
@@ -595,8 +614,12 @@ pub fn merge_overlay(base: &Keymap, src: &str) -> Result<Keymap, KeymapError> {
         }
     }
     // A remapped key the keymap also binds, alone or as the start of a chord, in the
-    // editor or everywhere: the keymap reads it first, and Vim would never see it.
-    for remap in remaps.iter().filter(|remap| remap.to.is_some()) {
+    // editor or everywhere: the keymap reads it first, and Vim would never see it. With
+    // another keymap Vim never runs, and `[vim]` is only kept.
+    for remap in remaps
+        .iter()
+        .filter(|remap| keymap.name == "vim" && remap.to.is_some())
+    {
         if let Some(bound) = keymap.bindings.iter().find(|binding| {
             matches!(binding.context, KeyContext::Global | KeyContext::Editor)
                 && key_label(&binding.chord.keys[0]) == remap.label
