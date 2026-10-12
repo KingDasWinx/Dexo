@@ -54,6 +54,19 @@ The roles are `background`, `foreground`, `border`, `muted`, `production`, `stag
 
 Command ids are the palette's. A chord that starts a longer one where both apply is refused, since Dexo would wait for the rest and the shorter would never fire; unbind the longer one first. A file with a problem is not used: the messages say its line, and the keymap is used as it is. The palette shows the keys the overlay gives.
 
+While the editor takes text -- always with the Default and Emacs keymaps, in Insert mode with Vim -- a key that types (a character, Enter, Tab, Backspace or Delete, with at most Shift) is typed, whatever the overlay binds it to: `[global] "r" = "focus.results"` works in Vim's Normal mode and types an `r` in Insert mode. A chord of bare keys works the same way: `[editor] "space f" = "document.open"` waits for the `f` in Normal mode, listing what can follow, and `space` is a space in Insert mode.
+
+With the Vim keymap, a `[vim]` section changes the keys Vim reads, for another layout: each line is the key pressed and the key Vim reads for it, a character as written (`"N" = "J"`) or a chord's key (`"ctrl+u" = "ctrl+r"`), and `""` undoes a remap. Operators, counts, text objects and `.` follow -- with the lines below, `dm` deletes to the left and `3n` goes down three lines. A remapped key that `[global]` or `[editor]` also binds, alone or as the start of a chord, is refused: the keymap would read it first, and Vim never see it.
+
+```toml
+[vim]
+"m" = "h"
+"n" = "j"
+"e" = "k"
+"i" = "l"
+"j" = "i"
+```
+
 ## SQL editor
 
 | Key | Action |
@@ -65,6 +78,8 @@ Command ids are the palette's. A chord that starts a longer one where both apply
 | Ctrl+Shift+Up / Down | Move the line or selection up or down |
 | Ctrl+E | Edit the document in `$VISUAL` or `$EDITOR` (`ctrl+x ctrl+e` in the Emacs keymap) |
 
+The Emacs keymap moves with Ctrl+A, Ctrl+E, Ctrl+F, Ctrl+B, Ctrl+N, Ctrl+P, Alt+F, Alt+B, Alt+<, Alt+>, Ctrl+V and Alt+V, deletes forward with Ctrl+D and Alt+D, and kills the line with Ctrl+K. These are the commands `editor.line_start`, `editor.line_end`, `editor.right`, `editor.left`, `editor.down`, `editor.up`, `editor.word_right`, `editor.word_left`, `editor.document_start`, `editor.document_end`, `editor.page_down`, `editor.page_up`, `editor.delete_forward`, `editor.delete_word_forward` and `editor.kill_line`, which any keymap binds in `[editor]`.
+
 The editor underlines what is wrong as you type: a statement that does not parse, and, once the catalog has been read whole, a table or a `alias.column` the database does not have -- never one it simply has not loaded. With the cursor on an underline the status line says what it is. When a run fails and the server says where, that spot is underlined and the cursor goes to it.
 
 A `:name` in a statement asks for its value before the run. Each statement goes to the server with the database's own placeholders (`$1` on Postgres and DuckDB, `?` on MySQL and MariaDB, `?1` on SQLite) and only the values it names.
@@ -73,7 +88,7 @@ Lines starting with a backslash are psql's commands, answered by Dexo from the c
 
 ### Vim mode
 
-With the Vim keymap (Settings), the editor is modal: Normal, Insert, Visual (`v`) and Visual-line (`V`), with the mode on the status line and a block cursor outside Insert. Normal mode takes counts and the motions `h j k l w b e 0 ^ $ gg G`; the operators `d c y` with a motion, or doubled for lines (`dd yy cc`); `x p P u` and Ctrl+R; `i a I A o O` into Insert; `.` to repeat the last change; `/` to search, `n` and `N` for the next and previous match; `:s/old/new/[g]` on the line, `:%s` on the document; `:w`, `:q`, `:wq`, `:x` (which writes only what changed) and `:<line>`. The text objects `iw` and `aw` work after an operator (`diw`, `ciw`) and in Visual mode, where `X`, `D`, `C` and `Y` take whole lines. Every change, an Insert session included, is one undo step, and a count on `.` replaces the change's own. Ctrl chords -- the palette, running a statement, quitting -- work in every mode; Esc then a key typed fast is two keys, as in Vim, not an Alt chord.
+With the Vim keymap (Settings), the editor is modal: Normal, Insert, Visual (`v`) and Visual-line (`V`), with the mode on the status line and a block cursor outside Insert. Normal mode takes counts and the motions `h j k l w b e 0 ^ $ gg G`; the operators `d c y` with a motion, or doubled for lines (`dd yy cc`); `x p P u` and Ctrl+R; `i a I A o O` into Insert; `.` to repeat the last change; `/` to search, `n` and `N` for the next and previous match; `:s/old/new/[g]` on the line, `:%s` on the document; `:w`, `:q`, `:wq`, `:x` (which writes only what changed) and `:<line>`. The text objects `iw` and `aw` work after an operator (`diw`, `ciw`) and in Visual mode, where `X`, `D`, `C` and `Y` take whole lines. Every change, an Insert session included, is one undo step, and a count on `.` replaces the change's own. Ctrl chords -- the palette, running a statement, quitting -- work in every mode; Esc then a key typed fast is two keys, as in Vim, not an Alt chord. Another layout changes the keys Vim reads with a `[vim]` section in `keymap.toml` (see Keymap overlay).
 
 ## Results
 
