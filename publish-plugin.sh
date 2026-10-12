@@ -48,6 +48,7 @@ if $driver; then
   cargo metadata --format-version 1 >/dev/null # brings Cargo.lock along
   files+=("$crate" Cargo.lock)
 fi
-git commit -m "chore(plugins): $id $version" -- "${files[@]}"
+# A plugin's first release is the version its manifest was written with: nothing to commit.
+git diff --quiet -- "${files[@]}" || git commit -m "chore(plugins): $id $version" -- "${files[@]}"
 git tag -a "$tag" -m "Plugin $id $version"
 git push origin main "$tag"
