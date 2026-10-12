@@ -6442,13 +6442,13 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         modifiers: key.modifiers,
         code: key.code,
     };
-    let mut chord = model.pending_chord.clone();
-    chord.keys.push(spec);
-    let ctx = active_key_context(model);
     // While the editor takes text, a key that types is typed, whatever the keymap binds
     // it to: `[global] "r" = "focus.results"` left the results focused mid-word in Insert
     // mode, and in the default profile.
-    let typing = editor_takes_text(model) && types(&key);
+    let typing = editor_takes_text(model) && crate::keymap::types(&spec);
+    let mut chord = model.pending_chord.clone();
+    chord.keys.push(spec);
+    let ctx = active_key_context(model);
     if !typing && model.keymap.is_prefix(&chord, ctx) {
         model.pending_chord = chord;
         return Vec::new();
@@ -6557,22 +6557,6 @@ fn editor_takes_text(model: &Model) -> bool {
         && model.pending_chord.keys.is_empty()
         && (!crate::screens::vim::active(model)
             || crate::screens::vim::mode(model) == crate::screens::vim::Mode::Insert)
-}
-
-/// A key that puts text in or takes it out: a character, Enter, Tab, Backspace or
-/// Delete, with at most Shift. The arrows and the function keys are not, so a keymap can
-/// still bind them.
-fn types(key: &KeyEvent) -> bool {
-    key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
-        && matches!(
-            key.code,
-            KeyCode::Char(_)
-                | KeyCode::Enter
-                | KeyCode::Tab
-                | KeyCode::BackTab
-                | KeyCode::Backspace
-                | KeyCode::Delete
-        )
 }
 
 pub(crate) fn active_key_context(model: &Model) -> crate::keymap::KeyContext {

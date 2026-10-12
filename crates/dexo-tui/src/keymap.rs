@@ -601,6 +601,19 @@ fn section_name(context: KeyContext) -> &'static str {
     }
 }
 
+/// A key that puts text in or takes it out: a character with at most Shift, or Enter,
+/// Tab, Backspace or Delete alone. With Shift those four are chords a keymap can bind --
+/// Shift+Enter to run a statement -- and the editor still reads them when none does.
+pub(crate) fn types(key: &KeySpec) -> bool {
+    match key.code {
+        KeyCode::Char(_) => key.modifiers.difference(KeyModifiers::SHIFT).is_empty(),
+        KeyCode::Enter | KeyCode::Tab | KeyCode::Backspace | KeyCode::Delete => {
+            key.modifiers.is_empty()
+        }
+        _ => false,
+    }
+}
+
 /// A key as a `[vim]` line writes it: one character is that character, case kept --
 /// `"N" = "J"` -- and anything longer is a chord's key, `ctrl+u` or `esc`.
 fn parse_vim_key(spec: &str) -> Result<KeySpec, String> {
