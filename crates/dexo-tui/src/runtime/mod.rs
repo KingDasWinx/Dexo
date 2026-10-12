@@ -1485,13 +1485,20 @@ impl WorkbenchRuntime {
                 counted.ok_or_else(|| "the count came back without a number".to_string())
             }
             .await;
-            slots
+            // A cancel takes the slot before it stops the count, so what the count comes
+            // back with then -- the interrupt's error -- is nobody's. Aborting the task was
+            // not enough: on another thread the count woke on the interrupt and answered
+            // before the abort landed, as it did every time on Windows.
+            let wanted = slots
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(&operation);
-            let _ = action_tx
-                .send(Action::RowsCounted { operation, result })
-                .await;
+                .remove(&operation)
+                .is_some();
+            if wanted {
+                let _ = action_tx
+                    .send(Action::RowsCounted { operation, result })
+                    .await;
+            }
         });
         if let Some(slot) = counts
             .lock()
