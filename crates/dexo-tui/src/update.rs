@@ -6420,11 +6420,20 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     let mut chord = model.pending_chord.clone();
     chord.keys.push(spec);
     let ctx = active_key_context(model);
-    if model.keymap.is_prefix(&chord, ctx) {
+    // While the editor takes text, a key that types is typed, whatever the keymap binds
+    // it to: `[global] "r" = "focus.results"` left the results focused mid-word in Insert
+    // mode, and in the default profile.
+    let typing = editor_takes_text(model) && types(&key);
+    if !typing && model.keymap.is_prefix(&chord, ctx) {
         model.pending_chord = chord;
         return Vec::new();
     }
-    match model.keymap.resolve(&chord, ctx) {
+    let resolved = if typing {
+        Ok(None)
+    } else {
+        model.keymap.resolve(&chord, ctx)
+    };
+    match resolved {
         Ok(Some(command)) => {
             model.pending_chord.keys.clear();
             // Ctrl+S is the grid's review and the document's save. With nothing pending
@@ -6509,6 +6518,34 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         return crate::screens::editor::take_completion_effects(model);
     }
     Vec::new()
+}
+
+/// Whether a key the keymap leaves alone would be typed: the editor has the focus on a
+/// document, with no bar, prompt or chord in the way, and Vim -- when it is on -- is in
+/// Insert mode.
+fn editor_takes_text(model: &Model) -> bool {
+    model.effective_focus() == Focus::Editor
+        && !model.active_document().kind.is_table()
+        && !model.find.open
+        && model.pending_chord.keys.is_empty()
+        && (!crate::screens::vim::active(model)
+            || crate::screens::vim::mode(model) == crate::screens::vim::Mode::Insert)
+}
+
+/// A key that puts text in or takes it out: a character, Enter, Tab, Backspace or
+/// Delete, with at most Shift. The arrows and the function keys are not, so a keymap can
+/// still bind them.
+fn types(key: &KeyEvent) -> bool {
+    key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
+        && matches!(
+            key.code,
+            KeyCode::Char(_)
+                | KeyCode::Enter
+                | KeyCode::Tab
+                | KeyCode::BackTab
+                | KeyCode::Backspace
+                | KeyCode::Delete
+        )
 }
 
 pub(crate) fn active_key_context(model: &Model) -> crate::keymap::KeyContext {
