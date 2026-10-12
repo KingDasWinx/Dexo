@@ -1,4 +1,4 @@
-//! A write an agent asked to make under an asking grant, waiting for a person. The MCP
+//! A write an agent asked to make under a grant, waiting for a person. The MCP
 //! server writes it and waits; the TUI's Agents screen, under Approvals, reads it and decides.
 //! The two processes meet only in the shared database.
 
@@ -74,6 +74,10 @@ pub struct Approval {
     /// When the waiting call last said it is still there, in Unix seconds.
     #[serde(default)]
     pub heartbeat: i64,
+    /// What it asks about: the operations of the write its access does not let through.
+    /// Approving it with "and do not ask again" lets them through from then on.
+    #[serde(default)]
+    pub operations: Vec<crate::mcp::bypass::Operation>,
 }
 
 impl Approval {
@@ -98,6 +102,7 @@ impl Approval {
             decision: ApprovalDecision::Pending,
             grant: Uuid::nil(),
             heartbeat: now,
+            operations: Vec::new(),
         }
     }
 
@@ -168,8 +173,16 @@ pub fn answer(
 
 /// The SQL a call carries, or its arguments in one line when it carries none.
 fn statement_of(arguments: &serde_json::Map<String, serde_json::Value>) -> String {
+    // An import shows what it read of its file, not the file.
+    if let Some(summary) = arguments.get("summary").and_then(serde_json::Value::as_str) {
+        return summary.to_string();
+    }
     if let Some(sql) = arguments.get("sql").and_then(serde_json::Value::as_str) {
-        return sql.trim().to_string();
+        // A script read from a file says which, above what it read.
+        return match arguments.get("file").and_then(serde_json::Value::as_str) {
+            Some(file) => format!("-- {file}\n{}", sql.trim()),
+            None => sql.trim().to_string(),
+        };
     }
     let shown: serde_json::Map<String, serde_json::Value> = arguments
         .iter()
@@ -184,7 +197,7 @@ mod tests {
     use super::{
         Answered, Approval, ApprovalDecision, HEARTBEAT_GRACE_SECS, KEEP_SETTLED_SECS, answer,
     };
-    use crate::mcp::grant::{Grant, GrantCapability};
+    use crate::mcp::grant::{Grant, WriteKind};
     use crate::mcp::ledger::{GrantLedger, MemoryGrantLedger};
     use crate::mcp::profile::McpProfile;
     use crate::mcp::selector::{Effect, SelectorRule};
@@ -241,17 +254,7 @@ mod tests {
 
         let mut profile = McpProfile::new("p");
         profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-        let grant = Grant::new(
-            &profile,
-            "c",
-            GrantCapability::DataWrite,
-            vec!["data_insert".into()],
-            vec![SelectorRule::parse(Effect::Allow, "db.public.t").unwrap()],
-            100,
-            900,
-        )
-        .unwrap()
-        .asking(60);
+        let grant = Grant::new(&profile, "c", &[WriteKind::Rows], 100, 900, 60).unwrap();
         ledger.insert_grant(grant.clone()).unwrap();
         let mut revoked = Approval::pending("p", "c", "data_insert", &arguments, vec![], 100, 60);
         revoked.grant = grant.id;

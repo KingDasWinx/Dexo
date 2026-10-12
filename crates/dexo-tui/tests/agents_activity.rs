@@ -56,9 +56,8 @@ fn a_waiting_write_is_answered_by_its_buttons() {
     for text in [
         "[a Approve]",
         "[d Deny]",
-        "[R Revoke all grants]",
         " Profile ",
-        " Tool ",
+        " Wants ",
         " Connection ",
         " Left ",
         "DELETE FROM orders WHERE id = 7",

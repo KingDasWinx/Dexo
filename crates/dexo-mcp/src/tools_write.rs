@@ -2,8 +2,8 @@ use dexo_app::data::{ChangeSet, RowIdentity, TableMeta, mutations_for};
 use dexo_app::error::{AppError, ErrorCategory};
 use dexo_app::mcp::approval::{Approval, ApprovalDecision};
 use dexo_app::mcp::audit::{AuditEvent, SqlAuditMode};
+use dexo_app::mcp::bypass::{operations_of, operations_words};
 use dexo_app::mcp::grant::Grant;
-use dexo_app::mcp::grant::WRITE_TOOLS;
 use dexo_app::mcp::ledger::GrantLedger;
 use dexo_app::mcp::operation::{OperationRecord, OperationState, SideEffect, payload_hash};
 use dexo_app::mcp::selector::ObjectRef;
@@ -22,7 +22,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::render::text_result;
 use crate::schema::{
-    AdminActionInput, DataDeleteInput, DataInsertInput, DataSqlInput, DataUpdateInput, DdlInput,
+    AdminActionInput, DataDeleteInput, DataImportInput, DataInsertInput, DataSqlInput,
+    DataUpdateInput, DdlInput,
 };
 use crate::server::DexoMcpServer;
 use crate::tools_read::finish;
@@ -35,12 +36,21 @@ impl DexoMcpServer {
         input: &impl Serialize,
         cancel: CancellationToken,
     ) -> CallToolResult {
-        let arguments = serde_json::to_value(input)
+        let mut arguments = serde_json::to_value(input)
             .ok()
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
-        // A write an asking grant covers waits for a person first, before the connection
-        // is taken: the session stays free for other calls while it waits.
+        let read = match name {
+            "data_execute_sql" => take_script_file(&mut arguments),
+            "data_import" => dexo_app::mcp::clients::Places::discover()
+                .and_then(|places| take_import_file(&mut arguments, &places)),
+            _ => Ok(()),
+        };
+        if let Err(error) = read {
+            return crate::error::app_error(&error);
+        }
+        // A write waits for a person first, before the connection is taken: the session
+        // stays free for other calls while it waits.
         let approved = match self.inner.router.resolve(connection.as_deref()) {
             Ok(slot) => match self
                 .await_approval(name, &slot.meta, &arguments, &cancel)
@@ -54,6 +64,23 @@ impl DexoMcpServer {
         // A call the agent cancelled does not run, approved or not: rmcp only cancels
         // the token, and the handler goes on unless it looks.
         if cancel.is_cancelled() {
+            if matches!(approved, Some(Clearance::Approved(_))) {
+                audit(
+                    self.inner.ledger.as_ref(),
+                    &self.inner.service,
+                    name,
+                    arguments.get("operation_id").and_then(Value::as_str),
+                    arguments
+                        .get("target")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    "deny",
+                    None,
+                    "cancelled by the agent after approval",
+                    now_secs(),
+                    None,
+                );
+            }
             return crate::error::app_error(&cancelled_by_agent());
         }
         // The profile's call permit is taken only now, to run: held while a person
@@ -91,19 +118,18 @@ impl DexoMcpServer {
 }
 
 impl DexoMcpServer {
-    /// Waits for a person's decision when only an asking grant covers this write: the
-    /// request goes to the database, where Dexo's Agents screen shows it under Approvals, and the
-    /// answer is read back every quarter second until the grant's time runs out, or the
-    /// agent cancels the call, which takes the request away so no one can approve it.
-    /// Any other write -- replayed, refused, or covered by a grant that does not ask --
-    /// goes straight on, and is judged where it runs.
+    /// Waits for a person's decision on a write a grant covers: the request goes to the
+    /// database, where Dexo's Agents screen shows it under Approvals, and the answer is read
+    /// back every quarter second until the grant's time runs out, or the agent cancels the
+    /// call, which takes the request away so no one can approve it. A write replayed, or
+    /// one no grant covers, goes straight on, and is judged -- refused -- where it runs.
     async fn await_approval(
         &self,
         name: &str,
         connection: &McpConnection,
         arguments: &Map<String, Value>,
         cancel: &CancellationToken,
-    ) -> Result<Option<uuid::Uuid>, AppError> {
+    ) -> Result<Option<Clearance>, AppError> {
         let service = &self.inner.service;
         let ledger = self.inner.ledger.as_ref();
         let now = now_secs();
@@ -125,26 +151,31 @@ impl DexoMcpServer {
         let Some(grant) = covering_grant(&grants, name, connection, &targets, service, now) else {
             return Ok(None);
         };
-        if !grant.asks() {
+        // A write refused where it runs -- an unconfirmed destructive DDL or session end, a
+        // connection that no longer takes writes -- is not put to a person first: they
+        // approved a write that then failed, and the agent heard only that it waited.
+        if confirmed(name, arguments).is_err() || connection.accepts_writes().is_err() {
             return Ok(None);
         }
-        // A destructive DDL without its confirm_target is refused where it runs; asking a
-        // person to approve it first only had them approve a write that then failed.
-        if name == "schema_apply_ddl" {
-            let target = arguments
-                .get("target")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let sql = arguments
-                .get("sql")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let risk = classify_raw_sql(sql);
-            if (risk.destructive || risk.data_loss)
-                && arguments.get("confirm_target").and_then(Value::as_str) != Some(target)
-            {
-                return Ok(None);
-            }
+        let target = &audit_target(arguments, &targets);
+        let grant_id = grant.id.to_string();
+        let operation = arguments.get("operation_id").and_then(Value::as_str);
+        // What the person let run without asking runs; the rest is put to them.
+        let operations = operations_of(name, arguments, connection.dialect);
+        if grant.bypasses(&operations) {
+            audit(
+                ledger,
+                service,
+                name,
+                operation,
+                target,
+                "bypass",
+                Some(&grant_id),
+                &format!("ran without asking: {}", operations_words(&operations)),
+                now,
+                None,
+            );
+            return Ok(Some(Clearance::Bypassed));
         }
         let mut approval = Approval::pending(
             &service.profile.name,
@@ -156,6 +187,21 @@ impl DexoMcpServer {
             grant.ask_secs,
         );
         approval.grant = grant.id;
+        // Some of it would have run without asking: the person sees what they are asked
+        // about.
+        let asked: Vec<_> = operations
+            .iter()
+            .copied()
+            .filter(|operation| !grant.bypass.contains(operation))
+            .collect();
+        approval.operations = asked.clone();
+        if !grant.bypass.is_empty() && !asked.is_empty() {
+            approval.statement = format!(
+                "-- asks for: {} (the rest runs without asking)\n{}",
+                operations_words(&asked),
+                approval.statement
+            );
+        }
         // A request cannot outlive the grant that would run it.
         approval.deadline = approval.deadline.min(grant.expires_at);
         let waits = approval.deadline - approval.created_at;
@@ -168,12 +214,6 @@ impl DexoMcpServer {
             id: approval.id,
         };
         let mut beat = now;
-        let target = arguments
-            .get("target")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let grant_id = grant.id.to_string();
-        let operation = arguments.get("operation_id").and_then(Value::as_str);
         audit(
             ledger,
             service,
@@ -230,7 +270,7 @@ impl DexoMcpServer {
                         now,
                         None,
                     );
-                    return Ok(Some(approval.id));
+                    return Ok(Some(Clearance::Approved(approval.id)));
                 }
                 ApprovalDecision::Pending if now < approval.deadline => continue,
                 // Past the deadline it is settled as expired -- unless a person decided
@@ -269,6 +309,308 @@ impl DexoMcpServer {
     }
 }
 
+/// A destructive DDL needs `confirm_target` equal to `target`, typed by the client.
+fn ddl_confirmed(arguments: &Map<String, Value>) -> Result<(), AppError> {
+    let target = arguments
+        .get("target")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let sql = arguments
+        .get("sql")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let risk = classify_raw_sql(sql);
+    if (risk.destructive || risk.data_loss)
+        && arguments.get("confirm_target").and_then(Value::as_str) != Some(target)
+    {
+        return Err(AppError::new(
+            ErrorCategory::Permission,
+            format!("type {target} as confirm_target to confirm"),
+        ));
+    }
+    Ok(())
+}
+
+/// Ending a session needs `confirm_target` equal to `session_id`.
+fn session_confirmed(arguments: &Map<String, Value>) -> Result<(), AppError> {
+    let session = arguments
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if arguments.get("confirm_target").and_then(Value::as_str) != Some(session) {
+        return Err(AppError::new(
+            ErrorCategory::Permission,
+            format!("type {session} as confirm_target to confirm"),
+        ));
+    }
+    Ok(())
+}
+
+/// What a write must carry before anyone is asked about it.
+fn confirmed(name: &str, arguments: &Map<String, Value>) -> Result<(), AppError> {
+    match name {
+        "schema_apply_ddl" => ddl_confirmed(arguments),
+        "admin_terminate_session" => session_confirmed(arguments),
+        _ => Ok(()),
+    }
+}
+
+/// The most a script file may hold.
+const MAX_SCRIPT_FILE_BYTES: u64 = 1024 * 1024;
+
+/// The most a data file to import may hold.
+const MAX_IMPORT_FILE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Why a write may run: a person approved its request, or its write access lets its
+/// operations run without asking.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Clearance {
+    Approved(uuid::Uuid),
+    Bypassed,
+}
+
+/// A script given as `file` becomes its `sql`, read once: what the person approves, and
+/// what an operation id is held to, is what runs, not the file as it is by then.
+fn take_script_file(arguments: &mut Map<String, Value>) -> Result<(), AppError> {
+    let invalid = |why: &str| AppError::new(ErrorCategory::Configuration, why);
+    let sql = arguments.get("sql").and_then(Value::as_str);
+    let file = arguments.get("file").and_then(Value::as_str);
+    match (sql, file) {
+        (Some(_), Some(_)) => Err(invalid("pass sql or file, not both")),
+        (None, None) => Err(invalid(
+            "pass sql, or file: a .sql file in the project folder",
+        )),
+        (Some(_), None) => Ok(()),
+        (None, Some(file)) => {
+            let places = dexo_app::mcp::clients::Places::discover()?;
+            let script = read_script(&places.project, &places.home, file)?;
+            arguments.insert("sql".into(), Value::String(script));
+            Ok(())
+        }
+    }
+}
+
+/// A `.sql` file inside the project folder, as text.
+fn read_script(
+    project: &std::path::Path,
+    home: &std::path::Path,
+    file: &str,
+) -> Result<String, AppError> {
+    let bytes = read_project_file(project, home, file, &["sql"], MAX_SCRIPT_FILE_BYTES)?;
+    String::from_utf8(bytes).map_err(|_| {
+        AppError::new(
+            ErrorCategory::Configuration,
+            format!("{file} is not UTF-8 text"),
+        )
+    })
+}
+
+/// The format a data file is read as: `format` when given, else its extension's.
+fn import_format(
+    file: &str,
+    format: Option<&str>,
+) -> Result<dexo_app::transfer::TransferFormat, AppError> {
+    use dexo_app::transfer::TransferFormat;
+    let named = format.map(str::to_ascii_lowercase).or_else(|| {
+        std::path::Path::new(file)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+    });
+    match named.as_deref() {
+        Some("csv") => Ok(TransferFormat::Csv),
+        Some("tsv") => Ok(TransferFormat::Tsv),
+        Some("json") => Ok(TransferFormat::Json),
+        Some("jsonl" | "ndjson") => Ok(TransferFormat::Jsonl),
+        _ => Err(AppError::new(
+            ErrorCategory::Configuration,
+            format!("{file}: name its format -- csv, tsv, json or jsonl"),
+        )),
+    }
+}
+
+/// A file named `file` inside the folder the server was started in -- the project an
+/// agent works in -- of one of `extensions`, at most `max` bytes, so what a file's errors
+/// report is no way to read the rest of the disk. A server started in `/` or the home
+/// folder has no project folder to read from.
+fn read_project_file(
+    project: &std::path::Path,
+    home: &std::path::Path,
+    file: &str,
+    extensions: &[&str],
+    max: u64,
+) -> Result<Vec<u8>, AppError> {
+    let invalid = |why: String| AppError::new(ErrorCategory::Configuration, why);
+    let kinds = extensions
+        .iter()
+        .map(|extension| format!(".{extension}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let refused = || {
+        invalid(format!(
+            "{file} is not a {kinds} file in the project folder {}",
+            project.display()
+        ))
+    };
+    let root = std::fs::canonicalize(project).map_err(|_| refused())?;
+    if root.parent().is_none() || std::fs::canonicalize(home).is_ok_and(|home| home == root) {
+        return Err(invalid(format!(
+            "the server was started in {}, not in a project folder: pass the statements as sql",
+            root.display()
+        )));
+    }
+    // Resolved first, links and `..` included, so the checks are on the file that is read.
+    let real = std::fs::canonicalize(root.join(file)).map_err(|_| refused())?;
+    let allowed = real
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extensions
+                .iter()
+                .any(|allowed| extension.eq_ignore_ascii_case(allowed))
+        });
+    if !real.starts_with(&root) || !allowed || !real.is_file() {
+        return Err(refused());
+    }
+    let size = std::fs::metadata(&real).map_err(|_| refused())?.len();
+    if size > max {
+        return Err(invalid(format!(
+            "{file} holds {size} bytes; it may hold {} at most",
+            if max >= 1024 * 1024 {
+                format!("{} MiB", max / (1024 * 1024))
+            } else {
+                format!("{max} bytes")
+            }
+        )));
+    }
+    std::fs::read(&real)
+        .map_err(|error| AppError::new(ErrorCategory::Storage, format!("{file}: {error}")))
+}
+
+/// The file an import names, read once to be shown and approved: its hash, its rows'
+/// count and columns, and a summary for the person deciding. Run, it is read again, and
+/// refused if it is not the file that was approved.
+fn take_import_file(
+    arguments: &mut Map<String, Value>,
+    places: &dexo_app::mcp::clients::Places,
+) -> Result<(), AppError> {
+    let file = arguments
+        .get("file")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let target = arguments
+        .get("target")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let format = import_format(&file, arguments.get("format").and_then(Value::as_str))?;
+    let bytes = read_project_file(
+        &places.project,
+        &places.home,
+        &file,
+        &["csv", "tsv", "json", "jsonl", "ndjson"],
+        MAX_IMPORT_FILE_BYTES,
+    )?;
+    let decoded = dexo_app::transfer::decode_bytes(&bytes, format)
+        .map_err(|error| AppError::new(ErrorCategory::Configuration, format!("{file}: {error}")))?;
+    let preview: Vec<String> = decoded
+        .rows
+        .iter()
+        .take(3)
+        .map(|(_, values)| {
+            values
+                .iter()
+                .map(dexo_app::data::display_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .collect();
+    let summary = format!(
+        "-- import {file} into {target}: {} rows, as {}\n-- columns: {}\n{}",
+        decoded.rows.len(),
+        format.name(),
+        decoded.columns.join(", "),
+        preview
+            .iter()
+            .map(|row| format!("-- {row}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    arguments.insert(
+        "sha256".into(),
+        Value::String(dexo_app::mcp::operation::content_hash(&bytes)),
+    );
+    arguments.insert("rows".into(), Value::from(decoded.rows.len()));
+    arguments.insert("summary".into(), Value::String(summary));
+    Ok(())
+}
+
+/// The file an approved import named, read again: refused when it is not the one the
+/// person approved.
+fn approved_import(
+    arguments: &Value,
+    places: &dexo_app::mcp::clients::Places,
+) -> Result<
+    (
+        dexo_app::transfer::DecodedFile,
+        Vec<dexo_app::transfer::ColumnMapping>,
+    ),
+    AppError,
+> {
+    let invalid = |why: String| AppError::new(ErrorCategory::Configuration, why);
+    let file = arguments
+        .get("file")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let format = import_format(file, arguments.get("format").and_then(Value::as_str))?;
+    let bytes = read_project_file(
+        &places.project,
+        &places.home,
+        file,
+        &["csv", "tsv", "json", "jsonl", "ndjson"],
+        MAX_IMPORT_FILE_BYTES,
+    )?;
+    if arguments.get("sha256").and_then(Value::as_str)
+        != Some(dexo_app::mcp::operation::content_hash(&bytes).as_str())
+    {
+        return Err(AppError::new(
+            ErrorCategory::Conflict,
+            format!(
+                "{file} changed after it was approved; call again to have it approved as it is"
+            ),
+        ));
+    }
+    let decoded = dexo_app::transfer::decode_bytes(&bytes, format)
+        .map_err(|error| invalid(format!("{file}: {error}")))?;
+    let mapping: Vec<String> = arguments
+        .get("mapping")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mapping = dexo_app::transfer::parse_mapping(&mapping).map_err(invalid)?;
+    Ok((decoded, mapping))
+}
+
+/// What the audit names a write by: its `target`, or for a script that gave none, the
+/// tables it touches.
+fn audit_target(arguments: &Map<String, Value>, targets: &[ObjectRef]) -> String {
+    match arguments.get("target").and_then(Value::as_str) {
+        Some(target) if !target.is_empty() => target.to_string(),
+        _ => targets
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+}
+
 /// The tables a write touches: those its SQL or DDL names, or the one it targets.
 fn write_targets(
     service: &McpService,
@@ -291,8 +633,8 @@ fn write_targets(
     }
 }
 
-/// The grant that lets a write through: one that does not ask first, so an asking grant
-/// makes a person decide only when nothing else covers the write.
+/// The grant that covers a write: the profile's on that connection, listing the tool,
+/// reaching every table the write touches.
 fn covering_grant(
     grants: &[Grant],
     name: &str,
@@ -303,21 +645,17 @@ fn covering_grant(
 ) -> Option<Grant> {
     let policy = service.policy();
     let covers = |grant: &&Grant| {
-        targets
-            .iter()
-            .all(|target| grant.authorizes(name, &connection.name, target, &policy, now))
+        connection.opens(grant).is_ok()
+            && targets
+                .iter()
+                .all(|target| grant.authorizes(name, &connection.name, target, &policy, now))
     };
-    grants
-        .iter()
-        .filter(covers)
-        .find(|grant| !grant.asks())
-        .or_else(|| grants.iter().find(covers))
-        .cloned()
+    grants.iter().find(covers).cloned()
 }
 
 #[tool_router(router = write_tools, vis = "pub(crate)")]
 impl DexoMcpServer {
-    /// Insert one row. Appears only while a data_write grant covering `target` is active; one successful call spends the grant.
+    /// Insert one row. Appears while a person has let this profile change rows on a connection; each call waits for their approval on Dexo's Agents screen, unless they let it run without asking.
     #[tool(annotations(read_only_hint = false, destructive_hint = false))]
     async fn data_insert(
         &self,
@@ -328,7 +666,18 @@ impl DexoMcpServer {
             .await
     }
 
-    /// Update the one row named by `identity`. Appears only while a data_write grant covering `target` is active.
+    /// Load a CSV, TSV, JSON or JSON Lines file from the project folder into one table, as one transaction: every row, or at the first bad one none of them, said by its line. Appears while a person has let this profile change rows; asked to approve, the person sees the file's row count, columns and first rows, and the import runs only the file they approved.
+    #[tool(annotations(read_only_hint = false, destructive_hint = false))]
+    async fn data_import(
+        &self,
+        Parameters(input): Parameters<DataImportInput>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        self.write("data_import", input.connection.clone(), &input, cancel)
+            .await
+    }
+
+    /// Update the one row named by `identity`. Appears while a person has let this profile change rows; each call waits for their approval unless they let it run without asking.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
     async fn data_update(
         &self,
@@ -339,7 +688,7 @@ impl DexoMcpServer {
             .await
     }
 
-    /// Delete the one row named by `identity`. Appears only while a data_write grant covering `target` is active.
+    /// Delete the one row named by `identity`. Appears while a person has let this profile change rows; each call waits for their approval unless they let it run without asking.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
     async fn data_delete(
         &self,
@@ -350,7 +699,7 @@ impl DexoMcpServer {
             .await
     }
 
-    /// Run one INSERT, UPDATE or DELETE. Every table it touches must be inside the grant; needs the profile rule `--allow-tool data_execute_sql`.
+    /// Run a script of INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements as one transaction -- a whole seed in one call, all of it or none of it. Appears while a person has let this profile change rows; every table it touches must be one the profile sees, and the call waits for one approval of the whole script, unless they let all of it run without asking.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
     async fn data_execute_sql(
         &self,
@@ -361,7 +710,7 @@ impl DexoMcpServer {
             .await
     }
 
-    /// Apply one DDL statement. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.
+    /// Apply one DDL statement. Appears while a person has let this profile change the schema; each call waits for their approval unless they let it run without asking. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
     async fn schema_apply_ddl(
         &self,
@@ -372,7 +721,7 @@ impl DexoMcpServer {
             .await
     }
 
-    /// Cancel the running query of one server session. Needs an admin grant for this connection.
+    /// Cancel the running query of one server session. Appears while a person has let this profile end sessions on this connection; each call waits for their approval unless they let it run without asking.
     #[tool(annotations(read_only_hint = false, destructive_hint = false))]
     async fn admin_cancel_query(
         &self,
@@ -388,7 +737,7 @@ impl DexoMcpServer {
         .await
     }
 
-    /// Terminate one server session. Needs an admin grant for this connection and `confirm_target` equal to `session_id`.
+    /// Terminate one server session. Appears while a person has let this profile end sessions on this connection; each call waits for their approval unless they let it run without asking, and needs `confirm_target` equal to `session_id`.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
     async fn admin_terminate_session(
         &self,
@@ -405,31 +754,6 @@ impl DexoMcpServer {
     }
 }
 
-/// The write tools an active grant publishes, for the connections that accept writes: a
-/// grant on a connection that became production, or read-only, stays in the ledger but
-/// opens nothing, and the tool list no longer offers what `list_connections` says it
-/// cannot do.
-pub fn write_tool_names(
-    ledger: &dyn GrantLedger,
-    profile: &str,
-    now: i64,
-    accepts_writes: &dyn Fn(&str) -> bool,
-) -> Vec<String> {
-    let mut tools = Vec::new();
-    for grant in ledger
-        .active_grants(profile, now)
-        .into_iter()
-        .filter(|grant| accepts_writes(&grant.connection))
-    {
-        for tool in grant.tools {
-            if WRITE_TOOLS.contains(&tool.as_str()) && !tools.contains(&tool) {
-                tools.push(tool);
-            }
-        }
-    }
-    tools
-}
-
 pub fn is_grant_management(name: &str) -> bool {
     matches!(name, "grant_create" | "grant_revoke" | "grant_list")
 }
@@ -443,7 +767,7 @@ pub async fn call_write_tool(
     name: &str,
     arguments: Map<String, Value>,
     now: i64,
-    approved: Option<uuid::Uuid>,
+    approved: Option<Clearance>,
 ) -> Result<String, AppError> {
     if is_grant_management(name) {
         audit(
@@ -475,10 +799,7 @@ pub async fn call_write_tool(
         .get("operation_id")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::new(ErrorCategory::Configuration, "operation_id is required"))?;
-    let target_name = arguments
-        .get("target")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let mut target_name = audit_target(&arguments, &[]);
     if let Some(existing) = ledger.lookup_operation(&service.profile.name, session_id, operation_id)
     {
         let replayed =
@@ -488,7 +809,7 @@ pub async fn call_write_tool(
             service,
             name,
             Some(operation_id),
-            target_name,
+            &target_name,
             "replay",
             None,
             &replayed.result,
@@ -498,6 +819,7 @@ pub async fn call_write_tool(
         return Ok(replayed.result);
     }
     let targets = write_targets(service, connection, name, &arguments)?;
+    target_name = audit_target(&arguments, &targets);
     let grants = ledger.active_grants(&service.profile.name, now);
     let grant =
         covering_grant(&grants, name, connection, &targets, service, now).ok_or_else(|| {
@@ -506,7 +828,7 @@ pub async fn call_write_tool(
                 service,
                 name,
                 Some(operation_id),
-                target_name,
+                &target_name,
                 "deny",
                 None,
                 "not found",
@@ -515,15 +837,49 @@ pub async fn call_write_tool(
             );
             AppError::new(ErrorCategory::McpPolicy, "not found")
         })?;
-    // An asking grant lets a write through only once a person approved it, before it
-    // was taken to the connection.
-    if grant.asks() && approved.is_none() {
+    confirmed(name, &arguments)?;
+    // An approval stands only for the grant it was given under, and only while it is still
+    // approved: a revoke between the answer and the run denies it. A write let through
+    // without asking is let through only while the access still lets it.
+    let stands = match approved {
+        Some(Clearance::Approved(id)) => ledger.approval(id).is_some_and(|approval| {
+            approval.decision == ApprovalDecision::Approved && approval.grant == grant.id
+        }),
+        Some(Clearance::Bypassed) => {
+            grant.bypasses(&operations_of(name, &arguments, connection.dialect))
+        }
+        None => true,
+    };
+    if !stands {
+        let why = match approved {
+            Some(Clearance::Bypassed) => {
+                "the write access no longer lets this run without asking: call again to ask"
+            }
+            _ => "the approval for this write no longer stands",
+        };
         audit(
             ledger,
             service,
             name,
             Some(operation_id),
-            target_name,
+            &target_name,
+            "deny",
+            Some(&grant.id.to_string()),
+            why,
+            now,
+            None,
+        );
+        return Err(AppError::new(ErrorCategory::McpPolicy, why));
+    }
+    // A write goes through only once a person approved it, before it was taken to the
+    // connection.
+    if approved.is_none() {
+        audit(
+            ledger,
+            service,
+            name,
+            Some(operation_id),
+            &target_name,
             "deny",
             Some(&grant.id.to_string()),
             "waits for approval",
@@ -552,7 +908,7 @@ pub async fn call_write_tool(
             service,
             name,
             Some(operation_id),
-            target_name,
+            &target_name,
             "replay",
             Some(&grant.id.to_string()),
             &reserved.result,
@@ -560,18 +916,6 @@ pub async fn call_write_tool(
             None,
         );
         return Ok(reserved.result);
-    }
-    if ledger.consume(grant.id, now).is_err() {
-        let result = format_outcome(OperationState::Failed, SideEffect::RolledBack, "revoked");
-        ledger.finish_operation(
-            &service.profile.name,
-            session_id,
-            operation_id,
-            OperationState::Failed,
-            SideEffect::RolledBack,
-            result.clone(),
-        )?;
-        return Err(AppError::new(ErrorCategory::McpPolicy, "not found"));
     }
     if ledger.is_revoked(grant.id) {
         let result = format_outcome(OperationState::Failed, SideEffect::RolledBack, "revoked");
@@ -611,7 +955,7 @@ pub async fn call_write_tool(
         service,
         name,
         Some(operation_id),
-        target_name,
+        &target_name,
         "allow",
         Some(&grant.id.to_string()),
         &result,
@@ -679,7 +1023,7 @@ async fn execute(
     value: &Value,
     session: &dyn Session,
     connection: &McpConnection,
-    cancelled: impl Fn() -> bool,
+    cancelled: impl Fn() -> bool + Sync,
 ) -> Result<(SideEffect, String), AppError> {
     match name {
         "data_insert" | "data_update" | "data_delete" => {
@@ -694,12 +1038,45 @@ async fn execute(
                 return Ok((SideEffect::RolledBack, "rolled_back".into()));
             }
             let sql = value.get("sql").and_then(Value::as_str).unwrap_or_default();
-            let affected = service.execute_write(session, connection, sql).await?;
+            let affected = service
+                .execute_script(session, connection, sql, &cancelled)
+                .await?;
+            let rows: u64 = affected.iter().sum();
+            let plural = |count: u64| if count == 1 { "" } else { "s" };
+            Ok((
+                SideEffect::Committed,
+                match affected.len() {
+                    1 => format!("{rows} row{} affected", plural(rows)),
+                    statements => format!(
+                        "{statements} statements in one transaction, {rows} row{} affected ({})",
+                        plural(rows),
+                        affected
+                            .iter()
+                            .map(u64::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                },
+            ))
+        }
+        "data_import" => {
+            if cancelled() {
+                return Ok((SideEffect::RolledBack, "rolled_back".into()));
+            }
+            let places = dexo_app::mcp::clients::Places::discover()?;
+            let (file, mapping) = approved_import(value, &places)?;
+            let target = value
+                .get("target")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let rows = service
+                .import_file(session, connection, target, file, &mapping)
+                .await?;
             Ok((
                 SideEffect::Committed,
                 format!(
-                    "{affected} row{} affected",
-                    if affected == 1 { "" } else { "s" }
+                    "{rows} row{} imported into {target}, in one transaction",
+                    if rows == 1 { "" } else { "s" }
                 ),
             ))
         }
@@ -790,29 +1167,17 @@ async fn apply_mutations(
 }
 
 /// Raw DDL from a client cannot be turned into a structured `SchemaChange`, so the risk
-/// comes from the driver-api classifier and the typed confirmation is required from the
-/// client, never filled in from the target it already sent. MySQL commits DDL implicitly;
-/// that is a property of the connection, not something the client gets to claim.
+/// comes from the driver-api classifier, and `ddl_confirmed` held a destructive one to the
+/// confirmation the client typed, never filled in from the target it already sent. MySQL
+/// commits DDL implicitly; that is a property of the connection, not something the client
+/// gets to claim.
 async fn apply_ddl(
     value: &Value,
     session: &dyn Session,
     connection: &McpConnection,
     cancelled: bool,
 ) -> Result<(SideEffect, String), AppError> {
-    let target = value
-        .get("target")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
     let sql = value.get("sql").and_then(Value::as_str).unwrap_or_default();
-    let risk = classify_raw_sql(sql);
-    if (risk.destructive || risk.data_loss)
-        && value.get("confirm_target").and_then(Value::as_str) != Some(target)
-    {
-        return Err(AppError::new(
-            ErrorCategory::Permission,
-            format!("type {target} as confirm_target to confirm"),
-        ));
-    }
     if cancelled {
         return Ok((SideEffect::RolledBack, "rolled_back".into()));
     }
@@ -865,14 +1230,6 @@ async fn apply_admin(
     );
     if !decision.allowed {
         return Err(AppError::new(ErrorCategory::Permission, "admin denied"));
-    }
-    if name == "admin_terminate_session"
-        && value.get("confirm_target").and_then(Value::as_str) != Some(session_id.as_str())
-    {
-        return Err(AppError::new(
-            ErrorCategory::Permission,
-            format!("type {session_id} to confirm"),
-        ));
     }
     let outcome = session
         .admin()
@@ -941,11 +1298,11 @@ fn cancelled_by_agent() -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use super::{call_write_tool, is_grant_management, write_tool_names};
+    use super::{call_write_tool, is_grant_management};
     use dexo_app::mcp::McpConnection;
     use dexo_app::mcp::McpService;
     use dexo_app::mcp::audit::{SECRET_SENTINEL, contains_secret};
-    use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, GrantCapability};
+    use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, WriteKind};
     use dexo_app::mcp::ledger::{GrantLedger, MemoryGrantLedger};
     use dexo_app::mcp::profile::McpProfile;
     use dexo_app::mcp::selector::{Effect, SelectorRule};
@@ -992,17 +1349,34 @@ mod tests {
         McpService::new(profile())
     }
 
-    fn grant(capability: GrantCapability, tool: &str, selector: &str) -> Grant {
-        Grant::new(
-            &profile(),
-            "local",
-            capability,
-            vec![tool.into()],
-            vec![SelectorRule::parse(Effect::Allow, selector).unwrap()],
+    /// Every write in these tests was approved, under the grant the ledger holds: the wait
+    /// itself is the protocol suite's.
+    fn approved(ledger: &MemoryGrantLedger) -> Option<super::Clearance> {
+        use dexo_app::mcp::approval::{Approval, ApprovalDecision};
+        let Some(grant) = ledger.active_grants("assistant", 0).pop() else {
+            return Some(super::Clearance::Approved(uuid::Uuid::nil()));
+        };
+        let mut approval = Approval::pending(
+            "assistant",
+            &grant.connection,
+            "test",
+            &serde_json::Map::new(),
+            vec![],
             0,
-            DEFAULT_TTL_SECS,
-        )
-        .unwrap()
+            60,
+        );
+        approval.grant = grant.id;
+        ledger.request_approval(&approval).unwrap();
+        assert!(
+            ledger
+                .settle_approval(approval.id, ApprovalDecision::Approved, 0)
+                .unwrap()
+        );
+        Some(super::Clearance::Approved(approval.id))
+    }
+
+    fn grant(kind: WriteKind) -> Grant {
+        grant_on(&profile(), kind)
     }
 
     fn connection(name: &str) -> McpConnection {
@@ -1023,22 +1397,8 @@ mod tests {
         McpService::new(profile)
     }
 
-    fn grant_on(
-        profile: &McpProfile,
-        capability: GrantCapability,
-        tool: &str,
-        selector: &str,
-    ) -> Grant {
-        Grant::new(
-            profile,
-            "local",
-            capability,
-            vec![tool.into()],
-            vec![SelectorRule::parse(Effect::Allow, selector).unwrap()],
-            0,
-            DEFAULT_TTL_SECS,
-        )
-        .unwrap()
+    fn grant_on(profile: &McpProfile, kind: WriteKind) -> Grant {
+        Grant::new(profile, "local", &[kind], 0, DEFAULT_TTL_SECS, 120).unwrap()
     }
 
     async fn call_on(
@@ -1057,7 +1417,7 @@ mod tests {
             tool,
             payload.as_object().cloned().unwrap(),
             0,
-            None,
+            approved(ledger),
         )
         .await
     }
@@ -1073,13 +1433,7 @@ mod tests {
     #[tokio::test]
     async fn same_operation_and_payload_executes_once() {
         let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::DataWrite,
-                "data_insert",
-                "db.public.items",
-            ))
-            .unwrap();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
         let session = FakeSession::default().with_keys(vec![dexo_driver_api::ColumnKeyInfo {
             name: "id".into(),
             primary_key: true,
@@ -1113,15 +1467,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn writes_without_an_open_connection_fail_before_the_grant_is_spent() {
+    async fn writes_without_an_open_connection_fail_and_keep_the_grant() {
         let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::DataWrite,
-                "data_insert",
-                "db.public.items",
-            ))
-            .unwrap();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
         let error = call_write_tool(
             &service(),
             &ledger,
@@ -1133,7 +1481,7 @@ mod tests {
                 .cloned()
                 .unwrap(),
             0,
-            None,
+            approved(&ledger),
         )
         .await
         .unwrap_err();
@@ -1144,13 +1492,7 @@ mod tests {
     #[tokio::test]
     async fn a_grant_cannot_reach_what_the_profile_denies() {
         let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::DataWrite,
-                "data_insert",
-                "db.public.*",
-            ))
-            .unwrap();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
         let error = call(
             &ledger,
             "data_insert",
@@ -1164,13 +1506,7 @@ mod tests {
     #[tokio::test]
     async fn a_grant_is_bound_to_its_connection() {
         let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::DataWrite,
-                "data_insert",
-                "db.public.items",
-            ))
-            .unwrap();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
         let error = call_on(
             &ledger,
             &FakeSession::default(),
@@ -1187,20 +1523,17 @@ mod tests {
     fn catalog_has_no_grant_management_tools() {
         assert!(!is_grant_management("data_insert"));
         assert!(is_grant_management("grant_create"));
-        let ledger = MemoryGrantLedger::default();
-        assert!(write_tool_names(&ledger, "assistant", 0, &|_| true).is_empty());
+        assert!(
+            dexo_app::mcp::published_tools(&profile(), &[], &|_| true)
+                .iter()
+                .all(|tool| !is_grant_management(tool))
+        );
     }
 
     #[tokio::test]
     async fn data_write_cannot_ddl_and_ddl_cannot_terminate() {
         let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::DataWrite,
-                "data_insert",
-                "db.public.items",
-            ))
-            .unwrap();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
         let denied = call(
             &ledger,
             "schema_apply_ddl",
@@ -1209,13 +1542,7 @@ mod tests {
         .await
         .unwrap_err();
         assert!(denied.to_string().contains("not found"));
-        ledger
-            .insert_grant(grant(
-                GrantCapability::Ddl,
-                "schema_apply_ddl",
-                "db.public.items",
-            ))
-            .unwrap();
+        ledger.insert_grant(grant(WriteKind::Schema)).unwrap();
         let denied = call(
             &ledger,
             "admin_terminate_session",
@@ -1229,7 +1556,7 @@ mod tests {
     #[tokio::test]
     async fn revoke_before_dispatch_hides_grant() {
         let ledger = MemoryGrantLedger::default();
-        let grant = grant(GrantCapability::DataWrite, "data_insert", "db.public.items");
+        let grant = grant(WriteKind::Rows);
         let id = grant.id;
         ledger.insert_grant(grant).unwrap();
         ledger.revoke(id).unwrap();
@@ -1246,13 +1573,7 @@ mod tests {
     #[tokio::test]
     async fn audit_omits_results_and_secret_sentinel() {
         let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::DataWrite,
-                "data_insert",
-                "db.public.items",
-            ))
-            .unwrap();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
         let _ = call(
             &ledger,
             "data_insert",
@@ -1278,19 +1599,14 @@ mod tests {
 
     #[tokio::test]
     async fn data_execute_sql_rejects_ddl() {
-        let mut profile = profile();
-        profile.tool_rules.push(dexo_app::mcp::profile::ToolRule {
-            tool: "data_execute_sql".into(),
-            allowed: true,
-        });
+        let profile = profile();
         let grant = Grant::new(
             &profile,
             "local",
-            GrantCapability::DataWrite,
-            vec!["data_execute_sql".into()],
-            vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
+            &[WriteKind::Rows],
             0,
             DEFAULT_TTL_SECS,
+            120,
         )
         .unwrap();
         let ledger = MemoryGrantLedger::default();
@@ -1313,7 +1629,7 @@ mod tests {
             .cloned()
             .unwrap(),
             0,
-            None,
+            approved(&ledger),
         )
         .await
         .unwrap_err();
@@ -1328,12 +1644,7 @@ mod tests {
         let service = service_with("db.*");
         let ledger = MemoryGrantLedger::default();
         ledger
-            .insert_grant(grant_on(
-                &service.profile,
-                GrantCapability::Ddl,
-                "schema_apply_ddl",
-                "db.items",
-            ))
+            .insert_grant(grant_on(&service.profile, WriteKind::Schema))
             .unwrap();
         let session = FakeSession::default();
         let mysql = McpConnection {
@@ -1357,7 +1668,7 @@ mod tests {
             .cloned()
             .unwrap(),
             0,
-            None,
+            approved(&ledger),
         )
         .await
         .unwrap();
@@ -1368,16 +1679,261 @@ mod tests {
         assert!(session.log().contains(&"ddl DROP TABLE items".to_string()));
     }
 
+    /// A destructive DDL without its confirm_target is told to type the target, before
+    /// anyone is asked to approve it: told it waits for approval, the agent retried for ever.
+    #[tokio::test]
+    async fn an_unconfirmed_destructive_ddl_is_told_what_to_type_first() {
+        let ledger = MemoryGrantLedger::default();
+        ledger.insert_grant(grant(WriteKind::Schema)).unwrap();
+        let connection = connection("local");
+        let session = FakeSession::default();
+        let error = call_write_tool(
+            &service(),
+            &ledger,
+            Some((&connection, &session as &dyn dexo_driver_api::Session)),
+            "s",
+            "schema_apply_ddl",
+            json!({"operation_id":"op-d","target":"db.public.items","sql":"DROP TABLE items"})
+                .as_object()
+                .cloned()
+                .unwrap(),
+            0,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("type db.public.items as confirm_target"),
+            "{error}"
+        );
+    }
+
+    /// An approval stands only while it is approved, and only for the grant it was given
+    /// under: one from another grant does not carry a write.
+    #[tokio::test]
+    async fn an_approval_from_another_grant_does_not_carry_a_write() {
+        let ledger = MemoryGrantLedger::default();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
+        let elsewhere = approved(&ledger);
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
+        let connection = connection("local");
+        let session = FakeSession::default();
+        let error = call_write_tool(
+            &service(),
+            &ledger,
+            Some((&connection, &session as &dyn dexo_driver_api::Session)),
+            "s",
+            "data_insert",
+            json!({"operation_id":"op-a","target":"db.public.items","values":{"id":1}})
+                .as_object()
+                .cloned()
+                .unwrap(),
+            0,
+            elsewhere,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("no longer stands"), "{error}");
+        assert!(session.log().is_empty());
+    }
+
+    /// A retry whose JSON keys arrive in another order is the same write.
+    #[test]
+    fn the_payload_hash_ignores_key_order() {
+        use dexo_app::mcp::operation::payload_hash;
+        assert_eq!(
+            payload_hash(&json!({"values":{"id":7,"name":"x"},"target":"t"})),
+            payload_hash(&json!({"target":"t","values":{"name":"x","id":7}}))
+        );
+    }
+
+    /// A script file is read from the project folder only: not through `..`, not through
+    /// a link out of it, not one that is not .sql, and not at all when the server runs in
+    /// the home folder, where everything would be "the project".
+    #[test]
+    fn a_script_file_comes_from_the_project_folder_only() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("shop");
+        std::fs::create_dir_all(project.join("db")).unwrap();
+        std::fs::write(project.join("db/seed.sql"), "insert into items values (1);").unwrap();
+        std::fs::write(project.join("notes.txt"), "not sql").unwrap();
+        std::fs::write(home.path().join("secret.sql"), "select 1").unwrap();
+        let read = |file: &str| super::read_script(&project, home.path(), file);
+        assert_eq!(
+            read("db/seed.sql").unwrap(),
+            "insert into items values (1);"
+        );
+        for file in ["../secret.sql", "notes.txt", "db/missing.sql", "db"] {
+            let error = read(file).unwrap_err().to_string();
+            assert!(
+                error.contains("is not a .sql file in the project folder"),
+                "{file}: {error}"
+            );
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(home.path().join("secret.sql"), project.join("link.sql"))
+                .unwrap();
+            assert!(read("link.sql").is_err());
+        }
+        std::fs::write(project.join("big.sql"), vec![b' '; 1024 * 1024 + 1]).unwrap();
+        assert!(
+            read("big.sql")
+                .unwrap_err()
+                .to_string()
+                .contains("1 MiB at most")
+        );
+        let at_home = super::read_script(home.path(), home.path(), "secret.sql");
+        assert!(
+            at_home
+                .unwrap_err()
+                .to_string()
+                .contains("not in a project folder")
+        );
+        // One of the two, never both, never neither.
+        for arguments in [
+            json!({"sql": "delete from items", "file": "db/seed.sql"}),
+            json!({"sql": null, "file": null}),
+        ] {
+            let mut arguments = arguments.as_object().cloned().unwrap();
+            assert!(
+                super::take_script_file(&mut arguments).is_err(),
+                "{arguments:?}"
+            );
+        }
+    }
+
+    /// An import reads its file from the project folder once, shows the person what it
+    /// holds, and runs only that file: one changed after the approval is refused.
+    #[test]
+    fn an_import_runs_only_the_file_that_was_approved() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("shop");
+        std::fs::create_dir_all(project.join("data")).unwrap();
+        let csv = project.join("data/customers.csv");
+        std::fs::write(&csv, "id,email\n1,ana@x.io\n2,bo@x.io\n").unwrap();
+        let places = dexo_app::mcp::clients::Places {
+            project: project.clone(),
+            home: home.path().to_path_buf(),
+            config: home.path().join(".config"),
+        };
+        let mut arguments =
+            json!({"operation_id": "i-1", "target": "customers", "file": "data/customers.csv"})
+                .as_object()
+                .cloned()
+                .unwrap();
+        super::take_import_file(&mut arguments, &places).unwrap();
+        assert_eq!(arguments["rows"], json!(2));
+        let summary = arguments["summary"].as_str().unwrap();
+        assert!(
+            summary.starts_with("-- import data/customers.csv into customers: 2 rows, as CSV"),
+            "{summary}"
+        );
+        assert!(summary.contains("-- columns: id, email") && summary.contains("-- 1, ana@x.io"));
+        let value = serde_json::Value::Object(arguments.clone());
+        let (file, mapping) = super::approved_import(&value, &places).unwrap();
+        assert_eq!(file.columns, ["id", "email"]);
+        assert_eq!(file.rows.len(), 2);
+        assert!(mapping.is_empty());
+        std::fs::write(&csv, "id,email\n1,ana@x.io\n2,eve@x.io\n").unwrap();
+        let error = super::approved_import(&value, &places).unwrap_err();
+        assert!(
+            error.to_string().contains("changed after it was approved"),
+            "{error}"
+        );
+        // Only a data file of the project folder.
+        let mut outside = json!({"target": "t", "file": "../secret.csv"})
+            .as_object()
+            .cloned()
+            .unwrap();
+        assert!(super::take_import_file(&mut outside, &places).is_err());
+        let mut script = json!({"target": "t", "file": "seed.sql"})
+            .as_object()
+            .cloned()
+            .unwrap();
+        assert!(super::take_import_file(&mut script, &places).is_err());
+    }
+
+    /// A seed is one call: every statement in one transaction, committed once.
+    #[tokio::test]
+    async fn a_script_runs_as_one_transaction() {
+        let ledger = MemoryGrantLedger::default();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
+        let session = FakeSession::default();
+        let result = call_on(
+            &ledger,
+            &session,
+            "local",
+            "data_execute_sql",
+            json!({"operation_id":"op-seed","sql":"insert into items values (1);\ninsert into items values (2);\ntruncate orders"}),
+        )
+        .await
+        .unwrap();
+        assert!(
+            result.contains("3 statements in one transaction"),
+            "{result}"
+        );
+        assert_eq!(
+            session.log(),
+            [
+                "begin ReadWrite",
+                "execute insert into items values (1)",
+                "execute insert into items values (2)",
+                "execute truncate orders",
+                "commit"
+            ]
+        );
+    }
+
+    /// One statement that fails rolls back every one before it: the seed is all there or
+    /// not at all, and the agent is told which statement it was.
+    #[tokio::test]
+    async fn a_failed_statement_rolls_the_whole_script_back() {
+        let ledger = MemoryGrantLedger::default();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
+        let session = FakeSession::default().failing_on("values (2)");
+        let error = call_on(
+            &ledger,
+            &session,
+            "local",
+            "data_execute_sql",
+            json!({"operation_id":"op-half","sql":"insert into items values (1); insert into items values (2); insert into items values (3)"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().starts_with("statement 2 of 3:")
+                && error.to_string().ends_with("nothing was written"),
+            "{error}"
+        );
+        let log = session.log();
+        assert_eq!(log.last().map(String::as_str), Some("rollback"), "{log:?}");
+        assert!(!log.iter().any(|entry| entry == "commit"), "{log:?}");
+        assert!(
+            !log.iter().any(|entry| entry.contains("values (3)")),
+            "{log:?}"
+        );
+        // One statement on a hidden table hides the whole script, before anything runs.
+        let hidden = FakeSession::default();
+        let error = call_on(
+            &ledger,
+            &hidden,
+            "local",
+            "data_execute_sql",
+            json!({"operation_id":"op-hidden","sql":"insert into items values (1); delete from secrets"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "not found");
+        assert!(hidden.log().is_empty());
+    }
+
     #[tokio::test]
     async fn destructive_ddl_needs_the_target_typed_by_the_client() {
         let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::Ddl,
-                "schema_apply_ddl",
-                "db.public.items",
-            ))
-            .unwrap();
+        ledger.insert_grant(grant(WriteKind::Schema)).unwrap();
         let error = call(
             &ledger,
             "schema_apply_ddl",
@@ -1392,22 +1948,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sql_writes_must_stay_inside_the_grant() {
+    async fn sql_writes_must_stay_inside_what_the_profile_sees() {
         let mut profile = profile();
-        profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-        profile.tool_rules.push(dexo_app::mcp::profile::ToolRule {
-            tool: "data_execute_sql".into(),
-            allowed: true,
-        });
+        profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()];
         let service = McpService::new(profile.clone());
         let ledger = MemoryGrantLedger::default();
         ledger
-            .insert_grant(grant_on(
-                &profile,
-                GrantCapability::DataWrite,
-                "data_execute_sql",
-                "db.public.items",
-            ))
+            .insert_grant(grant_on(&profile, WriteKind::Rows))
             .unwrap();
         let session = FakeSession::default();
         let error = call_write_tool(
@@ -1428,7 +1975,7 @@ mod tests {
             .cloned()
             .unwrap(),
             0,
-            None,
+            approved(&ledger),
         )
         .await
         .unwrap_err();
@@ -1437,39 +1984,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn production_connections_refuse_writes_and_keep_the_grant() {
+    async fn production_takes_writes_only_through_access_confirmed_for_it() {
         let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::DataWrite,
-                "data_insert",
-                "db.public.items",
-            ))
-            .unwrap();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
         let production = McpConnection {
             environment: dexo_app::Environment::Production,
             ..connection("local")
         };
+        let session = FakeSession::default();
+        let insert = |operation: &str| {
+            json!({"operation_id": operation, "sql": "insert into items values (1)"})
+                .as_object()
+                .cloned()
+                .unwrap()
+        };
+        // Access given before the connection was marked production opens nothing there.
         let error = call_write_tool(
             &service(),
             &ledger,
-            Some((
-                &production,
-                &FakeSession::default() as &dyn dexo_driver_api::Session,
-            )),
+            Some((&production, &session as &dyn dexo_driver_api::Session)),
             "s",
-            "data_insert",
-            json!({"operation_id":"op-p","target":"db.public.items","values":{"id":1}})
-                .as_object()
-                .cloned()
-                .unwrap(),
+            "data_execute_sql",
+            insert("op-p"),
             0,
-            None,
+            approved(&ledger),
         )
         .await
         .unwrap_err();
-        assert!(error.to_string().contains("production"));
+        assert_eq!(error.to_string(), "not found");
+        assert!(session.log().is_empty());
         assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
+        // Access given with its name typed does.
+        let mut confirmed = grant(WriteKind::Rows);
+        confirmed.production = true;
+        ledger.insert_grant(confirmed).unwrap();
+        call_write_tool(
+            &service(),
+            &ledger,
+            Some((&production, &session as &dyn dexo_driver_api::Session)),
+            "s",
+            "data_execute_sql",
+            insert("op-q"),
+            0,
+            approved(&ledger),
+        )
+        .await
+        .unwrap();
+        assert!(
+            session
+                .log()
+                .contains(&"execute insert into items values (1)".to_string())
+        );
     }
 
     fn keyed() -> FakeSession {
@@ -1483,13 +2048,7 @@ mod tests {
     #[tokio::test]
     async fn updates_must_name_the_real_key() {
         let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::DataWrite,
-                "data_update",
-                "db.public.items",
-            ))
-            .unwrap();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
         let session = keyed();
         let wrong = call_on(
             &ledger,
@@ -1507,13 +2066,7 @@ mod tests {
     #[tokio::test]
     async fn keyless_tables_are_not_editable() {
         let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::DataWrite,
-                "data_insert",
-                "db.public.items",
-            ))
-            .unwrap();
+        ledger.insert_grant(grant(WriteKind::Rows)).unwrap();
         let error = call(
             &ledger,
             "data_insert",

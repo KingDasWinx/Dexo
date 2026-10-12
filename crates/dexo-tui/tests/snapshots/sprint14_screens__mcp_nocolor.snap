@@ -2,21 +2,21 @@
 source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 100, 30)"
 ---
- Workbench  Connections [Agents] Server  History   default  no connection  -                        
- 1 Approvals   2 Activity  [3 Profiles]  4 Setup                                                    
+ Workbench  Connections [Agents] Server  History  Plugins   default  no connection  -               
+ 1 Approvals   2 Activity  [3 Profiles]                                                             
 ┌> Profiles (1)──────────────────────────┐┌  assistant─────────────────────────────────────────────┐
-│ [n New]                                ││ [e Enable]  [c Connections.]  [q Read SQL on]          │
-│                                        ││ [g Grant.]  [r Revoke grants]  [x Delete]              │
-│> ○ assistant  1 conn    browse    1 gra││                                                        │
-│                                        ││ State        disabled                                  │
-│                                        ││ Connections  local                                     │
-│                                        ││ Access       browse and describe only                  │
-│                                        ││ Sees         db.public.*                               │
-│                                        ││ Never        db.public.secrets                         │
-│                                        ││ Tools        catalog_search, object_describe           │
-│                                        ││ ── Grants                                              │
-│                                        ││ data_insert on db.public.items (local): one write, then│
-│                                        ││ it is spent, ends in 15 min                            │
+│ [n New]  [R Stop all writes]           ││ [e Enable]  [⏎ Edit]  [x Delete]                       │
+│                                        ││                                                        │
+│> ○ assistant  no agent       disabled  ││ Status        ○ disabled: agents cannot connect        │
+│                                        ││ Reads         tables only: browse, describe, read pages│
+│                                        ││ Sees          everything, except db.public.secrets     │
+│                                        ││                                                        │
+│                                        ││ CONNECTIONS   each write asks you first - w writes - r │
+│                                        ││   local         local        ✎ rows - 15 min left      │
+│                                        ││                                                        │
+│                                        ││ AGENTS   a connect - y copy its command                │
+│                                        ││   none: a connects Claude Code, Codex, Cursor and the r│
+│                                        ││                                                        │
 │                                        ││                                                        │
 │                                        ││                                                        │
 │                                        ││                                                        │
@@ -31,4 +31,4 @@ expression: "render_to_string(&model, 100, 30)"
 │                                        ││                                                        │
 │                                        ││                                                        │
 └────────────────────────────────────────┘└────────────────────────────────────────────────────────┘
-Agents  Up/Down pick  R revoke all  PgUp/PgDn read  1-4 views  Esc back                   Ctrl+P  F1
+Agents  Up/Down pick  Tab its details  Enter edit  w writes  a agent  1-3 views           Ctrl+P  F1

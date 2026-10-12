@@ -296,6 +296,9 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if let Some(prompt) = &model.production_prompt {
         render_production_prompt(frame, model, prompt, hits);
     }
+    if let Some(offer) = &model.plugin_offer {
+        render_plugin_offer(frame, model, offer, hits);
+    }
     if let Some(prompt) = &model.close_prompt {
         render_close_prompt(frame, model, prompt, hits);
     }
@@ -1324,7 +1327,7 @@ pub(crate) fn show_input(
 
 /// [`show_input`] for a value drawn as the stretch of it around the cursor
 /// ([`TextInput::window`]), so a value wider than `line` scrolls with the cursor.
-fn show_windowed_input(
+pub(crate) fn show_windowed_input(
     frame: &mut Frame,
     line: Rect,
     before: &str,
@@ -1341,16 +1344,6 @@ fn show_windowed_input(
     if x < usize::from(line.width) {
         frame.set_cursor_position(ratatui::layout::Position::new(line.x + x as u16, line.y));
     }
-}
-
-/// The focused field of a form, drawn `> label: value` on `line`.
-pub(crate) fn show_form_field(
-    frame: &mut Frame,
-    line: Rect,
-    field: &crate::screens::schema_editor::FormField,
-) {
-    let before = format!("> {}: ", field.label);
-    show_input(frame, line, &before, &field.value, field.secret);
 }
 
 /// Reverses `columns` cells of `line` from its column `from`, as far as the line goes.
@@ -3103,6 +3096,52 @@ fn render_related_picker(
 }
 
 /// "Clear the history of pg-dev?", from the palette, over whatever screen asked.
+fn render_plugin_offer(
+    frame: &mut Frame,
+    model: &Model,
+    offer: &crate::screens::plugins::PluginOffer,
+    hits: &mut HitMap,
+) {
+    use crate::widgets::form::footer_line;
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let (state, question, action, title) = if offer.enable {
+        ("disabled", "Enable it?", "Enable", "Enable plugin?")
+    } else {
+        (
+            "not installed",
+            "Install it from Dexo's signed plugin index?",
+            "Install",
+            "Install plugin?",
+        )
+    };
+    let lines = [
+        format!("{} is a plugin that is {state}.", offer.driver),
+        question.to_string(),
+        String::new(),
+        footer_line(action, offer.focus),
+    ];
+    let width = lines
+        .iter()
+        .map(|line| line.chars().count() as u16 + 4)
+        .max()
+        .unwrap_or(0)
+        .max(40);
+    let popup = centered(area, width, lines.len() as u16 + 2);
+    paint_popup(
+        frame,
+        model,
+        popup,
+        overlay_block(model, title),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    let footer = crate::mouse::line_rect(popup_inner(popup), lines.len() - 1);
+    crate::widgets::form::register_footer(hits, footer, &lines[lines.len() - 1], action);
+}
+
 fn render_clear_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     use crate::widgets::form::footer_line;
     let editor = &model.editor;

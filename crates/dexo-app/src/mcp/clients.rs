@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, ErrorCategory};
+use crate::mcp::profile::McpProfile;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum McpClient {
@@ -37,8 +38,46 @@ pub enum ClientState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SetUp {
     pub config: PathBuf,
-    pub backup: Option<PathBuf>,
-    pub skill: Option<PathBuf>,
+    pub written: Written,
+    /// The skill file, and what writing it came to.
+    pub skill: Option<(PathBuf, Written)>,
+}
+
+/// A client's skill file against the text Dexo writes for its profile now: the text
+/// changes with Dexo and with the profile -- its tools, its reads -- and the file does not.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SkillState {
+    /// No skill file: the client has no place for one, or none was written.
+    #[default]
+    Absent,
+    Current,
+    /// It says something else: written by an older Dexo, for the profile as it was, or
+    /// edited by hand.
+    Outdated,
+}
+
+/// What writing a file came to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Written {
+    /// It already said this.
+    Unchanged,
+    /// A new file.
+    Created,
+    /// Replaced, the old one copied here first.
+    Replaced(PathBuf),
+}
+
+/// `word` as one shell word: quoted when it holds a space or a quote, so a line to paste
+/// runs the program it names.
+pub fn shell_word(word: &str) -> String {
+    if word
+        .chars()
+        .any(|ch| ch.is_whitespace() || ch == '\'' || ch == '"')
+    {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    } else {
+        word.to_string()
+    }
 }
 
 /// Where the user's files are: the project (the current directory) and the home and
@@ -160,7 +199,7 @@ impl McpClient {
 
     /// The client's own command that adds the same server, for those that have one.
     pub fn by_hand(self, command: &str, profile: &str) -> Option<String> {
-        let serve = format!("{command} mcp serve --profile {profile}");
+        let serve = format!("{} mcp serve --profile {profile}", shell_word(command));
         match self {
             Self::ClaudeCode => Some(format!("claude mcp add dexo -- {serve}")),
             Self::Codex => Some(format!("codex mcp add dexo -- {serve}")),
@@ -189,10 +228,10 @@ impl McpClient {
         self,
         places: &Places,
         command: &str,
-        profile: &str,
+        profile: &McpProfile,
         skill: bool,
     ) -> Result<SetUp, AppError> {
-        let args: Vec<String> = ["mcp", "serve", "--profile", profile]
+        let args: Vec<String> = ["mcp", "serve", "--profile", &profile.name]
             .map(String::from)
             .to_vec();
         let config = self.config_path(places);
@@ -203,17 +242,14 @@ impl McpClient {
         let merged = self
             .merged(existing.as_deref(), command, &args)
             .map_err(in_file)?;
-        let backup = write_with_backup(&config, &merged).map_err(in_file)?;
+        let written = write_with_backup(&config, &merged).map_err(in_file)?;
         let skill = match skill.then(|| self.skill_path(places)).flatten() {
-            Some(path) => {
-                write_with_backup(&path, &skill_text(self, profile))?;
-                Some(path)
-            }
+            Some(path) => Some((path, self.refresh_skill(places, profile)?)),
             None => None,
         };
         Ok(SetUp {
             config,
-            backup,
+            written,
             skill,
         })
     }
@@ -243,6 +279,31 @@ impl McpClient {
             Self::Cursor => Some(places.project.join(".cursor/rules/dexo.mdc")),
             Self::ClaudeDesktop | Self::GeminiCli | Self::Windsurf | Self::VsCode => None,
         }
+    }
+
+    /// Its skill file, against what Dexo would write for `profile`.
+    pub fn skill_state(self, places: &Places, profile: &McpProfile) -> SkillState {
+        let Some(path) = self.skill_path(places) else {
+            return SkillState::Absent;
+        };
+        match std::fs::read_to_string(&path) {
+            Err(_) => SkillState::Absent,
+            Ok(text) if text == skill_text(self, profile) => SkillState::Current,
+            Ok(_) => SkillState::Outdated,
+        }
+    }
+
+    /// Writes its skill file for `profile` again, the old one kept beside it.
+    pub fn refresh_skill(self, places: &Places, profile: &McpProfile) -> Result<Written, AppError> {
+        let path = self.skill_path(places).ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Capability,
+                format!("{} has no place for a skill file", self.name()),
+            )
+        })?;
+        write_with_backup(&path, &skill_text(self, profile)).map_err(|error| {
+            AppError::new(error.category(), format!("{}: {error}", path.display()))
+        })
     }
 
     /// `existing` with Dexo's server entry in it, every other key left as it was. A file
@@ -312,6 +373,11 @@ impl McpClient {
             _ => {
                 let value = serde_json::from_str::<serde_json::Value>(contents)
                     .map_err(|error| unparsed(error.to_string()))?;
+                // Setup merges into an object only: anything else is left alone from the
+                // start, not offered as a file to set up and then refused.
+                if !value.is_object() {
+                    return Err(unparsed("its root is not an object".into()));
+                }
                 let key = if self == Self::VsCode {
                     "servers"
                 } else {
@@ -565,7 +631,7 @@ fn set_toml(table: &mut dyn toml_edit::TableLike, key: &str, value: toml_edit::V
 /// symlink is written through, so it stays a link to the file it named; the file keeps
 /// its permissions, since it may hold other servers' keys, and a new one is the user's
 /// alone.
-pub fn write_with_backup(path: &Path, contents: &str) -> Result<Option<PathBuf>, AppError> {
+pub fn write_with_backup(path: &Path, contents: &str) -> Result<Written, AppError> {
     use std::io::Write as _;
     let storage = |error: std::io::Error| AppError::new(ErrorCategory::Storage, error.to_string());
     let path = &match std::fs::canonicalize(path) {
@@ -581,7 +647,7 @@ pub fn write_with_backup(path: &Path, contents: &str) -> Result<Option<PathBuf>,
     }
     let existing = std::fs::metadata(path).ok();
     if std::fs::read(path).is_ok_and(|old| old == contents.as_bytes()) {
-        return Ok(None);
+        return Ok(Written::Unchanged);
     }
     // An earlier backup is never replaced: the first one is the file as it was before
     // Dexo ever touched it.
@@ -617,11 +683,41 @@ pub fn write_with_backup(path: &Path, contents: &str) -> Result<Option<PathBuf>,
         std::fs::set_permissions(&tmp, existing.permissions()).map_err(storage)?;
     }
     std::fs::rename(&tmp, path).map_err(storage)?;
-    Ok(backup)
+    Ok(backup.map_or(Written::Created, Written::Replaced))
 }
 
 /// What an agent should know before it uses Dexo's tools.
-pub fn skill_text(client: McpClient, profile: &str) -> String {
+pub fn skill_text(client: McpClient, profile: &McpProfile) -> String {
+    let tools = crate::mcp::advertised_tools(profile);
+    let has = |tool: &str| tools.contains(&tool);
+    let mut reading = vec![
+        "- `list_connections` names the connections you may use; pass `connection` when there is
+  more than one.",
+        "- `catalog_search` and `catalog_list` find tables and columns; `object_describe` gives a
+  table's columns, keys and the notes people wrote about it -- read the notes, they say
+  what the data means. `object_get_ddl` and `object_relationships` give the rest.",
+    ];
+    if has("schema_overview") {
+        reading.push(
+            "- `schema_overview` gives every table of a schema at once: columns, defaults, keys,
+  foreign keys and row counts.",
+        );
+    }
+    if has("query_execute_read") {
+        reading.push(
+            "- `query_validate` checks a statement first; `query_execute_read` runs reads only, with a
+  row limit; `query_explain` shows a plan, and can try hypothetical indexes on Postgres.",
+        );
+    }
+    reading.push("- `data_read` pages through a table.");
+    if has("schema_diff") {
+        reading.push("- `schema_diff` compares two schema snapshots the person saved.");
+    }
+    if has("admin_list_sessions") {
+        reading.push("- `admin_list_sessions` lists the server's sessions.");
+    }
+    let reading = reading.join("\n");
+    let profile = &profile.name;
     let front = match client {
         McpClient::Cursor => "---\ndescription: Using Dexo's MCP tools on the user's databases\nalwaysApply: false\n---\n".to_string(),
         _ => "---\nname: dexo\ndescription: How to use Dexo's MCP tools on the user's databases -- read-only by default, writes only through grants a person makes.\n---\n".to_string(),
@@ -635,23 +731,30 @@ through the connections the profile `{profile}` allows, and nothing else.
 
 ## Reading
 
-- `list_connections` names the connections you may use; pass `connection` when there is
-  more than one.
-- `catalog_search` and `catalog_list` find tables and columns; `object_describe` gives a
-  table's columns, keys and the notes people wrote about it -- read the notes, they say
-  what the data means. `object_get_ddl` and `object_relationships` give the rest.
-- `query_validate` checks a statement first; `query_execute_read` runs reads only, with a
-  row limit; `query_explain` shows a plan, and can try hypothetical indexes on Postgres.
-- `data_read` pages through a table.
+{reading}
 
 ## Writing
 
-Access is read-only. A write tool appears only while a person has granted it with
-`dexo mcp grant create`, for a connection and a set of tables, for a limited time.
-Some grants ask: then each write waits until the person approves it on Dexo's Agents
-screen, under Approvals, or is denied when the wait the person set on the grant runs out -- say
-what you are about to change and why before you call the tool. Every call is audited. Never retry a denied write with
-a different statement to get around the decision; ask the person instead.
+Access is read-only. A write tool appears only while a person has let the profile write
+to a connection -- rows, the schema or server sessions -- for a while. Every write then
+waits until the person approves it on Dexo's Agents screen, under Approvals, and is denied
+when they refuse it or the wait the person set on the grant runs out -- unless the person
+let that kind of write run without asking, which they may for inserts, say, and not for
+deletes. Say what you are about to change and why before you call the tool either way.
+Every call is audited. Never retry a denied write with a different statement to get around
+the decision; ask the person instead.
+
+- `data_execute_sql` runs a script: several INSERT, UPDATE, DELETE and, on Postgres,
+  TRUNCATE statements, as one transaction -- all of them or none -- under one approval.
+  Send a whole seed in one call, not one call per statement.
+- Pass `file` instead of `sql` to run a `.sql` file from the project folder, the folder
+  the server was started in, up to 1 MiB. It is read once: what the person approves is
+  what runs. Prefer it to copying the file's statements into `sql`.
+- `data_import` loads a CSV, TSV, JSON or JSON Lines file from the project folder into one
+  table, as one transaction. The person approves it seeing its row count, columns and
+  first rows; `mapping` renames or leaves out the file's columns.
+- No write tool listed means no write access: ask the person to give it on Dexo's Agents
+  screen, Profiles, `w`, rather than looking for another way to write.
 "
     )
 }
@@ -909,6 +1012,21 @@ mod tests {
         assert_eq!(mode(&shared), 0o644);
     }
 
+    /// A line to paste runs the program it names, wherever it is installed.
+    #[test]
+    fn a_path_with_a_space_or_a_quote_is_one_shell_word() {
+        assert_eq!(super::shell_word("/usr/bin/dexo"), "/usr/bin/dexo");
+        assert_eq!(
+            super::shell_word("/opt/bin dir/dexo"),
+            "'/opt/bin dir/dexo'"
+        );
+        assert_eq!(super::shell_word("/it's/dexo"), r"'/it'\''s/dexo'");
+        assert_eq!(
+            McpClient::ClaudeCode.by_hand("/opt/bin dir/dexo", "assistant"),
+            Some("claude mcp add dexo -- '/opt/bin dir/dexo' mcp serve --profile assistant".into())
+        );
+    }
+
     /// Running setup again never loses the file as it was before Dexo: each old version
     /// gets a backup of its own, and text that did not change writes nothing.
     #[test]
@@ -916,12 +1034,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("mcp.json");
         std::fs::write(&path, "original").unwrap();
-        let first = super::write_with_backup(&path, "second").unwrap().unwrap();
-        let again = super::write_with_backup(&path, "third").unwrap().unwrap();
+        let replaced = |contents| match super::write_with_backup(&path, contents).unwrap() {
+            super::Written::Replaced(backup) => backup,
+            other => panic!("{other:?}"),
+        };
+        let first = replaced("second");
+        let again = replaced("third");
         assert_ne!(first, again);
         assert_eq!(std::fs::read_to_string(&first).unwrap(), "original");
         assert_eq!(std::fs::read_to_string(&again).unwrap(), "second");
-        assert_eq!(super::write_with_backup(&path, "third").unwrap(), None);
+        assert_eq!(
+            super::write_with_backup(&path, "third").unwrap(),
+            super::Written::Unchanged
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "third");
     }
 
@@ -971,12 +1096,56 @@ mod tests {
     /// fixed time.
     #[test]
     fn the_skill_names_no_fixed_wait() {
-        let text = super::skill_text(McpClient::ClaudeCode, "agent");
+        let text = super::skill_text(McpClient::ClaudeCode, &crate::mcp::McpProfile::new("agent"));
         assert!(!text.contains("two minutes"), "{text}");
         assert!(
             text.contains("the wait the person set on the grant"),
             "{text}"
         );
+    }
+
+    /// A skill file written for the profile as it was reads as outdated once the profile
+    /// changes, and writing it again makes it current, the old one kept.
+    #[test]
+    fn a_skill_file_is_outdated_once_its_text_would_change() {
+        use super::{Places, SkillState};
+        let dir = tempfile::tempdir().unwrap();
+        let places = Places {
+            project: dir.path().join("project"),
+            home: dir.path().join("home"),
+            config: dir.path().join("config"),
+        };
+        let mut profile = crate::mcp::McpProfile::new("agent");
+        let client = McpClient::ClaudeCode;
+        assert_eq!(client.skill_state(&places, &profile), SkillState::Absent);
+        client.refresh_skill(&places, &profile).unwrap();
+        assert_eq!(client.skill_state(&places, &profile), SkillState::Current);
+        profile.query_mode = crate::mcp::QueryMode::RawReadSql;
+        assert_eq!(client.skill_state(&places, &profile), SkillState::Outdated);
+        assert!(matches!(
+            client.refresh_skill(&places, &profile).unwrap(),
+            super::Written::Replaced(_)
+        ));
+        assert_eq!(client.skill_state(&places, &profile), SkillState::Current);
+        assert_eq!(
+            McpClient::Windsurf.skill_state(&places, &profile),
+            SkillState::Absent
+        );
+    }
+
+    /// The skill names the tools the profile is offered: a structured-only one is not told
+    /// to run SQL, and the snapshot diff is named.
+    #[test]
+    fn the_skill_names_the_profiles_own_tools() {
+        let mut profile = crate::mcp::McpProfile::new("agent");
+        let structured = super::skill_text(McpClient::ClaudeCode, &profile);
+        assert!(!structured.contains("query_execute_read"), "{structured}");
+        assert!(structured.contains("schema_diff"), "{structured}");
+        profile.query_mode = crate::mcp::QueryMode::RawReadSql;
+        let raw = super::skill_text(McpClient::ClaudeCode, &profile);
+        assert!(raw.contains("query_execute_read"), "{raw}");
+        // A seed is one call, from its file.
+        assert!(raw.contains("Pass `file` instead of `sql`"), "{raw}");
     }
 
     /// A config names the `dexo` on PATH when it is the running binary through a link, as
@@ -1042,12 +1211,20 @@ mod tests {
         assert_eq!(McpClient::ClaudeCode.state(&places), ClientState::NotSetUp);
 
         let done = McpClient::ClaudeCode
-            .set_up(&places, "/bin/dexo", "assistant", true)
+            .set_up(
+                &places,
+                "/bin/dexo",
+                &crate::mcp::McpProfile::new("assistant"),
+                true,
+            )
             .unwrap();
 
         assert_eq!(done.config, places.project.join(".mcp.json"));
-        assert!(done.backup.is_some(), "the old file is kept");
-        assert!(done.skill.as_ref().is_some_and(|path| path.is_file()));
+        assert!(
+            matches!(done.written, super::Written::Replaced(_)),
+            "the old file is kept"
+        );
+        assert!(done.skill.as_ref().is_some_and(|(path, _)| path.is_file()));
         assert_eq!(
             McpClient::ClaudeCode.state(&places),
             ClientState::SetUp {
@@ -1063,7 +1240,12 @@ mod tests {
         ));
         assert!(
             McpClient::Codex
-                .set_up(&places, "/bin/dexo", "assistant", false)
+                .set_up(
+                    &places,
+                    "/bin/dexo",
+                    &crate::mcp::McpProfile::new("assistant"),
+                    false,
+                )
                 .is_err(),
             "a file it cannot read is left alone"
         );

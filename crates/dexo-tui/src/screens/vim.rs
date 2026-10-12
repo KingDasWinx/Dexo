@@ -1,7 +1,8 @@
 //! Vim mode, when the keymap profile is `vim`: Normal, Insert, Visual and Visual-line.
 //! `update` gives it each editor key after the keymap has had its chance at Ctrl, Alt
 //! and function-key chords, so the palette, running a statement and quitting still work
-//! in every mode. In Insert mode it lets the keys through to the plain editor.
+//! in every mode. In Insert mode it lets the keys through to the plain editor. A `[vim]`
+//! section in keymap.toml renames the keys it reads, for another layout.
 
 use std::ops::Range;
 
@@ -77,8 +78,9 @@ struct Register {
 
 /// What `update` does with a key after Vim has seen it.
 pub enum Outcome {
-    /// Not Vim's: the plain editor takes it (typing in Insert mode).
-    Pass,
+    /// Not Vim's: the plain editor takes this key -- typed in Insert mode as pressed, an
+    /// arrow in Normal mode as `[vim]` has it read.
+    Pass(KeyEvent),
     Done,
     /// Done, and then these -- `:w` saves, `:q` closes.
     Then(Vec<Action>),
@@ -155,13 +157,23 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
     if model.vim.prompt.is_some() {
         return prompt_key(model, key);
     }
+    // The key as keymap.toml's `[vim]` has Vim read it: `m` is `h` on a Colemak layout.
+    // Insert mode types the key as pressed; only the Esc that leaves it is read here.
+    // A change keeps the keys as Vim read them -- its count and operator are what `.`
+    // looks for -- so they are not read again when `.` replays them.
+    let pressed = key;
+    let key = if model.vim.replaying {
+        key
+    } else {
+        model.keymap.vim_key(key)
+    };
     if model.vim.mode == Mode::Insert {
         if key.code == KeyCode::Esc {
             model.editor.completion_open = false;
             leave_insert(model);
             return Outcome::Done;
         }
-        return Outcome::Pass;
+        return Outcome::Pass(pressed);
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if ctrl {
@@ -181,7 +193,7 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
             | KeyCode::End => {
                 model.vim.pending.clear();
                 model.vim.pending_keys.clear();
-                Outcome::Pass
+                Outcome::Pass(key)
             }
             // Other Ctrl chords the keymap did not take are not Vim's either -- and
             // Normal mode does not hand them to the plain editor, where Ctrl+Backspace
@@ -214,7 +226,7 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
         | KeyCode::PageDown => {
             model.vim.pending.clear();
             model.vim.pending_keys.clear();
-            Outcome::Pass
+            Outcome::Pass(key)
         }
         // Nothing in Normal mode types.
         _ => Outcome::Done,
@@ -944,8 +956,8 @@ fn replay(model: &mut Model, keys: &[KeyEvent]) {
             leave_insert(model);
             continue;
         }
-        if matches!(handle_key(model, *key), Outcome::Pass) {
-            crate::screens::editor::handle_key(model, *key);
+        if let Outcome::Pass(key) = handle_key(model, *key) {
+            crate::screens::editor::handle_key(model, key);
         }
         model.editor.completion_open = false;
     }

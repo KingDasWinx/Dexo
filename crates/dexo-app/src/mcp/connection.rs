@@ -1,10 +1,12 @@
-use dexo_driver_api::QualifiedName;
+use dexo_driver_api::{QualifiedName, QueryRequest, Session};
 use dexo_sql::Dialect;
+use futures_util::StreamExt;
 
 use crate::connection_policy::{ConnectionPolicy, Environment};
 use crate::connection_profile::ConnectionProfile;
 use crate::error::{AppError, ErrorCategory};
 use crate::mcp::selector::ObjectRef;
+use crate::query_service::map_driver_error;
 
 /// What MCP needs to know about one saved connection a profile may use: how to parse its
 /// SQL, how to complete a partial name the way the server would, and whether it may be
@@ -72,15 +74,50 @@ impl McpConnection {
         }
     }
 
-    /// MCP never writes to production (MCP-015) or to a connection whose own policy keeps
-    /// it read-only (SEC-011); a grant cannot override either.
-    pub fn accepts_writes(&self) -> Result<(), AppError> {
-        if self.environment == Environment::Production {
+    /// A bare name is judged as `qualify` completes it, and the server resolves it by the
+    /// role's search_path: a role whose path starts with `app` read `app.orders` where the
+    /// policy had judged `public.orders`. Pinned on a session MCP opens, both mean the same
+    /// table for every read, explain and write on it.
+    pub async fn pin_search_path(&self, session: &dyn Session) -> Result<(), AppError> {
+        let Some(schema) = self
+            .default_schema
+            .as_deref()
+            .filter(|_| self.dialect == Dialect::Postgres)
+        else {
+            return Ok(());
+        };
+        let sql = format!("SET search_path = \"{}\"", schema.replace('"', "\"\""));
+        let mut stream = session
+            .execute(QueryRequest::write(sql))
+            .await
+            .map_err(map_driver_error)?;
+        while let Some(event) = stream.next().await {
+            event.map_err(map_driver_error)?;
+        }
+        Ok(())
+    }
+
+    /// Whether `grant` opens anything here: what `accepts_writes` says, and on production
+    /// only access given with the connection's name typed -- access given before it was
+    /// marked production does not carry over.
+    pub fn opens(&self, grant: &crate::mcp::Grant) -> Result<(), AppError> {
+        self.accepts_writes()?;
+        if self.environment == Environment::Production && !grant.production {
             return Err(AppError::new(
                 ErrorCategory::McpPolicy,
-                "writes to production connections are not available over MCP",
+                format!(
+                    "{} became a production connection after this write access was given: give it again, typing its name",
+                    self.name
+                ),
             ));
         }
+        Ok(())
+    }
+
+    /// MCP never writes to a connection whose own policy keeps it read-only (SEC-011);
+    /// no write access overrides that. Production takes writes only through access given
+    /// with its name typed: see `opens`.
+    pub fn accepts_writes(&self) -> Result<(), AppError> {
         if self.read_only {
             return Err(AppError::new(
                 ErrorCategory::Permission,

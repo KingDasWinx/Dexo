@@ -92,7 +92,11 @@ pub fn map_driver_error(error: DriverError) -> AppError {
         DriverErrorCategory::Permission => ErrorCategory::Permission,
         DriverErrorCategory::Network | DriverErrorCategory::Transport => ErrorCategory::Network,
         DriverErrorCategory::Syntax => ErrorCategory::Syntax,
-        _ => ErrorCategory::Internal,
+        DriverErrorCategory::Authentication => ErrorCategory::Authentication,
+        DriverErrorCategory::Configuration => ErrorCategory::Configuration,
+        DriverErrorCategory::Capability => ErrorCategory::Capability,
+        DriverErrorCategory::Conflict => ErrorCategory::Conflict,
+        DriverErrorCategory::Internal => ErrorCategory::Internal,
     };
     AppError::new(category, error.to_string())
 }

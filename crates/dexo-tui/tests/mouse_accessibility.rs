@@ -551,7 +551,7 @@ fn mcp_profile_rows_match_the_profile_index() {
     click_target(&mut model, HitTarget::ListRow(1));
 
     assert_eq!(model.mcp_profiles.selected, 1);
-    assert_eq!(model.mcp_profiles.name, "writer");
+    assert_eq!(model.mcp_profiles.name().as_deref(), Some("writer"));
 }
 
 #[test]

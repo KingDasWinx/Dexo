@@ -70,13 +70,7 @@ Any query can read other files itself, `SELECT * FROM 'other.csv'`. A CSV, Parqu
 
 The catalog shows each database (the file's, and any you `ATTACH`) with its schemas, tables, views, columns, indexes and keys; DuckDB's own `system` and `temp` show with system objects. Values show as DuckDB writes them cast to text -- a `TIMESTAMP WITH TIME ZONE` in UTC -- which DuckDB reads back as the same value. Rows are edited by primary key, or by `rowid` when a table has none; a view has no key and is read-only, and lists, structs, maps and unions are matched by their text. A table's row estimate is DuckDB's own, kept as it writes. Explain shows DuckDB's plan; Analyze runs a query, an INSERT, an UPDATE or a DELETE with DuckDB's profiler, for each operator's actual rows and time, inside a transaction rolled back after it, and anything else -- a COPY, a SET -- has only the estimated plan, since a rollback would not undo it. Inside your own transaction DuckDB has no savepoint to undo a write with, so Analyze runs only a query there. DuckDB has no savepoints for your transactions either; the schema editor and administration screens do not apply to it, and the MCP server serves Postgres, MySQL and MariaDB connections, not DuckDB or SQLite ones.
 
-DuckDB's engine is large, so it is built into Dexo only with the `duckdb` cargo feature:
-
-```sh
-cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo --features duckdb
-```
-
-A build without it still knows DuckDB connections, and says how to get the driver when one is opened.
+DuckDB is a plugin: install it from Plugins (`Ctrl+G p`) or with `dexo plugin install duckdb`. Without it, a DuckDB connection stays saved, and opening it offers to install the plugin.
 
 ## Environments and the SQL editor
 

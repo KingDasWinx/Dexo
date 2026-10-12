@@ -74,6 +74,11 @@ pub enum Command {
         #[command(subcommand)]
         command: ConnectionsCommand,
     },
+    /// Install and manage plugins: drivers such as DuckDB, and theme packs
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
     /// Print a completion script for bash, zsh, fish, PowerShell or Elvish
     Completion {
         #[arg(value_enum)]
@@ -307,6 +312,55 @@ pub enum SessionsCommand {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum PluginCommand {
+    /// List the installed plugins
+    List {
+        /// The index's plugins that are not installed
+        #[arg(long)]
+        available: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show an installed plugin: its version, origin and what it provides
+    Info {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install by id from the signed index, or from a .tar.gz, URL or folder with --trust
+    Install {
+        source: String,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        trust: bool,
+        #[arg(long)]
+        non_interactive: bool,
+    },
+    /// Remove a plugin and its files
+    Remove {
+        id: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Register a disabled plugin's drivers and themes again
+    Enable { id: String },
+    /// Keep a plugin installed without registering its drivers and themes
+    Disable { id: String },
+    /// Update a plugin from the index, or every one with --all
+    Update {
+        id: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
+    /// Check the installed plugins: files, executables, compatibility
+    Doctor {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum ConnectionsCommand {
     /// List the saved connections
     List,
@@ -390,12 +444,16 @@ pub enum McpCommand {
     },
     /// Allow or deny objects to a profile, by selector
     Allow {
+        /// The profile to change.
         #[arg(long)]
         profile: String,
+        /// Objects as database.schema.table, `*` for any one part: db.public.* or db.*.orders.
         #[arg(long)]
         selector: String,
+        /// Deny what the selector matches instead; a deny wins over an allow.
         #[arg(long)]
         deny: bool,
+        /// Take the rule away instead of adding it.
         #[arg(long)]
         remove: bool,
     },
@@ -407,10 +465,14 @@ pub enum McpCommand {
     /// List each profile's tools; --probe starts the server and asks it, then checks
     /// every client's config.
     Doctor {
+        /// Only this profile; every profile when left out.
         #[arg(long)]
         profile: Option<String>,
+        /// One JSON document on stdout, nothing else.
         #[arg(long)]
         json: bool,
+        /// Start each enabled profile's server, ask it for its tools, and check every
+        /// client's config for Dexo.
         #[arg(long)]
         probe: bool,
     },
@@ -482,24 +544,34 @@ pub enum McpProfileCommand {
     },
     /// Change a profile's connections, query mode and limits
     Set {
+        /// The profile to change.
         #[arg(long)]
         name: String,
+        /// A saved connection it may use; repeat for several.
         #[arg(long = "connection")]
         connections: Vec<String>,
+        /// Drop every connection first; writes on the ones not given again are revoked.
         #[arg(long)]
         clear_connections: bool,
+        /// structured: the catalog and table tools; raw-read: read-only SQL too.
         #[arg(long, value_parser = ["structured", "raw-read"])]
         query_mode: Option<String>,
+        /// Rows a read returns at most, 1 to 1000000.
         #[arg(long)]
         max_rows: Option<u64>,
+        /// Bytes a read returns at most, 1 to 33554432.
         #[arg(long)]
         max_bytes: Option<u64>,
+        /// Seconds a call may take, 1 to 3600.
         #[arg(long)]
         timeout_secs: Option<u64>,
+        /// Calls the profile may run at once, 1 to 32.
         #[arg(long)]
         max_concurrency: Option<u32>,
+        /// Offer this tool, one an explicit rule must allow (admin_list_sessions).
         #[arg(long = "allow-tool")]
         allow_tools: Vec<String>,
+        /// Never offer this tool, even under write access.
         #[arg(long = "deny-tool")]
         deny_tools: Vec<String>,
     },
@@ -507,46 +579,46 @@ pub enum McpProfileCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum McpGrantCommand {
-    /// Let a profile write to a connection until the grant expires
+    /// Let a profile write to one connection for a while, in place of what it had there;
+    /// every write waits for your approval on Dexo's Agents screen, under Approvals
     Create {
         #[arg(long)]
         profile: String,
         #[arg(long)]
         connection: String,
-        #[arg(long)]
-        capability: String,
-        #[arg(long)]
-        tool: Vec<String>,
-        #[arg(long)]
-        selector: String,
+        /// What it may change: rows, schema or sessions, several joined by commas.
+        #[arg(long, value_delimiter = ',', required = true)]
+        allow: Vec<String>,
+        /// How long it lasts, as 15m, 2h or 1h30m (24h at most), or never: until revoked.
         #[arg(long, default_value = "15m")]
         expires: String,
-        #[arg(long = "confirm-target")]
-        confirm_target: Option<String>,
-        /// Every write the grant covers waits for a person to approve it on Dexo's Agents
-        /// screen, under Approvals; the grant lasts until it expires.
-        #[arg(long)]
-        ask: bool,
         /// Seconds a write waits for approval before it is refused, 1 to 3600.
         #[arg(
             long,
             default_value_t = 120,
-            requires = "ask",
             value_parser = clap::value_parser!(u32).range(1..=3600)
         )]
         approval_timeout: u32,
+        /// What runs without asking: insert, update, delete, every-row, create, drop or sessions, joined by commas, or all. Without it every write asks.
+        #[arg(long)]
+        bypass: Option<String>,
+        /// A production connection's name, typed to confirm that agents may write to it.
+        #[arg(long)]
+        confirm: Option<String>,
     },
-    /// List a profile's grants
+    /// List what a profile may write, one line per connection
     List {
         #[arg(long)]
         profile: String,
     },
-    /// Take back one grant
+    /// Take back a profile's writes on one connection
     Revoke {
         #[arg(long)]
-        id: String,
+        profile: String,
+        #[arg(long)]
+        connection: String,
     },
-    /// Take back every grant of a profile
+    /// Take back every write a profile may make
     RevokeAll {
         #[arg(long)]
         profile: String,
@@ -557,9 +629,11 @@ pub enum McpGrantCommand {
 pub enum McpConfigCommand {
     /// Print a client's MCP config for a profile
     Print {
+        /// The profile the server serves.
         #[arg(long)]
         profile: String,
-        #[arg(long)]
+        /// The client whose config to print; the generic mcpServers JSON when left out.
+        #[arg(long, value_parser = ["claude-code", "codex", "cursor", "claude-desktop", "gemini-cli", "windsurf", "vscode"])]
         client: Option<String>,
     },
 }

@@ -483,6 +483,15 @@ impl dexo_driver_api::BulkWriter for PostgresSession {
             }
         }
     }
+
+    async fn insert_in_transaction(
+        &self,
+        table: &dexo_driver_api::QualifiedName,
+        columns: &[String],
+        rows: &[Vec<DbValue>],
+    ) -> Result<u64, DriverError> {
+        insert_rows(self, table, columns, rows).await
+    }
 }
 
 /// The most values one statement binds: the protocol counts them in 16 bits.

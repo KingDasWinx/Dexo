@@ -54,6 +54,7 @@ Pull requests are squash-merged, and the title becomes the commit, so give the t
 - Secrets never go in SQLite, TOML, argv, logs, or panic reports.
 - The TUI, CLI, and MCP server go through `dexo-app`. Drivers do not import UI crates.
 - New dependencies come from crates.io and must pass `cargo deny check`.
+- Forms in the TUI follow [docs/design.md](docs/design.md): its layout, its inputs and its keys.
 
 ## License
 

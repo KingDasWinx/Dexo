@@ -61,6 +61,12 @@ pub enum HitTarget {
         index: usize,
         step: i8,
     },
+    /// One of a form field's options: a choice side by side, a box of a grid, a row of an
+    /// open dropdown, or a toggle (option 0).
+    FormOption {
+        field: usize,
+        option: usize,
+    },
     FooterSubmit,
     FooterCancel,
     Button(HitButton),
@@ -80,7 +86,6 @@ pub enum HitButton {
     Discard,
     Apply,
     Export,
-    Revoke,
     ConfirmDirty,
     ToggleConnections,
     ConfirmDelete,
@@ -111,6 +116,7 @@ pub enum OverlayKind {
     ProductionPrompt,
     ExplainPrompt,
     QuitPrompt,
+    PluginOffer,
     DeleteConnection,
     Review,
     DdlPreview,
@@ -162,7 +168,6 @@ pub enum ScrollArea {
     Review,
     Messages,
     DdlPreview,
-    McpProfiles,
     Sessions,
     SchemaDiff,
     /// Whatever detail pane a screen shows.
@@ -279,6 +284,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         ),
         (model.explain_prompt.is_some(), OverlayKind::ExplainPrompt),
         (model.quit_prompt.is_some(), OverlayKind::QuitPrompt),
+        (model.plugin_offer.is_some(), OverlayKind::PluginOffer),
         (
             model.connections.delete_target.is_some(),
             OverlayKind::DeleteConnection,

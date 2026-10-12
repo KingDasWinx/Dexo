@@ -90,7 +90,7 @@ fn connections_add_refuses_options_that_cannot_go_together() {
     );
 }
 
-/// An asking grant's wait is 1 s to an hour; zero or more is refused, not stored.
+/// A write's wait is 1 s to an hour; zero or more is refused, not stored.
 #[test]
 fn approval_timeout_is_bounded() {
     let create = |timeout: &str| {
@@ -103,13 +103,8 @@ fn approval_timeout_is_bounded() {
             "p",
             "--connection",
             "c",
-            "--capability",
-            "data_write",
-            "--tool",
-            "data_insert",
-            "--selector",
-            "db.public.t",
-            "--ask",
+            "--allow",
+            "rows",
             "--approval-timeout",
             timeout,
         ])

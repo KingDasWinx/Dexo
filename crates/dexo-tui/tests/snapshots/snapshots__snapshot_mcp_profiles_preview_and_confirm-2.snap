@@ -3,21 +3,21 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
 [Agents]  demo  local  public                               
- 1 Approvals   2 Activity  [3 Profiles]  4 Setup            
+ 1 Approvals   2 Activity  [3 Profiles]                     
 ┌▸ assistant───────────────────────────────────────────────┐
-│ State        disabled                                    │
-│ Connections  local                                       │
-│ Access       browse and describe only                    │
-│ Sees         db.public.*                                 │
-│ Never        db.public.secrets                           │
-│ Tools        catalog_search, object_describe             │
-│ ── Grants                                                │
-│ data_insert on db.public.items (local): one write, then  │
-│ it is spent, ends in 15 min                              │
+│                                                          │
+│ Status        ○ disabled: agents cannot connect          │
+│ Reads         tables only: browse, describe, read pages  │
+│ Sees          everything, except db.public.secrets       │
+│                                                          │
+│ CONNECTIONS   each write asks you first · w writes · r re│
+│   local         local        ✎ rows · 15 min left        │
+│                                                          │
+│ AGENTS   a connect · y copy its command                  │
+│   none: a connects Claude Code, Codex, Cursor and the res│
 │                                                          │
 │Enable assistant?                                         │
-│Agents that connect through it can then use what it allows│
-│Connections: local.                                       │
+│Agents that start Dexo with it can then read what it allow│
 │                                                          │
 │ [Enable]  >[Cancel]                                      │
 └──────────────────────────────────────────────────────────┘

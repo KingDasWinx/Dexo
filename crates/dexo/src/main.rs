@@ -4,24 +4,52 @@ use std::sync::Arc;
 
 use clap::Parser;
 use dexo_app::DriverRegistry;
-use dexo_cli::args::Args;
 use dexo_cli::args::TuiStart;
+use dexo_cli::args::{Args, Command, McpCommand};
 use dexo_cli::run::{TuiRunner, run_dispatch, temporary_connection};
 use dexo_driver_mysql::{MariadbFactory, MysqlFactory};
 use dexo_driver_postgres::PostgresFactory;
 use dexo_driver_sqlite::SqliteFactory;
 
 fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    quiet_on_closed_pipe(&args);
     init_tracing();
     let mut registry = DriverRegistry::new();
     registry.register(Arc::new(PostgresFactory));
     registry.register(Arc::new(MysqlFactory));
     registry.register(Arc::new(MariadbFactory));
     registry.register(Arc::new(SqliteFactory));
-    #[cfg(feature = "duckdb")]
-    registry.register(Arc::new(dexo_driver_duckdb::DuckdbFactory));
+    match dexo_storage::AppPaths::discover() {
+        Ok(paths) => dexo_app::plugin::register_installed(&registry, &paths.data_dir),
+        Err(_) => dexo_app::plugin::register_dev_overrides(&registry),
+    }
     let tui_registry = registry.clone();
-    run_dispatch(Args::parse(), registry, Workbench(tui_registry))
+    run_dispatch(args, registry, Workbench(tui_registry))
+}
+
+/// `dexo … | head` panicked on the closed pipe: a command that prints and exits takes the
+/// default disposition, which ends it quietly as other CLIs end. The workbench, `mcp serve`
+/// and `mcp doctor --probe` keep Rust's, since they write to pipes of their own -- a
+/// driver's, a probed server's -- where a closed one must be an error to report.
+// ponytail: a plugin driver that dies mid-write ends a one-shot command without a word;
+// handle EPIPE where output is written if that ever matters.
+fn quiet_on_closed_pipe(args: &Args) {
+    let writes_its_own_pipes = matches!(
+        &args.command,
+        None | Some(Command::Mcp {
+            command: McpCommand::Serve { .. } | McpCommand::Doctor { probe: true, .. }
+        })
+    );
+    #[cfg(unix)]
+    if !writes_its_own_pipes {
+        // SAFETY: SIG_DFL is a valid disposition for SIGPIPE, set before any thread runs.
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = writes_its_own_pipes;
 }
 
 /// Starts the TUI the way the command line asked: plain, or connected to a URL.

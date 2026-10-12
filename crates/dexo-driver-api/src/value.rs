@@ -1,4 +1,7 @@
-#[derive(Clone, Debug, PartialEq)]
+/// A value as drivers hand it over. On the wire, `{"t": "i64", "v": 1}`: tagged, so a
+/// decimal or a JSON document never turns into a float or an object on the way.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "t", content = "v", rename_all = "snake_case")]
 pub enum DbValue {
     Null,
     Bool(bool),
@@ -6,10 +9,11 @@ pub enum DbValue {
     U64(u64),
     Decimal(String),
     Text(String),
-    Bytes(Vec<u8>),
+    Bytes(#[serde(with = "crate::base64_bytes")] Vec<u8>),
     Json(String),
     Native {
         type_name: String,
+        #[serde(with = "crate::base64_bytes")]
         bytes: Vec<u8>,
         text: String,
     },

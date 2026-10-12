@@ -1,0 +1,28 @@
+---
+source: crates/dexo-tui/tests/plugins_screen.rs
+expression: "paint(&mut model, 80, 24)"
+---
+[Plugins 1]  default  no connection  —                                          
+[1 Installed]  2 Available  / search           [t Type: all]                    
+┌▸ Installed (2)───────────────────────────────────────────────────────────────┐
+│ [r Refresh]  [f Install from file…]                                          │
+│> ↑ DuckDB  driver  1.0.0                                                     │
+│  ○ Mine    theme   0.1.0  local                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌  DuckDB──────────────────────────────────────────────────────────────────────┐
+│ [u Update to 1.1.0]  [e Disable]  [x Remove…]                                │
+│                                                                              │
+│ kind       driver                                                            │
+│ installed  1.0.0                                                             │
+│ newest     1.1.0                                                             │
+│ author     KingDasWinx                                                       │
+│ license    MIT                                                               │
+│ requires   Dexo 1.5.0 or newer                                               │
+│ protocol   1                                                                 │
+│ download   26.5 MB                                                           │
+└──────────────────────────────────────────────────────────────────────────────┘
+Plugins  Up/Down pick  Tab view  / search  t type  Esc back           Ctrl+P  F1

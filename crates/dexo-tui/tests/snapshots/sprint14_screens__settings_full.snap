@@ -2,7 +2,7 @@
 source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
-[Workbench] Connections  Agents  Server  History   default  no connection  —                                                                                    
+[Workbench] Connections  Agents  Server  History  Plugins   default  no connection  —                                                                           
 ┌  Sidebar─────────────────┐ scratch.sql ×  +                                                                                                                   
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │No connections — press n  ││   1                                                                                                                              │

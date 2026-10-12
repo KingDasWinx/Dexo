@@ -4,7 +4,7 @@ use dexo_driver_api::{
     CatalogObject, DataRequest, ExplainPlan, ExplainRequest, ObjectKind, Page, QueryEvent,
     QueryRequest, Session, TransactionMode,
 };
-use dexo_sql::{GuardRejection, inspect_data_write, inspect_read, inspect_schema_write};
+use dexo_sql::{GuardRejection, inspect_data_script, inspect_read, inspect_schema_write};
 use futures_util::StreamExt;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::data::display_value;
 use crate::error::{AppError, ErrorCategory};
 use crate::mcp::connection::McpConnection;
+use crate::mcp::grant::{Grant, WRITE_TOOLS};
 use crate::mcp::policy::{Decision, ObjectPolicy};
 use crate::mcp::profile::{McpProfile, QueryMode};
 use crate::mcp::selector::ObjectRef;
@@ -49,13 +50,21 @@ impl McpService {
         })
     }
 
+    /// Every table a script of data writes touches, each held to the profile.
     pub fn data_write_targets(
         &self,
         connection: &McpConnection,
         sql: &str,
     ) -> Result<Vec<ObjectRef>, AppError> {
-        let inspection = inspect_data_write(sql, connection.dialect).map_err(guard_error)?;
-        self.authorize_relations(connection, &inspection.relations)
+        let relations: Vec<Vec<String>> = inspect_data_script(sql, connection.dialect)
+            .map_err(guard_error)?
+            .into_iter()
+            .flat_map(|statement| statement.inspection.relations)
+            .collect();
+        let mut targets = self.authorize_relations(connection, &relations)?;
+        targets.sort_by_key(ToString::to_string);
+        targets.dedup();
+        Ok(targets)
     }
 
     pub fn schema_write_targets(
@@ -67,15 +76,129 @@ impl McpService {
         self.authorize_relations(connection, &inspection.relations)
     }
 
-    /// Runs one authorized INSERT/UPDATE/DELETE to completion. The old adapter dropped
-    /// the stream unread, so a constraint violation was reported as "sql applied".
-    pub async fn execute_write(
+    /// Runs an authorized script of data writes as one transaction: every statement, or
+    /// none -- a seed that failed on its tenth table left nine filled. Each statement runs
+    /// as it was written and inspected, to completion, and `stop` is asked between them:
+    /// write access taken back while it runs rolls the whole script back. The rows each
+    /// statement changed, in order.
+    pub async fn execute_script(
         &self,
         session: &dyn Session,
         connection: &McpConnection,
         sql: &str,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<u64>, AppError> {
+        let statements = inspect_data_script(sql, connection.dialect).map_err(guard_error)?;
+        let relations: Vec<Vec<String>> = statements
+            .iter()
+            .flat_map(|statement| statement.inspection.relations.clone())
+            .collect();
+        self.authorize_relations(connection, &relations)?;
+        let transactions = session.transactions().ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Capability,
+                "this connection cannot run a script as one transaction",
+            )
+        })?;
+        transactions
+            .begin(TransactionMode::ReadWrite)
+            .await
+            .map_err(map_driver_error)?;
+        let total = statements.len();
+        let mut affected = Vec::with_capacity(total);
+        for (at, statement) in statements.iter().enumerate() {
+            let outcome = if stop() {
+                Err(AppError::new(
+                    ErrorCategory::McpPolicy,
+                    "write access was taken back while it ran",
+                ))
+            } else {
+                self.run_write(session, &statement.sql).await
+            };
+            match outcome {
+                Ok(rows) => affected.push(rows),
+                Err(error) => {
+                    let _ = transactions.rollback().await;
+                    let place = if total == 1 {
+                        String::new()
+                    } else {
+                        format!("statement {} of {total}: ", at + 1)
+                    };
+                    return Err(AppError::new(
+                        error.category(),
+                        format!("{place}{error}; nothing was written"),
+                    ));
+                }
+            }
+        }
+        transactions.commit().await.map_err(map_driver_error)?;
+        Ok(affected)
+    }
+
+    /// A file's rows into the table `target` names, as one transaction: every row, or at
+    /// the first bad one none of them, said by its line. The table is held to the profile
+    /// like any write's.
+    pub async fn import_file(
+        &self,
+        session: &dyn Session,
+        connection: &McpConnection,
+        target: &str,
+        file: crate::transfer::DecodedFile,
+        mapping: &[crate::transfer::ColumnMapping],
     ) -> Result<u64, AppError> {
-        self.data_write_targets(connection, sql)?;
+        let reference = connection.qualify(&ObjectRef::parse(target).path);
+        if self.policy().decide(&reference) != Decision::Allow {
+            return Err(hidden());
+        }
+        let writer = session.bulk().ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Capability,
+                "this connection cannot import files",
+            )
+        })?;
+        let transactions = session.transactions().ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Capability,
+                "this connection cannot import a file as one transaction",
+            )
+        })?;
+        transactions
+            .begin(TransactionMode::ReadWrite)
+            .await
+            .map_err(map_driver_error)?;
+        // Postgres names a table by its schema: the database is the session's, and a name
+        // that spells it out is one the catalog does not find.
+        let mut table = connection.qualified_name(&reference);
+        if connection.dialect == dexo_sql::Dialect::Postgres {
+            table = dexo_driver_api::QualifiedName::new(
+                None::<String>,
+                table.schema().map(str::to_string),
+                table.object(),
+            );
+        }
+        let written =
+            crate::transfer::insert_decoded(writer, session.catalog(), &table, file, mapping).await;
+        match written {
+            Ok(rows) => {
+                transactions.commit().await.map_err(map_driver_error)?;
+                Ok(rows)
+            }
+            Err(error) => {
+                let _ = transactions.rollback().await;
+                Err(AppError::new(
+                    error.category(),
+                    format!(
+                        "{}; nothing was written",
+                        error.to_string().trim_end_matches('.')
+                    ),
+                ))
+            }
+        }
+    }
+
+    /// One statement, to completion: the old adapter dropped the stream unread, so a
+    /// constraint violation was reported as "sql applied".
+    async fn run_write(&self, session: &dyn Session, sql: &str) -> Result<u64, AppError> {
         let mut request = QueryRequest::write(sql);
         request.timeout = Duration::from_secs(self.profile.limits.timeout_secs);
         let mut stream = session.execute(request).await.map_err(map_driver_error)?;
@@ -334,7 +457,7 @@ impl McpService {
     }
 }
 
-/// Read tools that exist. Tasks 8–12 add their names here as they land.
+/// Read tools that exist.
 pub const READ_TOOLS: &[&str] = &[
     "list_connections",
     "catalog_list",
@@ -347,6 +470,7 @@ pub const READ_TOOLS: &[&str] = &[
     "query_explain",
     "query_execute_read",
     "schema_diff",
+    "schema_overview",
     "admin_list_sessions",
 ];
 
@@ -373,6 +497,40 @@ pub fn advertised_tools(profile: &McpProfile) -> Vec<&'static str> {
         .collect()
 }
 
+/// What a client of `profile` may call while `grants` are active: its reads, the writes a
+/// grant publishes on a connection that takes them (MCP-002, MCP-004) -- a grant on one
+/// turned production or read-only stays in the ledger but opens nothing -- and the sessions
+/// list while a grant lets sessions be ended, since the tools that end them take its ids.
+pub fn published_tools(
+    profile: &McpProfile,
+    grants: &[Grant],
+    opens: &dyn Fn(&Grant) -> bool,
+) -> Vec<String> {
+    let mut tools: Vec<String> = advertised_tools(profile)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let mut lists_sessions = false;
+    for grant in grants.iter().filter(|grant| opens(grant)) {
+        for tool in &grant.tools {
+            if WRITE_TOOLS.contains(&tool.as_str())
+                && profile.tool_allowed(tool)
+                && !tools.contains(tool)
+            {
+                tools.push(tool.clone());
+            }
+        }
+        lists_sessions |= grant.lists_sessions(profile);
+    }
+    if lists_sessions
+        && profile.tool_allowed("admin_list_sessions")
+        && !tools.iter().any(|tool| tool == "admin_list_sessions")
+    {
+        tools.push("admin_list_sessions".into());
+    }
+    tools
+}
+
 /// Every tool name a profile rule may mention, so a typo is refused instead of silently
 /// matching nothing.
 pub fn known_tools() -> Vec<&'static str> {
@@ -388,8 +546,17 @@ fn hidden() -> AppError {
     AppError::new(ErrorCategory::McpPolicy, HIDDEN)
 }
 
+/// SQL that does not parse, or is not one statement, is the agent's to fix; the rest is
+/// the policy saying no.
 fn guard_error(rejection: GuardRejection) -> AppError {
-    AppError::new(ErrorCategory::McpPolicy, rejection.to_string())
+    let category = match rejection.cause() {
+        GuardRejection::Unparsed(_)
+        | GuardRejection::NotSingleStatement
+        | GuardRejection::NoStatement
+        | GuardRejection::TooManyStatements => ErrorCategory::Syntax,
+        _ => ErrorCategory::McpPolicy,
+    };
+    AppError::new(category, rejection.to_string())
 }
 
 #[cfg(test)]

@@ -19,11 +19,17 @@ dry_run=false
 [[ ${2:-} == --dry-run ]] && dry_run=true
 [[ -n $bump ]] || die "usage: ./publish.sh <patch|minor|major|X.Y.Z[-pre]> [--dry-run]"
 
+# Without a trusted key every official plugin index is refused, DuckDB included.
+grep -q '^pub const TRUSTED: &\[&str\] = &\[\];' crates/dexo-app/src/plugin/keys.rs &&
+  die "crates/dexo-app/src/plugin/keys.rs trusts no plugin index key: see docs/src/plugins.md, \"The signing key\""
 [[ $(git branch --show-current) == main ]] || die "releases are cut from main"
 [[ -z $(git status --porcelain --untracked-files=no) ]] || die "the working tree has uncommitted changes"
 git fetch --quiet --tags origin
 [[ $(git rev-parse HEAD) == "$(git rev-parse origin/main)" ]] ||
   die "main is not in sync with origin/main; pull or push first"
+# DuckDB ships as a plugin: its index is published before a Dexo that needs it.
+gh release view plugins-index >/dev/null 2>&1 ||
+  die "no plugins-index release: publish the plugins first (./publish-plugin.sh duckdb <version>)"
 
 semver='^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?$'
 current=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)

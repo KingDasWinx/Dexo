@@ -37,28 +37,61 @@ fn category(error: &tokio_postgres::Error) -> DriverErrorCategory {
     if error.is_closed() {
         return DriverErrorCategory::Network;
     }
-    if let Some(db) = error.as_db_error() {
-        let code = db.code().code();
-        if code == "42501" {
-            return DriverErrorCategory::Permission;
-        }
-        // Class 28 is a rejected login (a wrong password is 28P01); class 08 a
-        // connection that failed. Neither is the statement's fault.
-        if code.starts_with("28") {
-            return DriverErrorCategory::Authentication;
-        }
-        // 57P01 to 57P03: the server ended this session, shut down or is not taking
-        // connections -- the statement is not what failed.
-        if code.starts_with("08") || matches!(code, "57P01" | "57P02" | "57P03") {
-            return DriverErrorCategory::Network;
-        }
-        return DriverErrorCategory::Syntax;
+    match error.as_db_error() {
+        Some(db) => server_category(db.code().code()),
+        None => DriverErrorCategory::Internal,
     }
-    DriverErrorCategory::Internal
+}
+
+/// What a SQLSTATE the server answered with is.
+fn server_category(code: &str) -> DriverErrorCategory {
+    if code == "42501" {
+        return DriverErrorCategory::Permission;
+    }
+    // Class 28 is a rejected login (a wrong password is 28P01); class 08 a connection
+    // that failed. Neither is the statement's fault.
+    if code.starts_with("28") {
+        return DriverErrorCategory::Authentication;
+    }
+    // 57P01 to 57P03: the server ended this session, shut down or is not taking
+    // connections -- the statement is not what failed.
+    if code.starts_with("08") || matches!(code, "57P01" | "57P02" | "57P03") {
+        return DriverErrorCategory::Network;
+    }
+    // Class 23 is a constraint the data broke -- a duplicate key, a foreign key -- and
+    // class 40 a deadlock or a serialization failure: the statement was well formed.
+    if code.starts_with("23") || code.starts_with("40") {
+        return DriverErrorCategory::Conflict;
+    }
+    DriverErrorCategory::Syntax
 }
 
 pub fn is_permission(error: &tokio_postgres::Error) -> bool {
     error
         .as_db_error()
         .is_some_and(|db| db.code().code() == "42501")
+}
+
+#[cfg(test)]
+mod tests {
+    use dexo_driver_api::DriverErrorCategory;
+
+    use super::server_category;
+
+    /// A broken constraint or a deadlock is a conflict to retry or resolve, not SQL to fix.
+    #[test]
+    fn a_broken_constraint_is_a_conflict_not_bad_sql() {
+        for code in ["23505", "23503", "40001", "40P01"] {
+            assert_eq!(
+                server_category(code),
+                DriverErrorCategory::Conflict,
+                "{code}"
+            );
+        }
+        assert_eq!(server_category("42601"), DriverErrorCategory::Syntax);
+        assert_eq!(
+            server_category("28P01"),
+            DriverErrorCategory::Authentication
+        );
+    }
 }

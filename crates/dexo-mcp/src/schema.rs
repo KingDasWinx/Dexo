@@ -62,15 +62,33 @@ pub struct DataDeleteInput {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DataImportInput {
+    /// Connection name from `list_connections`; optional when the profile has exactly one.
+    pub connection: Option<String>,
+    /// Unique id for this import. Retrying with the same id and the same file returns the first result instead of importing twice.
+    pub operation_id: String,
+    /// The table the rows go into, such as `public.customers`; it must be one the profile sees.
+    pub target: String,
+    /// The data file, by its path inside the project folder the server was started in: .csv, .tsv, .json (an array of objects) or .jsonl, at most 32 MiB.
+    pub file: String,
+    /// csv, tsv, json or jsonl; the file's extension says when left out.
+    pub format: Option<String>,
+    /// A file column into a table column, as `source=target`; `source=` leaves it out. Each column goes to the table's column of its own name otherwise.
+    pub mapping: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DataSqlInput {
     /// Connection name from `list_connections`; optional when the profile has exactly one.
     pub connection: Option<String>,
     /// Unique id for this change. Retrying with the same id and payload returns the first result instead of writing twice.
     pub operation_id: String,
-    /// The table the grant was issued for. Every table the statement touches must be inside the grant.
-    pub target: String,
-    /// One INSERT, UPDATE or DELETE.
-    pub sql: String,
+    /// What the audit names this change by; the tables it touches when left out. Every table the SQL touches must be one the profile sees.
+    pub target: Option<String>,
+    /// One or more INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements separated by `;`, run as one transaction: all of them, or none if one fails. One approval covers the whole script. Pass this or `file`.
+    pub sql: Option<String>,
+    /// A .sql file to run instead of `sql`, by its path inside the project folder the server was started in, at most 1 MiB. It is read once: what is approved is what runs.
+    pub file: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -93,7 +111,7 @@ pub struct AdminActionInput {
     pub connection: Option<String>,
     /// Unique id for this action. Retrying with the same id and payload returns the first result.
     pub operation_id: String,
-    /// Server session to act on, from `admin_list_sessions`.
+    /// Server session to act on, from `admin_list_sessions`, listed while this profile may end sessions.
     pub session_id: String,
     /// Required to terminate a session: repeat `session_id` exactly to confirm.
     pub confirm_target: Option<String>,
@@ -103,7 +121,7 @@ pub struct AdminActionInput {
 pub struct CatalogListInput {
     /// Connection name from `list_connections`; optional when the profile has exactly one.
     pub connection: Option<String>,
-    /// `id` of the node whose children to list, from an earlier catalog_list or catalog_search; omit for the roots.
+    /// `id` of the node whose children to list, from an earlier catalog_list; omit for the roots.
     pub parent_id: Option<String>,
 }
 
@@ -126,6 +144,16 @@ pub struct ObjectInput {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct OverviewInput {
+    /// Connection name from `list_connections`; optional when the profile has exactly one.
+    pub connection: Option<String>,
+    /// The schema to describe (on MySQL, the database); every one the profile sees when left out.
+    pub schema: Option<String>,
+    /// Count each table's rows with count(*) instead of the server's estimate: exact, but it reads every row, 200 tables at most.
+    pub exact_counts: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DataReadInput {
     /// Connection name from `list_connections`; optional when the profile has exactly one.
     pub connection: Option<String>,
@@ -139,6 +167,8 @@ pub struct DataReadInput {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DiffInput {
+    /// Connection the snapshots were taken of; optional when the profile has exactly one.
+    pub connection: Option<String>,
     /// Name of the older snapshot, saved with `dexo schema snapshot --connection C --name N`.
     pub from_snapshot: String,
     /// Name of the newer snapshot.

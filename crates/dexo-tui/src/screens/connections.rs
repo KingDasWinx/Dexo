@@ -518,7 +518,7 @@ impl ConnectionsScreen {
                 .unwrap_or_default()
         };
         let driver = dexo_driver_api::DriverDescriptor::for_id(&profile.driver)
-            .map(|descriptor| descriptor.display_name)
+            .map(|descriptor| descriptor.display_name.into_owned())
             .unwrap_or_default();
         self.search.matches([
             profile.name.as_str(),
@@ -527,7 +527,7 @@ impl ConnectionsScreen {
             text("path"),
             group_of(profile).unwrap_or_default(),
             profile.driver.as_str(),
-            driver,
+            driver.as_str(),
         ])
     }
 

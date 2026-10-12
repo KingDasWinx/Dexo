@@ -1,10 +1,12 @@
 pub mod approval;
 pub mod audit;
+pub mod bypass;
 pub mod clients;
 pub mod connection;
 pub mod grant;
 pub mod ledger;
 pub mod operation;
+pub mod overview;
 pub mod policy;
 pub mod profile;
 pub mod selector;
@@ -13,10 +15,14 @@ pub mod service;
 pub use approval::{Approval, ApprovalDecision};
 pub use audit::{AuditEvent, SqlAuditMode};
 pub use connection::McpConnection;
-pub use grant::{Grant, GrantCapability, GrantRequest, WRITE_TOOLS, parse_ttl};
+pub use grant::{
+    Grant, GrantRequest, WRITE_TOOLS, WriteKind, grantable_tools, parse_ttl, why_not_grantable,
+};
 pub use ledger::{GrantLedger, MemoryGrantLedger};
 pub use operation::{OperationRecord, OperationState, SideEffect};
 pub use policy::{Decision, ObjectPolicy};
 pub use profile::{McpLimits, McpProfile, PersistentAccess, QueryMode, ToolRule};
 pub use selector::{Effect, ObjectRef, Segment, Selector, SelectorRule};
-pub use service::{McpService, READ_TOOLS, ReadResult, advertised_tools, known_tools};
+pub use service::{
+    McpService, READ_TOOLS, ReadResult, advertised_tools, known_tools, published_tools,
+};

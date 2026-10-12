@@ -7,6 +7,7 @@
 - [Data and schema](data-schema.md)
 - [CLI](cli.md)
 - [MCP](mcp.md)
+- [Plugins](plugins.md)
 - [Privacy](privacy.md)
 - [Troubleshooting](troubleshooting.md)
 - [Driver development](drivers.md)

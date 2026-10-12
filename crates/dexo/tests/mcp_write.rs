@@ -1,5 +1,5 @@
 use dexo_app::Environment;
-use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, GrantCapability};
+use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, WriteKind};
 use dexo_app::mcp::ledger::{GrantLedger, MemoryGrantLedger};
 use dexo_app::mcp::{Effect, McpConnection, McpProfile, McpService, SelectorRule};
 use dexo_driver_api::{ConnectRequest, ConnectionFactory, Session};
@@ -91,11 +91,10 @@ async fn postgres_and_mysql_keep_mcp_capabilities_isolated() {
                 Grant::new(
                     &profile,
                     "local",
-                    GrantCapability::DataWrite,
-                    vec!["data_insert".into()],
-                    vec![SelectorRule::parse(Effect::Allow, "dexo.public.items").unwrap()],
+                    &[WriteKind::Rows],
                     0,
                     DEFAULT_TTL_SECS,
+                    120,
                 )
                 .unwrap(),
             )
@@ -116,7 +115,7 @@ async fn postgres_and_mysql_keep_mcp_capabilities_isolated() {
             .cloned()
             .unwrap(),
             0,
-            None,
+            Some(dexo_mcp::tools_write::Clearance::Approved(uuid::Uuid::nil())),
         )
         .await
         .unwrap_err();

@@ -25,5 +25,6 @@ uuid.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
 dexo-test-support = { path = "../dexo-test-support" }
 insta = { workspace = true, features = ["json"] }
+tempfile.workspace = true
 async-trait.workspace = true
 dexo-sql = { path = "../dexo-sql" }

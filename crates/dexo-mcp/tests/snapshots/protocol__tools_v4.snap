@@ -8,7 +8,7 @@ expression: client.tools().await
       "destructiveHint": false,
       "readOnlyHint": false
     },
-    "description": "Cancel the running query of one server session. Needs an admin grant for this connection.",
+    "description": "Cancel the running query of one server session. Appears while a person has let this profile end sessions on this connection; each call waits for their approval unless they let it run without asking.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -31,7 +31,7 @@ expression: client.tools().await
           "type": "string"
         },
         "session_id": {
-          "description": "Server session to act on, from `admin_list_sessions`.",
+          "description": "Server session to act on, from `admin_list_sessions`, listed while this profile may end sessions.",
           "type": "string"
         }
       },
@@ -68,7 +68,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Terminate one server session. Needs an admin grant for this connection and `confirm_target` equal to `session_id`.",
+    "description": "Terminate one server session. Appears while a person has let this profile end sessions on this connection; each call waits for their approval unless they let it run without asking, and needs `confirm_target` equal to `session_id`.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -91,7 +91,7 @@ expression: client.tools().await
           "type": "string"
         },
         "session_id": {
-          "description": "Server session to act on, from `admin_list_sessions`.",
+          "description": "Server session to act on, from `admin_list_sessions`, listed while this profile may end sessions.",
           "type": "string"
         }
       },
@@ -119,7 +119,7 @@ expression: client.tools().await
           ]
         },
         "parent_id": {
-          "description": "`id` of the node whose children to list, from an earlier catalog_list or catalog_search; omit for the roots.",
+          "description": "`id` of the node whose children to list, from an earlier catalog_list; omit for the roots.",
           "type": [
             "string",
             "null"
@@ -134,7 +134,7 @@ expression: client.tools().await
     "annotations": {
       "readOnlyHint": true
     },
-    "description": "Search table, view and column names in the connection's indexed catalog. The first search on a connection indexes it, which can take a while on a large server.",
+    "description": "Tables, views, columns, indexes and constraints by name, or by what their notes say, in the connection's indexed catalog. The first search on a connection indexes it, which can take a while on a large server.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -171,7 +171,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Delete the one row named by `identity`. Appears only while a data_write grant covering `target` is active.",
+    "description": "Delete the one row named by `identity`. Appears while a person has let this profile change rows; each call waits for their approval unless they let it run without asking.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -210,7 +210,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Run one INSERT, UPDATE or DELETE. Every table it touches must be inside the grant; needs the profile rule `--allow-tool data_execute_sql`.",
+    "description": "Run a script of INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements as one transaction -- a whole seed in one call, all of it or none of it. Appears while a person has let this profile change rows; every table it touches must be one the profile sees, and the call waits for one approval of the whole script, unless they let all of it run without asking.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -221,23 +221,34 @@ expression: client.tools().await
             "null"
           ]
         },
+        "file": {
+          "description": "A .sql file to run instead of `sql`, by its path inside the project folder the server was started in, at most 1 MiB. It is read once: what is approved is what runs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "operation_id": {
           "description": "Unique id for this change. Retrying with the same id and payload returns the first result instead of writing twice.",
           "type": "string"
         },
         "sql": {
-          "description": "One INSERT, UPDATE or DELETE.",
-          "type": "string"
+          "description": "One or more INSERT, UPDATE, DELETE or (on Postgres) TRUNCATE statements separated by `;`, run as one transaction: all of them, or none if one fails. One approval covers the whole script. Pass this or `file`.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "target": {
-          "description": "The table the grant was issued for. Every table the statement touches must be inside the grant.",
-          "type": "string"
+          "description": "What the audit names this change by; the tables it touches when left out. Every table the SQL touches must be one the profile sees.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "operation_id",
-        "target",
-        "sql"
+        "operation_id"
       ],
       "type": "object"
     },
@@ -248,7 +259,62 @@ expression: client.tools().await
       "destructiveHint": false,
       "readOnlyHint": false
     },
-    "description": "Insert one row. Appears only while a data_write grant covering `target` is active; one successful call spends the grant.",
+    "description": "Load a CSV, TSV, JSON or JSON Lines file from the project folder into one table, as one transaction: every row, or at the first bad one none of them, said by its line. Appears while a person has let this profile change rows; asked to approve, the person sees the file's row count, columns and first rows, and the import runs only the file they approved.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "description": "The data file, by its path inside the project folder the server was started in: .csv, .tsv, .json (an array of objects) or .jsonl, at most 32 MiB.",
+          "type": "string"
+        },
+        "format": {
+          "description": "csv, tsv, json or jsonl; the file's extension says when left out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mapping": {
+          "description": "A file column into a table column, as `source=target`; `source=` leaves it out. Each column goes to the table's column of its own name otherwise.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "description": "Unique id for this import. Retrying with the same id and the same file returns the first result instead of importing twice.",
+          "type": "string"
+        },
+        "target": {
+          "description": "The table the rows go into, such as `public.customers`; it must be one the profile sees.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "target",
+        "file"
+      ],
+      "type": "object"
+    },
+    "name": "data_import"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Insert one row. Appears while a person has let this profile change rows on a connection; each call waits for their approval on Dexo's Agents screen, unless they let it run without asking.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -332,7 +398,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Update the one row named by `identity`. Appears only while a data_write grant covering `target` is active.",
+    "description": "Update the one row named by `identity`. Appears while a person has let this profile change rows; each call waits for their approval unless they let it run without asking.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -558,7 +624,7 @@ expression: client.tools().await
       "destructiveHint": true,
       "readOnlyHint": false
     },
-    "description": "Apply one DDL statement. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.",
+    "description": "Apply one DDL statement. Appears while a person has let this profile change the schema; each call waits for their approval unless they let it run without asking. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -606,6 +672,13 @@ expression: client.tools().await
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
+        "connection": {
+          "description": "Connection the snapshots were taken of; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "from_snapshot": {
           "description": "Name of the older snapshot, saved with `dexo schema snapshot --connection C --name N`.",
           "type": "string"
@@ -622,5 +695,39 @@ expression: client.tools().await
       "type": "object"
     },
     "name": "schema_diff"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Every table and view of a schema the profile sees, in one call: columns with type, nullability and default, primary and unique keys, foreign keys and checks, and the row count the server estimates -- or counts, with `exact_counts`. Use it instead of object_describe table by table.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exact_counts": {
+          "description": "Count each table's rows with count(*) instead of the server's estimate: exact, but it reads every row, 200 tables at most.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "schema": {
+          "description": "The schema to describe (on MySQL, the database); every one the profile sees when left out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "schema_overview"
   }
 ]

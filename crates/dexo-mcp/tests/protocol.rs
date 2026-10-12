@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use common::{Client, FakeBackend, connection, is_error, profile, text};
-use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, GrantCapability};
-use dexo_app::mcp::{Effect, GrantLedger, MemoryGrantLedger, SelectorRule};
+use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, WriteKind};
+use dexo_app::mcp::{GrantLedger, MemoryGrantLedger};
 use dexo_driver_api::DbValue;
 use dexo_test_support::FakeSession;
 use serde_json::json;
@@ -44,6 +44,28 @@ async fn tools_are_typed_and_described() {
             "{} needs a real description",
             tool["name"]
         );
+    }
+}
+
+/// Every list, and a resource read, says it may not be cached nor shared (SEP-2549):
+/// protocol 2026-07-28 requires both fields, and Claude Code refused the tools without
+/// them. The tools change with each grant, so nothing is kept.
+#[tokio::test]
+async fn lists_say_they_are_not_to_be_kept() {
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", users())).await;
+    for (method, params) in [
+        ("tools/list", json!({})),
+        ("resources/list", json!({})),
+        ("resources/templates/list", json!({})),
+        ("prompts/list", json!({})),
+        (
+            "resources/read",
+            json!({"uri": "dexo://profile/capabilities"}),
+        ),
+    ] {
+        let result = &client.request(method, params).await["result"];
+        assert_eq!(result["ttlMs"], json!(0), "{method}: {result}");
+        assert_eq!(result["cacheScope"], json!("private"), "{method}: {result}");
     }
 }
 
@@ -89,11 +111,10 @@ async fn a_grant_publishes_its_tool_and_revoking_removes_it() {
     let grant = Grant::new(
         &profile(),
         "local",
-        GrantCapability::DataWrite,
-        vec!["data_insert".into()],
-        vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+        &[WriteKind::Rows],
         dexo_mcp::tools_write::now_secs(),
         DEFAULT_TTL_SECS,
+        120,
     )
     .unwrap();
     let id = grant.id;
@@ -111,13 +132,93 @@ async fn a_grant_publishes_its_tool_and_revoking_removes_it() {
     assert!(
         client
             .saw_notification("notifications/tools/list_changed")
-            .await
+            .await,
+        "revoking did not announce the change"
     );
     assert!(
         !client
             .tool_names()
             .await
             .contains(&"data_insert".to_string())
+    );
+    // The second grant is announced too: the list is compared, not a counter that stalls.
+    client.notifications.clear();
+    ledger.insert_grant(sessions_grant()).unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    let names = client.tool_names().await;
+    assert!(names.contains(&"admin_cancel_query".to_string()));
+    assert!(
+        names.contains(&"admin_list_sessions".to_string()),
+        "the session_id the session tools take must be findable"
+    );
+}
+
+fn sessions_grant() -> Grant {
+    Grant::new(
+        &profile(),
+        "local",
+        &[WriteKind::Sessions],
+        dexo_mcp::tools_write::now_secs(),
+        DEFAULT_TTL_SECS,
+        120,
+    )
+    .unwrap()
+}
+
+/// From protocol 2026-07-28 a client subscribes to list changes, and hears of them on that
+/// subscription only; unanswered, the listen was method-not-found on every poll.
+#[tokio::test]
+async fn a_listening_client_hears_of_tool_changes_on_its_subscription() {
+    let backend = Arc::new(FakeBackend::with_session("local", users()));
+    let ledger = Arc::new(MemoryGrantLedger::default());
+    let mut client = Client::start_at(
+        "2026-07-28",
+        profile(),
+        vec![connection("local")],
+        backend,
+        Arc::clone(&ledger),
+    )
+    .await;
+    let listen = client
+        .send_request(
+            "subscriptions/listen",
+            json!({"notifications": {"toolsListChanged": true}}),
+        )
+        .await;
+    assert!(
+        client
+            .saw_notification("notifications/subscriptions/acknowledged")
+            .await,
+        "{:?}",
+        client.notifications
+    );
+    assert!(
+        !client
+            .notifications
+            .iter()
+            .any(|message| message["id"] == json!(listen)),
+        "the listen was refused: {:?}",
+        client.notifications
+    );
+    ledger.insert_grant(sessions_grant()).unwrap();
+    let changed = client
+        .notification("notifications/tools/list_changed")
+        .await
+        .expect("the grant was announced");
+    assert_eq!(
+        changed["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"],
+        json!(listen)
+    );
+    assert!(
+        client
+            .notification("notifications/tools/list_changed")
+            .await
+            .is_none(),
+        "a subscribed client hears of a change once, on its subscription"
     );
 }
 
@@ -174,6 +275,35 @@ fn catalog() -> Vec<dexo_driver_api::CatalogObject> {
             Some("users"),
         ),
     ]
+}
+
+/// The ids catalog_list shows are the ones `parent_id` takes, and each name is the path
+/// its object occupies: a schema read db.public.public, the database db.db.
+#[tokio::test]
+async fn the_catalog_is_walked_by_the_ids_it_shows() {
+    let mut backend = FakeBackend::with_session("local", users().with_catalog(catalog()));
+    backend.catalog = catalog();
+    let (mut client, _, _) = client_with(backend).await;
+    let roots = text(&client.call("catalog_list", json!({})).await);
+    assert!(roots.contains("| db | catalog | db |"), "{roots}");
+    let schemas = text(
+        &client
+            .call("catalog_list", json!({"parent_id": "db"}))
+            .await,
+    );
+    assert!(
+        schemas.contains("| public | schema | db.public |"),
+        "{schemas}"
+    );
+    let tables = text(
+        &client
+            .call("catalog_list", json!({"parent_id": "public"}))
+            .await,
+    );
+    assert!(
+        tables.contains("| users | table | db.public.users |"),
+        "{tables}"
+    );
 }
 
 #[tokio::test]
@@ -261,16 +391,29 @@ async fn schema_diff_hides_denied_objects() {
             None,
         )
     };
-    let snapshot =
-        |objects| SchemaSnapshot::capture("postgres", "16", "2026-09-23T00:00:00Z", "db", objects);
+    let of = |connection: &str, objects| {
+        SchemaSnapshot::capture(
+            "postgres",
+            "16",
+            "2026-09-23T00:00:00Z",
+            connection,
+            objects,
+        )
+    };
     let mut backend = FakeBackend::with_session("local", users());
     backend
         .snapshots
-        .insert("before".into(), snapshot(vec![table("users")]));
+        .insert("before".into(), of("local", vec![table("users")]));
     backend.snapshots.insert(
         "after".into(),
-        snapshot(vec![table("users"), table("orders"), table("secrets")]),
+        of(
+            "local",
+            vec![table("users"), table("orders"), table("secrets")],
+        ),
     );
+    backend
+        .snapshots
+        .insert("elsewhere".into(), of("billing", vec![table("invoices")]));
     let (mut client, _, _) = client_with(backend).await;
     let diff = client
         .call(
@@ -291,6 +434,14 @@ async fn schema_diff_hides_denied_objects() {
         )
         .await;
     assert_eq!(text(&missing), "Error [NOT_FOUND]: not found");
+    // A snapshot of a connection outside the profile is not there for it.
+    let elsewhere = client
+        .call(
+            "schema_diff",
+            json!({"from_snapshot": "before", "to_snapshot": "elsewhere"}),
+        )
+        .await;
+    assert_eq!(text(&elsewhere), "Error [NOT_FOUND]: not found");
 }
 
 #[tokio::test]
@@ -400,7 +551,7 @@ async fn resources_and_prompts_do_not_leak_policy_or_sql() {
 async fn tool_contract_is_versioned() {
     assert_eq!(
         dexo_mcp::TOOL_SCHEMA_VERSION,
-        3,
+        4,
         "rename the snapshot below with the new version"
     );
     let mut everything = profile();
@@ -412,37 +563,19 @@ async fn tool_contract_is_versioned() {
     }
     let ledger = Arc::new(MemoryGrantLedger::default());
     let now = dexo_mcp::tools_write::now_secs();
-    for (capability, tools) in [
-        (
-            GrantCapability::DataWrite,
-            vec![
-                "data_insert",
-                "data_update",
-                "data_delete",
-                "data_execute_sql",
-            ],
-        ),
-        (GrantCapability::Ddl, vec!["schema_apply_ddl"]),
-        (
-            GrantCapability::Admin,
-            vec!["admin_cancel_query", "admin_terminate_session"],
-        ),
-    ] {
-        ledger
-            .insert_grant(
-                Grant::new(
-                    &everything,
-                    "local",
-                    capability,
-                    tools.into_iter().map(String::from).collect(),
-                    vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
-                    now,
-                    DEFAULT_TTL_SECS,
-                )
-                .unwrap(),
+    ledger
+        .insert_grant(
+            Grant::new(
+                &everything,
+                "local",
+                &WriteKind::ALL,
+                now,
+                DEFAULT_TTL_SECS,
+                120,
             )
-            .unwrap();
-    }
+            .unwrap(),
+        )
+        .unwrap();
     let mut client = Client::start(
         everything,
         vec![connection("local")],
@@ -450,7 +583,7 @@ async fn tool_contract_is_versioned() {
         ledger,
     )
     .await;
-    insta::assert_json_snapshot!("tools_v3", client.tools().await);
+    insta::assert_json_snapshot!("tools_v4", client.tools().await);
 }
 
 /// MCP-002 / MCP-003: a structured-only profile exposes no raw SQL, no write and no
@@ -482,6 +615,26 @@ async fn a_structured_profile_exposes_no_raw_sql_or_writes() {
 
 /// QUALITY-019: every bypass found in the 2026-09-23 review, over the protocol. None of
 /// them may reach the session.
+/// A bare name is judged as public's; the session MCP opens resolves it there too, not by
+/// whatever search_path the role has.
+#[tokio::test]
+async fn a_session_resolves_bare_names_where_the_policy_judged_them() {
+    let session = users();
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", session.clone())).await;
+    let read = client
+        .call("query_execute_read", json!({"sql": "select id from users"}))
+        .await;
+    assert!(!is_error(&read), "{read}");
+    let log = session.log();
+    let pinned = log
+        .iter()
+        .position(|entry| entry == "execute SET search_path = \"public\"");
+    let selected = log
+        .iter()
+        .position(|entry| entry == "execute select id from users");
+    assert!(pinned.is_some() && pinned < selected, "{log:?}");
+}
+
 #[tokio::test]
 async fn review_bypasses_never_reach_the_database() {
     let session = users();
@@ -595,11 +748,10 @@ async fn production_connections_refuse_writes_over_the_protocol() {
             Grant::new(
                 &profile(),
                 "local",
-                GrantCapability::DataWrite,
-                vec!["data_insert".into()],
-                vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+                &[WriteKind::Rows],
                 dexo_mcp::tools_write::now_secs(),
                 DEFAULT_TTL_SECS,
+                120,
             )
             .unwrap(),
         )
@@ -657,11 +809,11 @@ async fn missing_required_arguments_are_rejected() {
     }
 }
 
-/// E1: under an asking grant a write waits for a person -- runs once approved, is
-/// refused when denied or when no one answers in time -- and the request keeps no SQL
-/// once it is decided.
+/// A write the person let through runs without asking, said in the audit; a script with
+/// anything more asks, and the request says what it asks about.
 #[tokio::test]
-async fn an_asking_grant_waits_for_a_person() {
+async fn what_the_person_lets_through_runs_without_asking() {
+    use dexo_app::mcp::bypass::Operation;
     use dexo_app::mcp::{ApprovalDecision, GrantLedger};
     let (mut client, _, ledger) = client_with(FakeBackend::with_session("local", users())).await;
     ledger
@@ -669,14 +821,83 @@ async fn an_asking_grant_waits_for_a_person() {
             Grant::new(
                 &profile(),
                 "local",
-                GrantCapability::DataWrite,
-                vec!["data_insert".into()],
-                vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+                &[WriteKind::Rows],
                 dexo_mcp::tools_write::now_secs(),
                 DEFAULT_TTL_SECS,
+                2,
             )
             .unwrap()
-            .asking(2),
+            .with_bypass(&[Operation::Insert]),
+        )
+        .unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    let inserted = client
+        .call(
+            "data_execute_sql",
+            json!({"operation_id": "op-by-1", "sql": "insert into users values (2); insert into users values (3)"}),
+        )
+        .await;
+    assert!(text(&inserted).starts_with("done"), "{inserted}");
+    let now = dexo_mcp::tools_write::now_secs();
+    assert!(ledger.pending_approvals(now).is_empty());
+    assert!(
+        ledger
+            .audits()
+            .iter()
+            .any(|event| event.decision == "bypass" && event.status == "ran without asking: insert")
+    );
+    // A delete with it is asked about, and the request says which part.
+    let asking = {
+        let ledger = Arc::clone(&ledger);
+        tokio::spawn(async move {
+            loop {
+                let now = dexo_mcp::tools_write::now_secs();
+                if let Some(request) = ledger.pending_approvals(now).into_iter().next() {
+                    ledger
+                        .settle_approval(request.id, ApprovalDecision::Denied, now)
+                        .unwrap();
+                    return request.statement;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+    };
+    let asked = client
+        .call(
+            "data_execute_sql",
+            json!({"operation_id": "op-by-2", "sql": "insert into users values (4); delete from users where id = 1"}),
+        )
+        .await;
+    assert!(text(&asked).contains("denied"), "{asked}");
+    let statement = asking.await.unwrap();
+    assert!(
+        statement.starts_with("-- asks for: delete (the rest runs without asking)"),
+        "{statement}"
+    );
+}
+
+/// E1: under a grant every write waits for a person -- runs once approved, is
+/// refused when denied or when no one answers in time -- and the request keeps no SQL
+/// once it is decided.
+#[tokio::test]
+async fn every_write_waits_for_a_person() {
+    use dexo_app::mcp::{ApprovalDecision, GrantLedger};
+    let (mut client, _, ledger) = client_with(FakeBackend::with_session("local", users())).await;
+    ledger
+        .insert_grant(
+            Grant::new(
+                &profile(),
+                "local",
+                &[WriteKind::Rows],
+                dexo_mcp::tools_write::now_secs(),
+                DEFAULT_TTL_SECS,
+                2,
+            )
+            .unwrap(),
         )
         .unwrap();
     assert!(
@@ -743,19 +964,17 @@ async fn an_asking_grant_waits_for_a_person() {
     assert!(ledger.pending_approvals(now).is_empty());
 }
 
-/// An asking grant on `users` that waits up to `secs` for each write.
+/// A grant to change rows that waits up to `secs` for each write.
 fn asking_grant(secs: u32) -> Grant {
     Grant::new(
         &profile(),
         "local",
-        GrantCapability::DataWrite,
-        vec!["data_insert".into()],
-        vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+        &[WriteKind::Rows],
         dexo_mcp::tools_write::now_secs(),
         DEFAULT_TTL_SECS,
+        secs,
     )
     .unwrap()
-    .asking(secs)
 }
 
 /// The first request waiting for a person, once the server has written it down.

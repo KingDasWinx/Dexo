@@ -50,17 +50,19 @@ pub enum Screen {
     Server,
     Compare,
     History,
+    Plugins,
 }
 
 impl Screen {
     /// In the order the header lists them. Compare is listed only while it is on screen:
     /// it is opened from the palette or `Ctrl+G d`, now and then.
-    pub const ALL: [Screen; 6] = [
+    pub const ALL: [Screen; 7] = [
         Screen::Workbench,
         Screen::Connections,
         Screen::Agents,
         Screen::Server,
         Screen::History,
+        Screen::Plugins,
         Screen::Compare,
     ];
 
@@ -72,6 +74,7 @@ impl Screen {
             Screen::Server => "Server",
             Screen::Compare => "Compare",
             Screen::History => "History",
+            Screen::Plugins => "Plugins",
         }
     }
 
@@ -92,6 +95,7 @@ impl Screen {
             Screen::Server => "screen.server",
             Screen::Compare => "screen.compare",
             Screen::History => "screen.history",
+            Screen::Plugins => "screen.plugins",
         }
     }
 }
@@ -2027,9 +2031,13 @@ pub struct Model {
     pub previous_screen: Screen,
     pub agents_view: crate::screen::agents::AgentsView,
     pub history_view: crate::screen::history::HistoryView,
+    /// The Plugins screen: what is installed, what the index offers, the change under way.
+    pub plugins: crate::screens::plugins::PluginsState,
+    /// A missing driver's plugin, offered where the driver was wanted.
+    pub plugin_offer: Option<crate::screens::plugins::PluginOffer>,
     /// The section of each screen its keys go to -- Alt+1 its list, Alt+2 its detail, as
     /// on the workbench's panes -- in `Screen::ALL`'s order.
-    pub sections: [crate::screen::Section; 6],
+    pub sections: [crate::screen::Section; 7],
     /// How far the detail is read on a screen that keeps no scroll of its own; back to
     /// the top on anything but reading it.
     pub detail_scroll: u16,
@@ -2119,8 +2127,8 @@ pub struct Model {
     pub security: SecurityScreen,
     pub admin: AdminScreen,
     pub mcp_profiles: McpProfilesScreen,
-    /// Agents' Setup view: an agent pointed at Dexo's MCP server.
-    pub mcp_setup: crate::screens::mcp_setup::McpSetup,
+    /// The agents Dexo can start for, as their configs say.
+    pub mcp_clients: crate::screens::mcp_clients::McpClients,
     pub connection_form: ConnectionForm,
     pub connections: ConnectionsScreen,
     pub projects: ProjectsScreen,
@@ -2198,6 +2206,8 @@ impl Default for Model {
             previous_screen: Screen::Workbench,
             agents_view: Default::default(),
             history_view: Default::default(),
+            plugins: Default::default(),
+            plugin_offer: None,
             sections: Default::default(),
             detail_scroll: 0,
             screen_button: 0,
@@ -2289,7 +2299,7 @@ impl Default for Model {
             security: SecurityScreen::default(),
             admin: AdminScreen::default(),
             mcp_profiles: McpProfilesScreen::default(),
-            mcp_setup: Default::default(),
+            mcp_clients: Default::default(),
             connection_form: ConnectionForm::default(),
             connections: ConnectionsScreen::default(),
             projects: ProjectsScreen::default(),

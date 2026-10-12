@@ -1,0 +1,28 @@
+---
+source: crates/dexo-tui/tests/plugins_screen.rs
+expression: "paint(&mut model, 80, 24)"
+---
+[Plugins 1]  default  no connection  —                                          
+ 1 Installed  [2 Available] / search           [t Type: all]                    
+┌▸ Available (1)───────────────────────────────────────────────────────────────┐
+│ [r Refresh]  [f Install from file…]                                          │
+│> + Extra themes  theme   1.0.0                                               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌  Extra themes────────────────────────────────────────────────────────────────┐
+│ [i Install]                                                                  │
+│                                                                              │
+│ kind      theme                                                              │
+│ newest    1.0.0                                                              │
+│ author    KingDasWinx                                                        │
+│ license   MIT                                                                │
+│ requires  Dexo 1.5.0 or newer                                                │
+│ download  26.5 MB                                                            │
+│ origin    official, signed                                                   │
+│ themes    extra-themes                                                       │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+Plugins  Up/Down pick  Tab view  / search  t type  Esc back           Ctrl+P  F1

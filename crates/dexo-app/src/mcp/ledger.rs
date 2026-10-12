@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, ErrorCategory};
 use crate::mcp::approval::{Approval, ApprovalDecision, KEEP_SETTLED_SECS};
-use crate::mcp::audit::AuditEvent;
+use crate::mcp::audit::{AuditEvent, access_changes};
 use crate::mcp::grant::Grant;
 use crate::mcp::operation::{
     OperationRecord, OperationState, SideEffect, payload_hash, replay_or_conflict,
@@ -13,10 +13,18 @@ use crate::mcp::operation::{
 
 pub trait GrantLedger: Send + Sync {
     fn active_grants(&self, profile: &str, now: i64) -> Vec<Grant>;
-    fn revision(&self) -> u64;
+    /// Saves `grant` in place of what its profile had on its connection -- one write access
+    /// per profile and connection -- denying the writes that waited under the old one.
     fn insert_grant(&self, grant: Grant) -> Result<(), AppError>;
-    fn consume(&self, id: Uuid, now: i64) -> Result<Grant, AppError>;
     fn revoke(&self, id: Uuid) -> Result<(), AppError>;
+    /// Lets `operations` of the live grant `id` run without asking from now on.
+    fn add_bypass(
+        &self,
+        id: Uuid,
+        operations: &[crate::mcp::bypass::Operation],
+    ) -> Result<(), AppError>;
+    /// Takes back a profile's write access to one connection; how many grants went.
+    fn revoke_connection(&self, profile: &str, connection: &str) -> Result<usize, AppError>;
     fn revoke_profile(&self, profile: &str) -> Result<usize, AppError>;
     fn reserve_operation(&self, record: OperationRecord) -> Result<OperationRecord, AppError>;
     fn lookup_operation(
@@ -82,6 +90,22 @@ struct Inner {
 }
 
 impl Inner {
+    fn live(&self) -> Vec<Grant> {
+        self.grants
+            .iter()
+            .filter(|grant| !grant.revoked)
+            .cloned()
+            .collect()
+    }
+
+    /// After grants changed from `before`: the revoked ones' waiting writes are denied, and
+    /// each grant given or taken back is audited.
+    fn changed(&mut self, before: &[Grant]) {
+        self.deny_revoked();
+        let events = access_changes(before, &self.live());
+        self.audits.extend(events);
+    }
+
     /// A revoked grant's waiting writes are denied, so no one approves one of them.
     fn deny_revoked(&mut self) {
         let revoked: Vec<Uuid> = self
@@ -115,62 +139,85 @@ impl GrantLedger for MemoryGrantLedger {
             .collect()
     }
 
-    fn revision(&self) -> u64 {
-        self.inner.lock().expect("ledger").revision
-    }
-
     fn insert_grant(&self, grant: Grant) -> Result<(), AppError> {
         let mut inner = self.inner.lock().expect("ledger");
+        let before = inner.live();
+        for old in &mut inner.grants {
+            if old.profile == grant.profile && old.connection == grant.connection {
+                old.revoked = true;
+            }
+        }
         inner.revision += 1;
         let mut grant = grant;
         grant.revision = inner.revision;
         inner.grants.push(grant);
+        inner.changed(&before);
         Ok(())
-    }
-
-    fn consume(&self, id: Uuid, now: i64) -> Result<Grant, AppError> {
-        let mut inner = self.inner.lock().expect("ledger");
-        let cloned = {
-            let grant = inner
-                .grants
-                .iter_mut()
-                .find(|grant| grant.id == id)
-                .ok_or_else(|| AppError::new(ErrorCategory::McpPolicy, "not found"))?;
-            if !grant.active(now) {
-                return Err(AppError::new(ErrorCategory::McpPolicy, "not found"));
-            }
-            grant.remaining_uses = grant.remaining_uses.saturating_sub(1);
-            grant.clone()
-        };
-        inner.revision += 1;
-        Ok(cloned)
     }
 
     fn revoke(&self, id: Uuid) -> Result<(), AppError> {
         let mut inner = self.inner.lock().expect("ledger");
-        if let Some(grant) = inner.grants.iter_mut().find(|grant| grant.id == id) {
-            grant.remaining_uses = 0;
+        let before = inner.live();
+        if let Some(grant) = inner
+            .grants
+            .iter_mut()
+            .find(|grant| grant.id == id && !grant.revoked)
+        {
             grant.revoked = true;
             inner.revision += 1;
-            inner.deny_revoked();
+            inner.changed(&before);
             Ok(())
         } else {
             Err(AppError::new(ErrorCategory::McpPolicy, "not found"))
         }
     }
 
-    fn revoke_profile(&self, profile: &str) -> Result<usize, AppError> {
+    fn add_bypass(
+        &self,
+        id: Uuid,
+        operations: &[crate::mcp::bypass::Operation],
+    ) -> Result<(), AppError> {
         let mut inner = self.inner.lock().expect("ledger");
+        let grant = inner
+            .grants
+            .iter_mut()
+            .find(|grant| grant.id == id && !grant.revoked)
+            .ok_or_else(|| AppError::new(ErrorCategory::McpPolicy, "not found"))?;
+        let mut more = grant.bypass.clone();
+        more.extend_from_slice(operations);
+        *grant = grant.clone().with_bypass(&more);
+        let event = AuditEvent::bypass(grant);
+        inner.audits.push(event);
+        Ok(())
+    }
+
+    fn revoke_connection(&self, profile: &str, connection: &str) -> Result<usize, AppError> {
+        let mut inner = self.inner.lock().expect("ledger");
+        let before = inner.live();
         let mut revoked = 0;
         for grant in &mut inner.grants {
-            if grant.profile == profile && !grant.revoked {
-                grant.remaining_uses = 0;
+            if grant.profile == profile && grant.connection == connection && !grant.revoked {
                 grant.revoked = true;
                 revoked += 1;
             }
         }
         inner.revision += 1;
-        inner.deny_revoked();
+        inner.changed(&before);
+        Ok(revoked)
+    }
+
+    fn revoke_profile(&self, profile: &str) -> Result<usize, AppError> {
+        let mut inner = self.inner.lock().expect("ledger");
+        let before = inner.live();
+        let mut revoked = 0;
+        for grant in &mut inner.grants {
+            if grant.profile == profile && !grant.revoked {
+                grant.revoked = true;
+                revoked += 1;
+            }
+        }
+        inner.revision += 1;
+        inner.changed(&before);
         Ok(revoked)
     }
 
@@ -340,51 +387,62 @@ pub fn hash_payload(value: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{GrantLedger, MemoryGrantLedger};
-    use crate::mcp::grant::{DEFAULT_TTL_SECS, Grant, GrantCapability};
+    use crate::mcp::grant::{DEFAULT_TTL_SECS, Grant, WriteKind};
     use crate::mcp::operation::{OperationRecord, OperationState, SideEffect};
     use crate::mcp::profile::McpProfile;
     use crate::mcp::selector::{Effect, SelectorRule};
     use serde_json::json;
 
-    #[test]
-    fn consume_is_one_use_and_expiry_hides_grant() {
+    fn grant(connection: &str) -> Grant {
         let mut profile = McpProfile::new("assistant");
         profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-        let grant = Grant::new(
+        Grant::new(
             &profile,
-            "local",
-            GrantCapability::DataWrite,
-            vec!["data_insert".into()],
-            vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
+            connection,
+            &[WriteKind::Rows],
             0,
             DEFAULT_TTL_SECS,
+            120,
         )
-        .unwrap();
-        let id = grant.id;
+        .unwrap()
+    }
+
+    /// One write access per profile and connection: a new one replaces the old, and the
+    /// writes waiting under the old one are denied.
+    #[test]
+    fn a_new_grant_replaces_the_one_on_its_connection() {
+        use crate::mcp::approval::{Approval, ApprovalDecision};
         let ledger = MemoryGrantLedger::default();
-        ledger.insert_grant(grant).unwrap();
+        let first = grant("local");
+        ledger.insert_grant(first.clone()).unwrap();
+        ledger.insert_grant(grant("other")).unwrap();
+        let mut waiting = Approval::pending(
+            "assistant",
+            "local",
+            "data_insert",
+            &serde_json::Map::new(),
+            vec![],
+            0,
+            60,
+        );
+        waiting.grant = first.id;
+        ledger.request_approval(&waiting).unwrap();
+        ledger.insert_grant(grant("local")).unwrap();
+        let active = ledger.active_grants("assistant", 0);
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().all(|grant| grant.id != first.id));
+        assert_eq!(
+            ledger.approval(waiting.id).unwrap().decision,
+            ApprovalDecision::Denied
+        );
+        assert_eq!(ledger.revoke_connection("assistant", "local").unwrap(), 1);
         assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
-        ledger.consume(id, 0).unwrap();
-        assert!(ledger.active_grants("assistant", 0).is_empty());
-        assert!(ledger.consume(id, 0).is_err());
     }
 
     #[test]
     fn fake_clock_hides_expired_grant() {
-        let mut profile = McpProfile::new("assistant");
-        profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-        let grant = Grant::new(
-            &profile,
-            "local",
-            GrantCapability::DataWrite,
-            vec!["data_insert".into()],
-            vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
-            0,
-            DEFAULT_TTL_SECS,
-        )
-        .unwrap();
         let ledger = MemoryGrantLedger::default();
-        ledger.insert_grant(grant).unwrap();
+        ledger.insert_grant(grant("local")).unwrap();
         assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
         assert!(
             ledger

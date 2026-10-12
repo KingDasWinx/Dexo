@@ -1,0 +1,13 @@
+schema = 1
+id = "extra-themes"
+kind = "theme"
+version = "1.0.0"
+name = "Extra themes"
+description = "Solarized Dark and Light, One Dark, Rosé Pine, Kanagawa and Everforest"
+authors = ["KingDasWinx"]
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/KingDasWinx/Dexo"
+min_dexo = "1.4.3"
+
+[theme]
+themes = ["themes/*.toml"]

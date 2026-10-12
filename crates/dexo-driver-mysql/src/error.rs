@@ -13,6 +13,8 @@ pub fn map_error(error: mysql_async::Error) -> DriverError {
             DriverErrorCategory::Authentication
         } else if is_permission(&error) {
             DriverErrorCategory::Permission
+        } else if is_conflict(&server.state) {
+            DriverErrorCategory::Conflict
         } else {
             DriverErrorCategory::Syntax
         };
@@ -32,6 +34,12 @@ pub fn map_error(error: mysql_async::Error) -> DriverError {
     DriverError::new(category, message)
 }
 
+/// SQLSTATE class 23 is a constraint the data broke -- a duplicate key, a foreign key --
+/// and class 40 a deadlock: the statement was well formed.
+fn is_conflict(state: &str) -> bool {
+    state.starts_with("23") || state.starts_with("40")
+}
+
 pub fn is_permission(error: &mysql_async::Error) -> bool {
     match error {
         mysql_async::Error::Server(err) => matches!(err.code, 1044 | 1142 | 1143 | 1227 | 1370),
@@ -39,5 +47,16 @@ pub fn is_permission(error: &mysql_async::Error) -> bool {
             let message = error.to_string().to_ascii_lowercase();
             message.contains("denied") || message.contains("access")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A duplicate key or a deadlock is a conflict to retry or resolve, not SQL to fix.
+    #[test]
+    fn a_broken_constraint_is_a_conflict_not_bad_sql() {
+        assert!(super::is_conflict("23000"));
+        assert!(super::is_conflict("40001"));
+        assert!(!super::is_conflict("42S02"));
     }
 }

@@ -1,8 +1,8 @@
 use std::ops::ControlFlow;
 
 use sqlparser::ast::{
-    BinaryOperator, Expr, ObjectName, ObjectNamePart, Query, Select, Statement, TableFactor, Visit,
-    Visitor,
+    AlterTableOperation, BinaryOperator, CascadeOption, ColumnDef, ColumnOption, Expr, ObjectName,
+    ObjectNamePart, Query, Select, Statement, TableConstraint, TableFactor, Visit, Visitor,
 };
 use sqlparser::dialect::{DuckDbDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
@@ -39,6 +39,41 @@ pub enum GuardRejection {
     Function(String),
     #[error("assigning a variable (:=) is not a read")]
     Assignment,
+    #[error("Unicode-escaped identifiers (U&\"...\") are not allowed")]
+    UnicodeEscape,
+    #[error("TRUNCATE ... CASCADE empties tables it does not name: truncate them by name")]
+    TruncateCascade,
+    #[error("TRUNCATE commits on its own here, where a rollback cannot undo it: use DELETE FROM")]
+    TruncateCommits,
+    #[error("there is no statement to run")]
+    NoStatement,
+    #[error("a script runs {MAX_SCRIPT_STATEMENTS} statements at most")]
+    TooManyStatements,
+    #[error("statement {at}: {rejection}")]
+    InScript {
+        at: usize,
+        rejection: Box<GuardRejection>,
+    },
+}
+
+impl GuardRejection {
+    /// The rejection itself, out of the script statement it was found in.
+    pub fn cause(&self) -> &GuardRejection {
+        match self {
+            Self::InScript { rejection, .. } => rejection.cause(),
+            other => other,
+        }
+    }
+}
+
+/// The most statements one script runs.
+pub const MAX_SCRIPT_STATEMENTS: usize = 1000;
+
+/// One statement of a script, as it was written, and what it touches.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScriptStatement {
+    pub sql: String,
+    pub inspection: Inspection,
 }
 
 /// Functions with side effects, or that run SQL passed as text and so would slip past the
@@ -107,6 +142,7 @@ const DENIED_FUNCTIONS: &[&str] = &[
     "pg_sleep_for",
     "pg_sleep_until",
     "nextval",
+    "currval",
     "setval",
     "pg_notify",
     "dblink",
@@ -175,30 +211,118 @@ pub fn inspect_read(sql: &str, dialect: Dialect) -> Result<Inspection, GuardReje
     guard.finish(Vec::new())
 }
 
-/// A single top-level `INSERT`, `UPDATE` or `DELETE`. Every table it reads or writes is
-/// returned, so the caller can hold all of them to the grant.
+/// A single top-level `INSERT`, `UPDATE`, `DELETE` or Postgres `TRUNCATE`. Every table it
+/// reads or writes is returned, so the caller can hold all of them to the grant.
 pub fn inspect_data_write(sql: &str, dialect: Dialect) -> Result<Inspection, GuardRejection> {
-    let statement = parse_one(sql, dialect)?;
-    if !matches!(
-        statement,
-        Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_)
-    ) {
-        return Err(GuardRejection::WrongKind);
+    inspect_data_statement(&parse_one(sql, dialect)?, dialect)
+}
+
+/// A script of data writes, to run as one transaction. It is split the way the editor
+/// splits, and each piece is parsed on its own and must be one statement
+/// `inspect_data_write` accepts: a piece the splitter got wrong does not parse alone, or
+/// is two statements, and the script is refused -- what runs is what was inspected.
+pub fn inspect_data_script(
+    sql: &str,
+    dialect: Dialect,
+) -> Result<Vec<ScriptStatement>, GuardRejection> {
+    let mut statements = Vec::new();
+    for span in crate::statement::split_statements_in(sql, dialect) {
+        let piece = sql[span.byte_range].trim();
+        let at = statements.len() + 1;
+        let in_script = |rejection| GuardRejection::InScript {
+            at,
+            rejection: Box::new(rejection),
+        };
+        let mut parsed = parse_all(piece, dialect).map_err(in_script)?;
+        match parsed.len() {
+            // A comment between statements.
+            0 => continue,
+            1 => {}
+            _ => return Err(in_script(GuardRejection::NotSingleStatement)),
+        }
+        if at > MAX_SCRIPT_STATEMENTS {
+            return Err(GuardRejection::TooManyStatements);
+        }
+        let inspection = inspect_data_statement(&parsed.remove(0), dialect).map_err(in_script)?;
+        statements.push(ScriptStatement {
+            sql: piece.to_string(),
+            inspection,
+        });
+    }
+    if statements.is_empty() {
+        return Err(GuardRejection::NoStatement);
+    }
+    Ok(statements)
+}
+
+/// `INSERT`, `UPDATE` and `DELETE`; and on Postgres `TRUNCATE`, which a transaction rolls
+/// back, without `CASCADE`, which empties every table that references the ones named.
+fn inspect_data_statement(
+    statement: &Statement,
+    dialect: Dialect,
+) -> Result<Inspection, GuardRejection> {
+    match statement {
+        Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_) => {}
+        Statement::Truncate(truncate) if dialect == Dialect::Postgres => {
+            if matches!(truncate.cascade, Some(CascadeOption::Cascade)) {
+                return Err(GuardRejection::TruncateCascade);
+            }
+        }
+        Statement::Truncate(_) => return Err(GuardRejection::TruncateCommits),
+        _ => return Err(GuardRejection::WrongKind),
     }
     let mut guard = Guard::new(dialect, 1);
     let _ = statement.visit(&mut guard);
     guard.finish(Vec::new())
 }
 
+/// The tables a table's constraints and columns point at: sqlparser visits no foreign
+/// key's `REFERENCES` name as a relation, so a schema write is held to the tables it
+/// couples to by naming them here.
+fn referenced_tables<'a>(
+    constraints: impl IntoIterator<Item = &'a TableConstraint>,
+    columns: impl IntoIterator<Item = &'a ColumnDef>,
+) -> Vec<ObjectName> {
+    let from_constraints = constraints
+        .into_iter()
+        .filter_map(|constraint| match constraint {
+            TableConstraint::ForeignKey(key) => Some(key.foreign_table.clone()),
+            _ => None,
+        });
+    let from_columns = columns
+        .into_iter()
+        .flat_map(|column| &column.options)
+        .filter_map(|option| match &option.option {
+            ColumnOption::ForeignKey(key) => Some(key.foreign_table.clone()),
+            _ => None,
+        });
+    from_constraints.chain(from_columns).collect()
+}
+
 /// A single `CREATE TABLE`, `ALTER TABLE`, `DROP`, `CREATE INDEX` or `CREATE VIEW`.
-/// sqlparser does not visit `DROP` names or a view's own name as relations, so those are
-/// added here explicitly.
+/// sqlparser does not visit `DROP` names, a view's own name or the table a foreign key
+/// references as relations, so those are added here explicitly.
 pub fn inspect_schema_write(sql: &str, dialect: Dialect) -> Result<Inspection, GuardRejection> {
     let statement = parse_one(sql, dialect)?;
     let named: Vec<ObjectName> = match &statement {
-        Statement::CreateTable(_) | Statement::AlterTable(_) | Statement::CreateIndex(_) => {
-            Vec::new()
-        }
+        Statement::CreateTable(table) => referenced_tables(&table.constraints, &table.columns),
+        Statement::AlterTable(alter) => referenced_tables(
+            alter
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    AlterTableOperation::AddConstraint { constraint, .. } => Some(constraint),
+                    _ => None,
+                }),
+            alter
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    AlterTableOperation::AddColumn { column_def, .. } => Some(column_def),
+                    _ => None,
+                }),
+        ),
+        Statement::CreateIndex(_) => Vec::new(),
         Statement::Drop { names, .. } => names.clone(),
         Statement::CreateView(view) => vec![view.name.clone()],
         _ => return Err(GuardRejection::WrongKind),
@@ -566,9 +690,51 @@ fn executable_comment(text: &str) -> bool {
     text.contains("/*!") || text.to_ascii_lowercase().contains("/*m!")
 }
 
+/// Whether `sql` holds a Postgres Unicode-escaped identifier or string, `U&"..."` or
+/// `U&'...'`, in any case, outside an ordinary quote. sqlparser keeps the raw spelling --
+/// it reads `U&"f"(x)` as `U & f(x)` -- while the server decodes it, so a denied name
+/// written that way slipped every list.
+// ponytail: refuses every U& escape rather than decoding one; decode in `path()` if an
+// agent ever needs to name an object that way.
+fn has_unicode_escape(sql: &str) -> bool {
+    let bytes = sql.as_bytes();
+    let mut quote: Option<u8> = None;
+    for (index, &byte) in bytes.iter().enumerate() {
+        match quote {
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None => match byte {
+                b'\'' | b'"' | b'`' => quote = Some(byte),
+                b'U' | b'u'
+                    if bytes.get(index + 1) == Some(&b'&')
+                        && matches!(bytes.get(index + 2), Some(b'"' | b'\''))
+                        && !index.checked_sub(1).is_some_and(|before| {
+                            bytes[before].is_ascii_alphanumeric() || bytes[before] == b'_'
+                        }) =>
+                {
+                    return true;
+                }
+                _ => {}
+            },
+        }
+    }
+    false
+}
+
 fn parse_one(sql: &str, dialect: Dialect) -> Result<Statement, GuardRejection> {
+    let mut statements = parse_all(sql, dialect)?;
+    if statements.len() != 1 {
+        return Err(GuardRejection::NotSingleStatement);
+    }
+    Ok(statements.remove(0))
+}
+
+fn parse_all(sql: &str, dialect: Dialect) -> Result<Vec<Statement>, GuardRejection> {
+    if matches!(dialect, Dialect::Postgres | Dialect::Duckdb) && has_unicode_escape(sql) {
+        return Err(GuardRejection::UnicodeEscape);
+    }
     let sql = &*crate::statement::line_ends(sql, dialect);
-    let mut statements = match dialect {
+    match dialect {
         Dialect::Postgres => Parser::parse_sql(&PostgreSqlDialect {}, sql),
         // sqlparser reads MySQL's `/*! … */` as code, as the server runs it, but takes
         // MariaDB's `/*M! … */` for a comment. Written the MySQL way -- same length, so
@@ -581,11 +747,7 @@ fn parse_one(sql: &str, dialect: Dialect) -> Result<Statement, GuardRejection> {
         Dialect::Sqlite => Parser::parse_sql(&SQLiteDialect {}, sql),
         Dialect::Duckdb => Parser::parse_sql(&DuckDbDialect {}, sql),
     }
-    .map_err(|error| GuardRejection::Unparsed(error.to_string()))?;
-    if statements.len() != 1 {
-        return Err(GuardRejection::NotSingleStatement);
-    }
-    Ok(statements.remove(0))
+    .map_err(|error| GuardRejection::Unparsed(error.to_string()))
 }
 
 struct Guard {
@@ -739,8 +901,8 @@ impl Guard {
 #[cfg(test)]
 mod tests {
     use super::{
-        Destructive, GuardRejection, destructive, inspect_data_write, inspect_read,
-        inspect_schema_write, is_read,
+        Destructive, GuardRejection, destructive, inspect_data_script, inspect_data_write,
+        inspect_read, inspect_schema_write, is_read,
     };
     use crate::Dialect;
 
@@ -960,6 +1122,118 @@ mod tests {
         assert_eq!(
             reads("explain select * from stores"),
             vec![path(&["stores"])]
+        );
+    }
+
+    #[test]
+    fn unicode_escaped_identifiers_are_refused() {
+        // sqlparser reads `U&"f"(x)` as `U & f(x)` and keeps the name raw; Postgres
+        // decodes it, so every denied function was one escape away.
+        for sql in [
+            r#"select U&"pg\005fread\005ffile"('/etc/hostname')"#,
+            r#"select u&"pg_sleep"(1)"#,
+            r#"select U&'\0041' as a"#,
+            r#"select * from U&"stores""#,
+        ] {
+            assert_eq!(refused(sql), GuardRejection::UnicodeEscape, "{sql}");
+            assert_eq!(
+                inspect_data_write(sql, Dialect::Postgres).unwrap_err(),
+                GuardRejection::UnicodeEscape,
+                "{sql}"
+            );
+        }
+        // Inside a string or a quoted name it is text, not an escape.
+        assert!(inspect_read("select 'U&\"x\"' from stores", Dialect::Postgres).is_ok());
+        assert_eq!(
+            refused(r#"select "PG_READ_FILE"('/etc/hostname')"#),
+            GuardRejection::Function("pg_read_file".into())
+        );
+        assert_eq!(
+            refused("select currval('s')"),
+            GuardRejection::Function("currval".into())
+        );
+    }
+
+    /// A foreign key couples a table to the one it references: a schema write is held to
+    /// the referenced table too.
+    /// A seed runs as one script: each statement is held to what it touches, comments
+    /// between them are skipped, and one statement that is not a data write refuses the
+    /// whole script, said by its number.
+    #[test]
+    fn a_script_is_inspected_statement_by_statement() {
+        let script = "-- seed\ninsert into stores (id) values (1);\n\n/* then */\ninsert into employees (id, store) select 1, id from stores;\ndelete from orders where id = 3;\ntruncate table items restart identity;";
+        let statements = inspect_data_script(script, Dialect::Postgres).unwrap();
+        assert_eq!(statements.len(), 4);
+        assert_eq!(statements[0].sql, "insert into stores (id) values (1)");
+        assert_eq!(
+            statements[1].inspection.relations,
+            vec![path(&["employees"]), path(&["stores"])]
+        );
+        assert_eq!(statements[3].inspection.relations, vec![path(&["items"])]);
+        for (script, at) in [
+            (
+                "insert into stores values (1); begin; delete from stores",
+                2,
+            ),
+            ("insert into stores values (1); drop table stores", 2),
+            ("insert into stores values (1); select pg_sleep(1)", 2),
+            ("update stores set id = 1; delete from stores; commit", 3),
+        ] {
+            match inspect_data_script(script, Dialect::Postgres).unwrap_err() {
+                GuardRejection::InScript { at: found, .. } => assert_eq!(found, at, "{script}"),
+                other => panic!("{script}: {other:?}"),
+            }
+        }
+        assert_eq!(
+            inspect_data_script("-- nothing here\n", Dialect::Postgres).unwrap_err(),
+            GuardRejection::NoStatement
+        );
+        let many = "insert into stores values (1);".repeat(super::MAX_SCRIPT_STATEMENTS + 1);
+        assert_eq!(
+            inspect_data_script(&many, Dialect::Postgres).unwrap_err(),
+            GuardRejection::TooManyStatements
+        );
+    }
+
+    /// TRUNCATE empties only the tables it names, and only where a rollback undoes it.
+    #[test]
+    fn truncate_names_its_tables_and_never_cascades() {
+        assert_eq!(
+            inspect_data_write("truncate items, orders", Dialect::Postgres)
+                .unwrap()
+                .relations,
+            vec![path(&["items"]), path(&["orders"])]
+        );
+        assert_eq!(
+            inspect_data_write("truncate items cascade", Dialect::Postgres).unwrap_err(),
+            GuardRejection::TruncateCascade
+        );
+        assert_eq!(
+            inspect_data_write("truncate table items", Dialect::Mysql).unwrap_err(),
+            GuardRejection::TruncateCommits
+        );
+    }
+
+    #[test]
+    fn foreign_key_targets_are_schema_write_targets() {
+        let ddl = |sql: &str| {
+            inspect_schema_write(sql, Dialect::Postgres)
+                .unwrap()
+                .relations
+        };
+        assert_eq!(
+            ddl("alter table a add constraint fk foreign key (x) references secret(id)"),
+            vec![path(&["a"]), path(&["secret"])]
+        );
+        assert_eq!(
+            ddl("alter table a add column y int references secret(id)"),
+            vec![path(&["a"]), path(&["secret"])]
+        );
+        assert_eq!(
+            ddl(
+                "create table a (x int references secret(id), y int, constraint fk2 foreign key (y) references other(id))"
+            ),
+            vec![path(&["a"]), path(&["other"]), path(&["secret"])]
         );
     }
 

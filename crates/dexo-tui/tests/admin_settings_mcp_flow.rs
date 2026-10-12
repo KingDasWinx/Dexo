@@ -417,7 +417,7 @@ fn enabling_an_mcp_profile_asks_in_a_dialog() {
         agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
-    assert!(!model.mcp_profiles.enabled);
+    assert!(!model.mcp_profiles.profiles[0].enabled);
 
     let armed = update(&mut model, Action::Key(key('e')));
     assert!(armed.is_empty(), "asking must not grant anything yet");
@@ -446,47 +446,41 @@ fn enabling_an_mcp_profile_asks_in_a_dialog() {
     );
 }
 
-/// The grants section was fixture-only: nothing ever read the ledger, so the screen
-/// showed an empty list no matter what a profile actually held.
+/// The writes shown are the picked profile's: the ledger is read for each, and one
+/// profile's do not leak into another's page.
 #[test]
-fn selecting_a_profile_shows_its_own_grants() {
-    use dexo_tui::screens::mcp_profiles::{GrantLine, McpProfileSummary, McpProfilesScreen};
-
-    let line = |id: &str, tools: &str| GrantLine {
-        id: id.into(),
-        capability: "data_write".into(),
-        tools: tools.into(),
-        expires_in_secs: 900,
-        connection: "prod".into(),
-        selectors: "db.public.items".into(),
-        ask_secs: 0,
-    };
-    let profile = |name: &str, grants: Vec<GrantLine>| McpProfileSummary {
+fn selecting_a_profile_shows_its_own_writes() {
+    use dexo_tui::screens::mcp_profiles::{Access, ConnectionLine, McpProfileSummary};
+    let profile = |name: &str, connection: &str, kinds| McpProfileSummary {
         name: name.into(),
-        grants,
+        connections: vec![ConnectionLine {
+            name: connection.into(),
+            access: Some(Access {
+                kinds,
+                expires_at: 900,
+                bypass: Vec::new(),
+            }),
+            ..ConnectionLine::default()
+        }],
         ..Default::default()
     };
-
-    let mut screen = McpProfilesScreen::default();
-    screen.load_profiles(vec![
-        profile("assistant", vec![line("g1", "data_insert")]),
-        profile(
-            "reviewer",
-            vec![line("g2", "data_update"), line("g3", "data_delete")],
-        ),
+    let mut model = Model {
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
+        ..Model::default()
+    };
+    model.mcp_profiles.load_profiles(vec![
+        profile("assistant", "pg-dev", vec![dexo_app::mcp::WriteKind::Rows]),
+        profile("reviewer", "my-dev", vec![dexo_app::mcp::WriteKind::Schema]),
     ]);
-
-    assert_eq!(screen.grants.len(), 1);
-    assert!(screen.lines().join("\n").contains("data_insert"));
-
-    screen.select_next();
-    assert_eq!(screen.name, "reviewer");
-    assert_eq!(screen.grants.len(), 2, "grants must follow the selection");
-    let view = screen.lines().join("\n");
-    assert!(view.contains("data_update") && view.contains("data_delete"));
+    let view = dexo_tui::render::render_to_string(&model, 120, 30);
+    assert!(view.contains("✎ rows · 15 min left"), "{view}");
+    update(&mut model, Action::Key(arrow_down()));
+    let view = dexo_tui::render::render_to_string(&model, 120, 30);
+    assert!(view.contains("✎ schema · 15 min left"), "{view}");
     assert!(
-        !view.contains("data_insert"),
-        "the other profile's grants must not leak in"
+        !view.contains("pg-dev"),
+        "the other profile's writes must not leak in:\n{view}"
     );
 }
 
@@ -507,10 +501,13 @@ fn disabling_a_profile_takes_one_press_while_enabling_asks() {
     let mut profile = model.mcp_profiles.profiles[0].clone();
     profile.enabled = true;
     model.mcp_profiles.load_profiles(vec![profile]);
-    assert!(model.mcp_profiles.enabled);
+    assert!(model.mcp_profiles.profiles[0].enabled);
 
     let effects = update(&mut model, Action::Key(key('e')));
-    assert!(!model.mcp_profiles.enabled, "one press must disable");
+    assert!(
+        !model.mcp_profiles.profiles[0].enabled,
+        "one press must disable"
+    );
     assert!(
         effects.iter().any(|effect| matches!(
             effect,
@@ -525,38 +522,34 @@ fn disabling_a_profile_takes_one_press_while_enabling_asks() {
     assert!(model.mcp_profiles.confirm.is_some());
 }
 
-/// `r` acts on the selected row and says what goes; the global sweep is `R`. Both ask in
-/// a dialog that names how many grants are revoked.
+/// `r` takes back the walked connection's writes at once -- taking access away needs no
+/// question; the sweep over every profile is `R`, and it asks, naming how many go.
 #[test]
-fn revoke_targets_the_selected_profile_and_shift_revokes_everything() {
+fn r_takes_one_connections_writes_and_shift_stops_them_all() {
     let mut model = Model {
         mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
         screen: dexo_tui::model::Screen::Agents,
         agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
-    let armed = update(&mut model, Action::Key(key('r')));
-    assert!(armed.is_empty(), "per-profile revoke must ask first");
-    let view = dexo_tui::render::render_to_string(&model, 100, 30);
-    assert!(view.contains("Revoke the 1 grant of assistant?"), "{view}");
-
-    update(&mut model, Action::Key(arrow_left()));
-    let effects = update(&mut model, Action::Key(enter()));
+    model.sections[dexo_tui::model::Screen::Agents.index()] = dexo_tui::screen::Section::Detail;
+    let effects = update(&mut model, Action::Key(key('r')));
     assert!(
         effects.iter().any(|effect| matches!(
             effect,
-            dexo_tui::Effect::RevokeMcpGrants { profile } if profile == "assistant"
+            dexo_tui::Effect::RevokeMcpWrites { profile, connection }
+                if profile == "assistant" && connection == "local"
         )),
         "{effects:?}"
     );
+    assert!(model.mcp_profiles.confirm.is_none());
 
-    let mut model = Model {
-        mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
-        screen: dexo_tui::model::Screen::Agents,
-        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
-        ..Model::default()
-    };
     update(&mut model, Action::Key(key('R')));
+    let view = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(
+        view.contains("Stop every agent write: 1 connection in 1 profile?"),
+        "{view}"
+    );
     update(&mut model, Action::Key(arrow_left()));
     let effects = update(&mut model, Action::Key(enter()));
     assert!(
@@ -589,11 +582,11 @@ fn moving_off_a_profile_clears_what_was_said_about_it() {
 
     update(&mut model, Action::Key(arrow_down()));
     assert!(model.mcp_profiles.status.is_empty());
-    assert_eq!(model.mcp_profiles.name, "reviewer");
+    assert_eq!(model.mcp_profiles.name().as_deref(), Some("reviewer"));
     // The new profile asks on its own.
     let effects = update(&mut model, Action::Key(key('e')));
     assert!(effects.is_empty());
-    assert!(!model.mcp_profiles.enabled);
+    assert!(model.mcp_profiles.confirm.is_some());
 }
 
 fn arrow_left() -> crossterm::event::KeyEvent {
@@ -701,7 +694,7 @@ fn destructive_local_commands_open_their_owner_before_confirmation() {
     );
     let view = dexo_tui::render::render_to_string(&model, 100, 30);
     assert!(
-        view.contains("Revoke every grant: 1 grant in 1 profile?"),
+        view.contains("Stop every agent write: 1 connection in 1 profile?"),
         "mcp revoke confirmation is hidden:\n{view}"
     );
 }

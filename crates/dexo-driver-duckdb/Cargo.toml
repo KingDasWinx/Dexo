@@ -1,15 +1,17 @@
 [package]
 name = "dexo-driver-duckdb"
-version.workspace = true
+version = "1.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "The DuckDB driver plugin for Dexo"
 
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
 dexo-driver-api = { path = "../dexo-driver-api" }
+dexo-plugin-sdk = { path = "../dexo-plugin-sdk" }
 dexo-sql = { path = "../dexo-sql" }
 duckdb = { version = "1.10506.0", features = ["bundled", "parquet", "json"] }
 futures-util = "0.3"
@@ -17,6 +19,10 @@ serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+dexo-app = { path = "../dexo-app" }
 secrecy.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[package.metadata.dist]
+dist = false

@@ -87,7 +87,7 @@ impl McpProfile {
             if rule.tool == "*" || rule.tool.eq_ignore_ascii_case("all") {
                 return Err(AppError::new(
                     ErrorCategory::McpPolicy,
-                    "wildcard capabilities are not allowed",
+                    "a tool rule names one tool; * and all are refused",
                 ));
             }
         }
@@ -106,23 +106,18 @@ impl McpProfile {
 }
 
 fn validate_limits(limits: &McpLimits) -> Result<(), AppError> {
-    let overflow = limits.max_rows > i64::MAX as u64
-        || limits.max_bytes > i64::MAX as u64
-        || u64::from(limits.max_concurrency) > i64::MAX as u64;
-    if overflow
-        || limits.max_rows == 0
-        || limits.max_bytes == 0
-        || limits.timeout_secs == 0
-        || limits.max_concurrency == 0
-        || limits.max_rows > 1_000_000
-        || limits.max_bytes > 32 * 1024 * 1024
-        || limits.timeout_secs > 3600
-        || limits.max_concurrency > 32
-    {
-        return Err(AppError::new(
-            ErrorCategory::Configuration,
-            "MCP limits are invalid",
-        ));
+    for (field, value, most) in [
+        ("max_rows", limits.max_rows, 1_000_000),
+        ("max_bytes", limits.max_bytes, 32 * 1024 * 1024),
+        ("timeout_secs", limits.timeout_secs, 3600),
+        ("max_concurrency", u64::from(limits.max_concurrency), 32),
+    ] {
+        if !(1..=most).contains(&value) {
+            return Err(AppError::new(
+                ErrorCategory::Configuration,
+                format!("{field} must be 1 to {most}, not {value}"),
+            ));
+        }
     }
     Ok(())
 }

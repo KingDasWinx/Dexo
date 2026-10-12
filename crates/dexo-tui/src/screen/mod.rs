@@ -6,6 +6,7 @@ pub mod agents;
 pub mod compare;
 pub mod connections;
 pub mod history;
+pub mod plugins;
 pub mod server;
 pub mod widgets;
 
@@ -26,9 +27,7 @@ pub fn buttons(model: &Model) -> Vec<Button> {
     match model.shown_screen() {
         Screen::Connections if !model.connection_form.open => connections::buttons(model),
         Screen::History => history::buttons(model),
-        Screen::Agents if model.agents_view == agents::AgentsView::Setup => {
-            agents::setup_buttons(model)
-        }
+        Screen::Plugins => plugins::buttons(model),
         Screen::Agents if model.agents_view == agents::AgentsView::Profiles => {
             agents::profile_buttons(model)
         }
@@ -47,6 +46,7 @@ pub fn screen_buttons(model: &Model) -> Vec<Button> {
     match model.shown_screen() {
         Screen::Connections if !model.connection_form.open => connections::list_buttons(),
         Screen::History => history::list_buttons(model),
+        Screen::Plugins => plugins::list_buttons(model),
         Screen::Agents => agents::list_buttons(model),
         Screen::Server => server::list_buttons(model),
         Screen::Compare => compare::toolbar_buttons(model),
@@ -61,7 +61,7 @@ pub fn button_focus(model: &Model) -> Option<usize> {
     (count > 0
         && section(model) == Section::Detail
         && held(model).is_none()
-        && !detail_is_form(model))
+        && !detail_walks(model))
     .then(|| model.screen_button.min(count - 1))
 }
 
@@ -80,6 +80,7 @@ pub fn screen_safe(command: &str) -> bool {
             "recovery.",
             "diagnostics.",
             "config.",
+            "plugins.",
         ]
         .iter()
         .any(|prefix| command.starts_with(prefix))
@@ -111,22 +112,22 @@ pub fn held(model: &Model) -> Option<(Section, &'static str)> {
             AgentsView::Approvals if model.mcp_audit.deciding.is_some() => {
                 Some((Section::Detail, question))
             }
-            AgentsView::Profiles if model.mcp_profiles.grant_form.is_some() => Some((
-                Section::Detail,
-                "The grant form has the keys: Esc closes it.",
-            )),
+            AgentsView::Profiles if model.mcp_profiles.form.is_some() => {
+                Some((Section::Detail, "The form has the keys: Esc closes it."))
+            }
             AgentsView::Profiles if model.mcp_profiles.confirm.is_some() => {
                 Some((Section::Detail, question))
             }
-            AgentsView::Profiles if model.mcp_profiles.checklist.is_some() => Some((
-                Section::Detail,
-                "Space checks, Enter saves, Esc keeps them as they were.",
-            )),
             _ => None,
         },
         Screen::Server if model.admin.terminate.is_some() || model.admin.cancel.is_some() => {
             Some((Section::Detail, question))
         }
+        Screen::Plugins if model.plugins.removing.is_some() => Some((Section::Detail, question)),
+        Screen::Plugins if model.plugins.from_file.is_some() => Some((
+            Section::Detail,
+            "Type the path, Enter reads it, Esc cancels.",
+        )),
         Screen::History if model.history_view == HistoryView::Saved => {
             if model.saved_queries.deleting.is_some() {
                 Some((Section::Detail, question))
@@ -152,6 +153,7 @@ pub fn search(model: &Model) -> Option<&widgets::Search> {
             Some(&model.mcp_audit.search)
         }
         Screen::Server => Some(&model.admin.search),
+        Screen::Plugins => Some(&model.plugins.search),
         Screen::Compare if !model.schema_diff.source_prompt => Some(&model.schema_diff.search),
         _ => None,
     }
@@ -169,12 +171,11 @@ pub fn takes_text(model: &Model) -> bool {
             let form = &model.connection_form;
             form.open && form.focus < form.fields.len() && !form.on_choice()
         }
-        Screen::Agents => {
-            (model.agents_view == agents::AgentsView::Setup
-                && section(model) == Section::Detail
-                && model.mcp_setup.focused() == Some(crate::screens::mcp_setup::Row::Name))
-                || model.mcp_profiles.grant_form.is_some()
-        }
+        Screen::Agents => matches!(
+            &model.mcp_profiles.form,
+            Some(crate::screens::mcp_profiles::Form::Profile(form))
+                if form.focus == crate::screens::mcp_profiles::ProfileRow::Name && !form.editing
+        ),
         Screen::Compare => {
             let diff = &model.schema_diff;
             diff.source_prompt
@@ -184,6 +185,7 @@ pub fn takes_text(model: &Model) -> bool {
         }
         Screen::Server => model.admin.terminate.is_some(),
         Screen::History => model.saved_queries.renaming.is_some(),
+        Screen::Plugins => model.plugins.from_file.is_some(),
         Screen::Workbench => false,
     }
 }
@@ -200,14 +202,18 @@ pub fn stop_typing(model: &mut Model) {
         Screen::Agents => model.mcp_audit.search.typing = false,
         Screen::Server => model.admin.search.typing = false,
         Screen::Compare => model.schema_diff.search.typing = false,
+        Screen::Plugins => model.plugins.search.typing = false,
         _ => {}
     }
 }
 
-/// Whether the detail is a form, whose keys are its own rather than reading it: Agents'
-/// Setup.
-pub fn detail_is_form(model: &Model) -> bool {
-    model.shown_screen() == Screen::Agents && model.agents_view == agents::AgentsView::Setup
+/// Whether the detail is rows its keys walk rather than text they read: Agents' Profiles,
+/// its connections and agents.
+pub fn detail_walks(model: &Model) -> bool {
+    model.shown_screen() == Screen::Agents
+        && model.agents_view == agents::AgentsView::Profiles
+        && model.mcp_profiles.form.is_none()
+        && model.mcp_profiles.confirm.is_none()
 }
 
 /// How many sections the screen drew: its list and its detail, one alone, or none on an
@@ -240,9 +246,6 @@ pub fn detail_scroll(model: &Model) -> u16 {
         (Screen::Server, _) => model.admin.detail_scroll,
         (Screen::Compare, _) => model.schema_diff.scroll,
         (Screen::Agents, AgentsView::Approvals) => model.mcp_audit.scroll,
-        (Screen::Agents, AgentsView::Profiles) => {
-            u16::try_from(model.mcp_profiles.detail_scroll).unwrap_or(u16::MAX)
-        }
         _ => model.detail_scroll,
     }
 }
@@ -253,9 +256,6 @@ pub fn set_detail_scroll(model: &mut Model, scroll: u16) {
         (Screen::Server, _) => model.admin.detail_scroll = scroll,
         (Screen::Compare, _) => model.schema_diff.scroll = scroll,
         (Screen::Agents, AgentsView::Approvals) => model.mcp_audit.scroll = scroll,
-        (Screen::Agents, AgentsView::Profiles) => {
-            model.mcp_profiles.detail_scroll = usize::from(scroll);
-        }
         _ => model.detail_scroll = scroll,
     }
 }
@@ -273,6 +273,7 @@ pub struct StripItem {
 pub fn waiting(model: &Model, screen: Screen) -> usize {
     match screen {
         Screen::Agents => model.mcp_audit.announced.len(),
+        Screen::Plugins => model.plugins.updates(),
         _ => 0,
     }
 }
@@ -332,6 +333,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         Screen::Compare => compare::render(frame, area, model, hits),
         Screen::History => history::render(frame, area, model, hits),
         Screen::Server => server::render(frame, area, model, hits),
+        Screen::Plugins => plugins::render(frame, area, model, hits),
         Screen::Workbench => {}
     }
 }
@@ -345,9 +347,10 @@ pub fn hints(model: &Model, hits: &HitMap) -> String {
         Screen::Compare => compare::hints(model),
         Screen::History => history::hints(model),
         Screen::Server => server::hints(model),
+        Screen::Plugins => plugins::hints(model),
         _ => "Esc back".into(),
     };
-    let free = held(model).is_none() && !detail_is_form(model);
+    let free = held(model).is_none();
     // A button for all the screen that is not drawn -- no room, or its list is folded
     // away -- is said here, first: the line is cut at its end.
     let unseen: Vec<String> = screen_buttons(model)
@@ -368,8 +371,16 @@ pub fn hints(model: &Model, hits: &HitMap) -> String {
     };
     // Folded to one column, Enter shows the pick's detail and Esc goes back to the list.
     let folded = hits.folded() && free;
+    // A detail of rows says its own keys: the arrows walk it, and Esc goes back.
+    if section(model) == Section::Detail && free && detail_walks(model) {
+        // Folded, the way back is said first: the line is short there.
+        if folded {
+            format!("Esc the list  {}", hints.replace("  Esc the list", ""))
+        } else {
+            hints
+        }
     // On the detail the arrows read it; the letters still act on the pick.
-    if section(model) == Section::Detail && free {
+    } else if section(model) == Section::Detail && free {
         let hints = match hints.find("Up/Down pick") {
             Some(_) => hints.replacen("Up/Down pick", "Up/Down read", 1),
             None => format!("Up/Down read  {hints}"),

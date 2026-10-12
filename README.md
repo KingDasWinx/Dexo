@@ -15,7 +15,7 @@ brew install kingdaswinx/tap/dexo   # or any install below
 dexo --demo                         # a sample shop, nothing to connect to
 ```
 
-Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, with DuckDB as a build option: a terminal UI, a command line and an MCP server for AI agents. A `DELETE` without `WHERE` on production waits for you to type the connection's name, a read-only connection is read-only on the server too, and an agent writes only through a grant you make. Everything stays on your machine.
+Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, with DuckDB as a plugin: a terminal UI, a command line and an MCP server for AI agents. A `DELETE` without `WHERE` on production waits for you to type the connection's name, a read-only connection is read-only on the server too, and an agent writes only with the access you give it, each write waiting for your approval. Everything stays on your machine.
 
 <div align="center">
   <img src="assets/guardrails.gif" width="100%" alt="Dexo holding a DELETE without WHERE on the production connection shop-prod: a wrong name runs nothing, the full name deletes four rows; then an AI agent's UPDATE waits on the Agents screen until it is approved">
@@ -34,7 +34,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 - **Schema**: object forms with a DDL preview, and schema diff between databases, snapshots and files.
 - **Query plans**: EXPLAIN drawn as a tree; on Postgres with hypopg, try an index before building it.
 - **Connections**: TLS, SSH tunnels, proxies, password managers, and databases found in Docker.
-- **AI agents**: an MCP server with read-only profiles, allowlists, timed write grants and approval for each write.
+- **AI agents**: an MCP server with read-only profiles, allowlists, timed write access per connection and approval for each write.
 - **Command line**: query, export, import, explain and diff from scripts, with the same guardrails.
 - **Local-first**: no telemetry; passwords stay in the operating system's keychain or your password manager.
 
@@ -126,11 +126,9 @@ yay -S dexo-bin    # or paru -S dexo-bin
 cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo
 ```
 
-The release binaries leave DuckDB out: its engine is large. Build it in with the `duckdb` feature:
+### Plugins
 
-```sh
-cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo --features duckdb
-```
+DuckDB and extra themes are plugins: open **Plugins** with `Ctrl+G p`, or run `dexo plugin install duckdb`. Plugins come from an index signed by the maintainer, and every download is checked against it. See [Plugins](docs/src/plugins.md).
 
 Every release also ships archives for each platform, SHA-256 checksums, and a CycloneDX SBOM. See the [install guide](docs/src/install.md) for details.
 
@@ -157,10 +155,10 @@ dexo mcp profile create --name assistant
 dexo mcp profile set --name assistant --connection local --query-mode raw-read
 dexo mcp allow --profile assistant --selector 'postgres.public.*'
 dexo mcp profile enable --name assistant --confirm
-dexo mcp setup --client claude-code --profile assistant   # or codex, cursor, claude-desktop
+dexo mcp setup --client claude-code --profile assistant   # or codex, cursor, claude-desktop, gemini-cli, windsurf, vscode
 ```
 
-The agent reads only what the profile allows. To let it write, make a grant for a while; with `--ask`, each write waits for your approval on the Agents screen (<kbd>Ctrl</kbd>+<kbd>G</kbd> <kbd>a</kbd>). See the [MCP guide](docs/src/mcp.md).
+The agent reads only what the profile allows. To let it write, give it write access to a connection for a while (`w` on Agents' Profiles, or `dexo mcp grant create`); each write then waits for your approval on the Agents screen (<kbd>Ctrl</kbd>+<kbd>G</kbd> <kbd>a</kbd>), unless you let inserts, say, run without asking. See the [MCP guide](docs/src/mcp.md).
 
 ## Compatibility
 
@@ -170,7 +168,7 @@ The agent reads only what the profile allows. To let it write, make a grant for 
 | MySQL | 8.0.42, 8.4.5, 9.3.0 |
 | MariaDB | 10.11, 11.4 |
 | SQLite | 3.53.2, built in |
-| DuckDB | 1.5.6, built in with the `duckdb` feature |
+| DuckDB | 1.5.6, as a plugin (`dexo plugin install duckdb`) |
 
 Linux, macOS and Windows.
 

@@ -411,49 +411,76 @@ impl dexo_driver_api::BulkWriter for MysqlSession {
         columns: &[String],
         rows: &[Vec<DbValue>],
     ) -> Result<u64, DriverError> {
-        let width = columns.len().max(1);
-        let per_statement = (MAX_PARAMS / width).max(1);
-        let names = columns
-            .iter()
-            .map(|column| quote(column))
-            .collect::<Vec<_>>()
-            .join(", ");
         let mut conn = self.conn.lock().await;
         conn.query_drop("BEGIN").await.map_err(map_error)?;
-        for (index, chunk) in rows.chunks(per_statement).enumerate() {
-            let mut binder = Binder::new();
-            let values = chunk
-                .iter()
-                .map(|row| {
-                    let slots = row
-                        .iter()
-                        .map(|value| binder.push(value))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("({slots})")
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let sql = format!("INSERT INTO {} ({names}) VALUES {values}", qualify(table));
-            if let Err(error) = conn.exec_drop(sql, Params::Positional(binder.values)).await {
+        match insert_rows(&mut conn, table, columns, rows).await {
+            Ok(written) => {
+                conn.query_drop("COMMIT").await.map_err(map_error)?;
+                Ok(written)
+            }
+            Err(error) => {
                 let _ = conn.query_drop("ROLLBACK").await;
-                let mapped = map_error(error);
-                // `... at row 2` is the row of this statement: the batch's is further on
-                // by the rows the statements before it took.
-                let row = mapped
-                    .to_string()
-                    .rsplit_once(" at row ")
-                    .and_then(|(_, row)| row.parse::<usize>().ok())
-                    .and_then(|row| u32::try_from(index * per_statement + row).ok());
-                return Err(match row {
-                    Some(row) => mapped.with_row(row),
-                    None => mapped,
-                });
+                Err(error)
             }
         }
-        conn.query_drop("COMMIT").await.map_err(map_error)?;
-        Ok(rows.len() as u64)
     }
+
+    async fn insert_in_transaction(
+        &self,
+        table: &dexo_driver_api::QualifiedName,
+        columns: &[String],
+        rows: &[Vec<DbValue>],
+    ) -> Result<u64, DriverError> {
+        let mut conn = self.conn.lock().await;
+        insert_rows(&mut conn, table, columns, rows).await
+    }
+}
+
+/// The INSERTs of a batch, on a connection whose transaction is the caller's.
+async fn insert_rows(
+    conn: &mut mysql_async::Conn,
+    table: &dexo_driver_api::QualifiedName,
+    columns: &[String],
+    rows: &[Vec<DbValue>],
+) -> Result<u64, DriverError> {
+    let width = columns.len().max(1);
+    let per_statement = (MAX_PARAMS / width).max(1);
+    let names = columns
+        .iter()
+        .map(|column| quote(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    for (index, chunk) in rows.chunks(per_statement).enumerate() {
+        let mut binder = Binder::new();
+        let values = chunk
+            .iter()
+            .map(|row| {
+                let slots = row
+                    .iter()
+                    .map(|value| binder.push(value))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({slots})")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("INSERT INTO {} ({names}) VALUES {values}", qualify(table));
+        if let Err(error) = conn.exec_drop(sql, Params::Positional(binder.values)).await {
+            let mapped = map_error(error);
+            // `... at row 2` is the row of this statement: the batch's is further on by
+            // the rows the statements before it took.
+            let row = mapped
+                .to_string()
+                .rsplit_once(" at row ")
+                .and_then(|(_, row)| row.parse::<usize>().ok())
+                .and_then(|row| u32::try_from(index * per_statement + row).ok());
+            return Err(match row {
+                Some(row) => mapped.with_row(row),
+                None => mapped,
+            });
+        }
+    }
+    Ok(rows.len() as u64)
 }
 
 /// The most placeholders one statement takes.

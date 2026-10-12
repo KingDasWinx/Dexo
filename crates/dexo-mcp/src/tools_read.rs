@@ -18,7 +18,7 @@ use crate::render::{RowsPage, rows_result, text_result};
 use crate::router::{ConnectionSlot, SessionLease};
 use crate::schema::{
     AdminListInput, CatalogListInput, CatalogSearchInput, DataReadInput, DiffInput, ExplainInput,
-    ObjectInput, SqlInput,
+    ObjectInput, OverviewInput, SqlInput,
 };
 use crate::server::DexoMcpServer;
 
@@ -63,15 +63,74 @@ fn objects_result(objects: &[CatalogObject]) -> CallToolResult {
         .iter()
         .map(|object| {
             vec![
+                object.id.as_str().to_string(),
                 object.kind.as_str().to_string(),
-                object.qualified_name.display_unquoted(),
+                ObjectRef::from_catalog_object(object).to_string(),
             ]
         })
         .collect();
     rows_result(&RowsPage::new(
-        ["kind", "name"].map(String::from).to_vec(),
+        ["id", "kind", "name"].map(String::from).to_vec(),
         rows,
     ))
+}
+
+/// Each table as a heading, its columns as a table and its constraints as a list, as many
+/// as the profile's byte limit holds; the same tables in `structuredContent`.
+fn overview_result(overview: &dexo_app::mcp::overview::Overview, max_bytes: u64) -> CallToolResult {
+    let columns = ["column", "type", "null", "default"].map(String::from);
+    let mut text = String::new();
+    let mut shown = 0;
+    for table in &overview.tables {
+        let rows = match (table.rows, table.estimated_rows) {
+            (Some(rows), _) => format!(", {rows} rows"),
+            (None, Some(rows)) => format!(", ~{rows} rows"),
+            (None, None) => String::new(),
+        };
+        let mut part = format!("### {} ({}{rows})\n\n", table.name, table.kind);
+        let cells: Vec<Vec<String>> = table
+            .columns
+            .iter()
+            .map(|column| {
+                vec![
+                    column.name.clone(),
+                    column.type_name.clone(),
+                    if column.nullable { "yes" } else { "no" }.into(),
+                    column.default.clone().unwrap_or_default(),
+                ]
+            })
+            .collect();
+        part.push_str(&crate::render::markdown_table(&columns, &cells));
+        part = part.trim_end().to_string();
+        if !table.constraints.is_empty() {
+            part.push('\n');
+        }
+        for constraint in &table.constraints {
+            part.push_str(&format!("\n- {constraint}"));
+        }
+        part.push_str("\n\n");
+        if shown > 0 && (text.len() + part.len()) as u64 > max_bytes {
+            break;
+        }
+        text.push_str(&part);
+        shown += 1;
+    }
+    if overview.tables.is_empty() {
+        text.push_str("No table or view here that this profile may see.");
+    }
+    if shown < overview.tables.len() || overview.truncated {
+        text.push_str(&format!(
+            "{shown} of {} tables shown, at the profile's byte limit: name a schema.",
+            overview.tables.len()
+        ));
+    }
+    text_result(
+        text.trim_end().to_string(),
+        json!({
+            "tables": &overview.tables[..shown],
+            "truncated": shown < overview.tables.len() || overview.truncated,
+        }),
+    )
 }
 
 fn catalog_of(session: &dyn Session) -> Result<&dyn CatalogReader, AppError> {
@@ -204,9 +263,9 @@ async fn describe(
         rows,
     );
     let heading = format!(
-        "### {} ({:?})",
-        object.qualified_name.display_unquoted(),
-        object.kind
+        "### {} ({})",
+        ObjectRef::from_catalog_object(&object),
+        object.kind.as_str()
     );
     page.title = Some(match note_of(&object, notes) {
         Some(note) => format!("{heading}\n\n{note}"),
@@ -249,8 +308,8 @@ async fn relationships(
             {
                 rows.push(vec![
                     direction.to_string(),
-                    format!("{:?}", related.kind),
-                    related.qualified_name.display_unquoted(),
+                    related.kind.as_str().to_string(),
+                    ObjectRef::from_catalog_object(&related).to_string(),
                 ]);
             }
         }
@@ -312,7 +371,7 @@ impl DexoMcpServer {
                     connection.database.clone().unwrap_or_default(),
                     format!("{:?}", connection.environment).to_lowercase(),
                     match connection.accepts_writes() {
-                        Ok(()) => "with a grant".to_string(),
+                        Ok(()) => "while the profile has write access here".to_string(),
                         Err(error) => error.to_string(),
                     },
                 ]
@@ -426,7 +485,7 @@ impl DexoMcpServer {
         finish(&mut lease, outcome)
     }
 
-    /// Search table, view and column names in the connection's indexed catalog. The first search on a connection indexes it, which can take a while on a large server.
+    /// Tables, views, columns, indexes and constraints by name, or by what their notes say, in the connection's indexed catalog. The first search on a connection indexes it, which can take a while on a large server.
     #[tool(annotations(read_only_hint = true))]
     async fn catalog_search(
         &self,
@@ -489,7 +548,7 @@ impl DexoMcpServer {
             .map(|object| {
                 vec![
                     object.kind.as_str().to_string(),
-                    object.qualified_name.display_unquoted(),
+                    ObjectRef::from_catalog_object(object).to_string(),
                     note_of(object, &notes).unwrap_or_default(),
                 ]
             })
@@ -584,13 +643,40 @@ impl DexoMcpServer {
         finish(&mut lease, outcome)
     }
 
+    /// Every table and view of a schema the profile sees, in one call: columns with type, nullability and default, primary and unique keys, foreign keys and checks, and the row count the server estimates -- or counts, with `exact_counts`. Use it instead of object_describe table by table.
+    #[tool(annotations(read_only_hint = true))]
+    async fn schema_overview(
+        &self,
+        Parameters(input): Parameters<OverviewInput>,
+    ) -> CallToolResult {
+        let mut lease = match self.open(input.connection.as_deref()).await {
+            Ok(lease) => lease,
+            Err(result) => return result,
+        };
+        let service = &self.inner.service;
+        let outcome = service
+            .overview(
+                lease.session(),
+                lease.meta,
+                input.schema.as_deref(),
+                input.exact_counts.unwrap_or(false),
+            )
+            .await
+            .map(|overview| overview_result(&overview, service.profile.limits.max_bytes));
+        finish(&mut lease, outcome)
+    }
+
     /// Differences between two saved schema snapshots, limited to objects this profile may see. Read-only: nothing is applied.
     #[tool(annotations(read_only_hint = true))]
     async fn schema_diff(&self, Parameters(input): Parameters<DiffInput>) -> CallToolResult {
+        let connection = match self.inner.router.resolve(input.connection.as_deref()) {
+            Ok(slot) => slot.meta.name.clone(),
+            Err(error) => return app_error(&error),
+        };
         let backend = self.inner.router.backend();
         let load = |name: &str| {
             backend
-                .schema_snapshot(name)
+                .schema_snapshot(name, &connection)
                 .and_then(|snapshot| snapshot.ok_or_else(hidden))
         };
         let (from, to) = match (load(&input.from_snapshot), load(&input.to_snapshot)) {

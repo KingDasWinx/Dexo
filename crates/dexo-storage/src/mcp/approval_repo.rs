@@ -8,8 +8,8 @@ pub fn insert(conn: &Connection, approval: &Approval) -> anyhow::Result<()> {
     conn.execute(
         "INSERT INTO mcp_approvals (
             id, profile_name, connection_name, tool, statement, targets_json,
-            created_at, deadline, decision, grant_id, heartbeat
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            created_at, deadline, decision, grant_id, heartbeat, operations_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             approval.id.to_string(),
             approval.profile,
@@ -22,6 +22,7 @@ pub fn insert(conn: &Connection, approval: &Approval) -> anyhow::Result<()> {
             approval.decision.as_str(),
             approval.grant.to_string(),
             approval.heartbeat,
+            serde_json::to_string(&approval.operations)?,
         ],
     )?;
     Ok(())
@@ -84,6 +85,9 @@ pub fn pending(conn: &Connection, now: i64) -> anyhow::Result<Vec<Approval>> {
 /// expires, and one whose call went silent -- its server stopped while it waited -- is
 /// cancelled. Decided requests are deleted after a day.
 pub fn sweep(conn: &Connection, now: i64) -> anyhow::Result<()> {
+    // One transaction: a request is not cancelled without the audit line that says why.
+    let tx = conn.unchecked_transaction()?;
+    let conn: &Connection = &tx;
     conn.execute(
         "UPDATE mcp_approvals SET decision = 'expired', statement = ''
          WHERE decision = 'pending' AND deadline <= ?1",
@@ -131,6 +135,7 @@ pub fn sweep(conn: &Connection, now: i64) -> anyhow::Result<()> {
         "DELETE FROM mcp_approvals WHERE decision <> 'pending' AND deadline < ?1 - ?2",
         params![now, KEEP_SETTLED_SECS],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -146,7 +151,7 @@ pub fn deny_revoked(conn: &Connection) -> anyhow::Result<()> {
 }
 
 const SELECT: &str = "SELECT id, profile_name, connection_name, tool, statement, targets_json,
-        created_at, deadline, decision, grant_id, heartbeat FROM mcp_approvals";
+        created_at, deadline, decision, grant_id, heartbeat, operations_json FROM mcp_approvals";
 
 fn row_to_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<Approval> {
     Ok(Approval {
@@ -161,6 +166,7 @@ fn row_to_approval(row: &rusqlite::Row<'_>) -> rusqlite::Result<Approval> {
         decision: ApprovalDecision::parse(&row.get::<_, String>(8)?),
         grant: Uuid::parse_str(&row.get::<_, String>(9)?).unwrap_or_default(),
         heartbeat: row.get(10)?,
+        operations: serde_json::from_str(&row.get::<_, String>(11)?).unwrap_or_default(),
     })
 }
 
@@ -239,9 +245,9 @@ mod tests {
 
         let grant = uuid::Uuid::new_v4();
         conn.execute(
-            "INSERT INTO mcp_grants (id, profile_name, connection_name, capability, tools_json,
-                selectors_json, expires_at, remaining_uses, revision, revoked)
-             VALUES (?1, 'p', 'c', 'data_write', '[]', '[]', 1000, 1, 1, 1)",
+            "INSERT INTO mcp_grants (id, profile_name, connection_name, tools_json, expires_at,
+                revision, revoked)
+             VALUES (?1, 'p', 'c', '[]', 1000, 1, 1)",
             rusqlite::params![grant.to_string()],
         )
         .unwrap();

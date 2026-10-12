@@ -55,7 +55,7 @@ impl Database {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        recover_unsupported_schema(path)?;
+        refuse_newer_schema(path)?;
         backup_before_destructive_migration(path)?;
         let conn = Connection::open(path)?;
         prepare_connection(&conn)?;
@@ -113,78 +113,40 @@ fn read_schema_version_at_path(path: &Path) -> anyhow::Result<u32> {
     Ok(migrations::read_schema_version(&conn))
 }
 
-fn sibling_path(path: &Path, suffix: &str) -> PathBuf {
-    let mut sibling = path.as_os_str().to_os_string();
-    sibling.push(suffix);
-    PathBuf::from(sibling)
-}
-
-fn move_database_bundle(from: &Path, to: &Path) -> anyhow::Result<()> {
-    fs::rename(from, to)?;
-    for suffix in ["-journal", "-wal", "-shm"] {
-        let from_extra = sibling_path(from, suffix);
-        if from_extra.exists() {
-            let to_extra = sibling_path(to, suffix);
-            let _ = fs::rename(from_extra, to_extra);
-        }
-    }
-    Ok(())
-}
-
-fn unsupported_archive_path(path: &Path, version: u32) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "dexo.db".to_string());
-    path.parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(format!("{file_name}.unsupported-v{version}"))
-}
-
-fn unique_archive_path(base: PathBuf) -> PathBuf {
-    if !base.exists() {
-        return base;
-    }
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    let file_name = base
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "dexo.db".to_string());
-    base.parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(format!("{file_name}.{stamp}"))
-}
-
-fn archive_incompatible_database(path: &Path, version: u32) -> anyhow::Result<()> {
-    let archive = unique_archive_path(unsupported_archive_path(path, version));
-    move_database_bundle(path, &archive)?;
-    Ok(())
-}
-
-fn recover_unsupported_schema(path: &Path) -> anyhow::Result<()> {
+/// A database a newer Dexo wrote is refused, and left as it is. Every migration here is
+/// additive, but an older build cannot know that; moving the file aside and restoring a
+/// backup forked the data under the processes still writing to it.
+fn refuse_newer_schema(path: &Path) -> anyhow::Result<()> {
     if !path.exists() {
         return Ok(());
     }
     let version = read_schema_version_at_path(path)?;
-    if version <= LATEST_SCHEMA_VERSION {
-        return Ok(());
-    }
-
-    let backup = backup_path(path);
-    if backup.exists() {
-        let backup_version = read_schema_version_at_path(&backup)?;
-        if backup_version <= LATEST_SCHEMA_VERSION {
-            archive_incompatible_database(path, version)?;
-            fs::copy(&backup, path)?;
-            return Ok(());
-        }
-    }
-
-    archive_incompatible_database(path, version)?;
+    anyhow::ensure!(
+        version <= LATEST_SCHEMA_VERSION,
+        "{} was written by a newer Dexo (schema {version}); this build reads schema {LATEST_SCHEMA_VERSION}. Run the newer Dexo, or upgrade this one: an older `dexo` on PATH and a newer one built elsewhere both open this file.",
+        path.display()
+    );
     Ok(())
+}
+
+/// The copies an older Dexo moved aside before it refused a newer database:
+/// `dexo.db.unsupported-v*` beside it. They are the person's data, so they are named, not
+/// deleted.
+pub fn leftover_archives(data_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(data_dir) else {
+        return Vec::new();
+    };
+    let mut archives: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains(".unsupported-v"))
+        })
+        .collect();
+    archives.sort();
+    archives
 }
 
 fn backup_before_destructive_migration(path: &Path) -> anyhow::Result<()> {
@@ -210,10 +172,13 @@ fn backup_before_destructive_migration(path: &Path) -> anyhow::Result<()> {
 mod tests {
     use std::fs;
 
-    use super::{AppPaths, Database, backup_path, unsupported_archive_path};
+    use super::{AppPaths, Database, backup_path, leftover_archives};
 
+    /// A database a newer Dexo wrote is left exactly as it is: the older build refuses
+    /// it and says to upgrade. Archiving it and restoring the backup forked the data under
+    /// the processes still writing to it.
     #[test]
-    fn open_recovers_from_unsupported_schema_with_compatible_backup() {
+    fn open_refuses_a_database_from_a_newer_dexo_and_leaves_it_alone() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("dexo.db");
         Database::open(&path).unwrap();
@@ -226,29 +191,27 @@ mod tests {
             )
             .unwrap();
         }
-
-        let db = Database::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 18);
-        assert!(unsupported_archive_path(&path, 23).exists());
-    }
-
-    #[test]
-    fn open_resets_unsupported_schema_without_compatible_backup() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dexo.db");
-        Database::open(&path).unwrap();
-        {
-            let conn = rusqlite::Connection::open(&path).unwrap();
-            conn.execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES(23, datetime('now'))",
-                [],
-            )
-            .unwrap();
-        }
-
-        let db = Database::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 18);
-        assert!(unsupported_archive_path(&path, 23).exists());
+        let files = || {
+            let mut names: Vec<_> = fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            names.sort();
+            names
+        };
+        let before = files();
+        let Err(error) = Database::open(&path) else {
+            panic!("a database from a newer Dexo was opened");
+        };
+        let error = error.to_string();
+        assert!(
+            error.contains("newer Dexo") && error.contains("schema 23"),
+            "{error}"
+        );
+        assert_eq!(files(), before, "nothing moved, copied or created");
+        assert!(leftover_archives(dir.path()).is_empty());
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(crate::migrations::read_schema_version(&conn), 23);
     }
 
     /// Opening to read never creates, migrates or archives anything, and does not wait
@@ -286,7 +249,7 @@ mod tests {
             .unwrap();
         assert!(Database::open_read_only(&path).is_err());
         assert!(path.exists());
-        assert!(!unsupported_archive_path(&path, 23).exists());
+        assert!(leftover_archives(dir.path()).is_empty());
     }
 
     /// A reader is not held up by a write in progress on another connection.
@@ -329,7 +292,7 @@ mod tests {
                 .unwrap();
         }
         let db = Database::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 18);
+        assert_eq!(db.schema_version().unwrap(), 22);
         assert!(backup_path(&path).exists());
     }
 

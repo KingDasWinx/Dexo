@@ -54,6 +54,19 @@ The roles are `background`, `foreground`, `border`, `muted`, `production`, `stag
 
 Command ids are the palette's. A chord that starts a longer one where both apply is refused, since Dexo would wait for the rest and the shorter would never fire; unbind the longer one first. A file with a problem is not used: the messages say its line, and the keymap is used as it is. The palette shows the keys the overlay gives.
 
+While the editor takes text -- always with the Default and Emacs keymaps, in Insert mode with Vim -- a key that types (a character with at most Shift, or Enter, Tab, Backspace or Delete alone) is typed, whatever the overlay binds it to: `[global] "r" = "focus.results"` works in Vim's Normal mode and types an `r` in Insert mode. A chord of bare keys works the same way: `[editor] "space f" = "document.open"` waits for the `f` in Normal mode, listing what can follow, and `space` is a space in Insert mode. Shift+Enter and the like stay bindable. With the Default and Emacs keymaps an `[editor]` binding of a key that types never runs, and the messages name its line.
+
+With the Vim keymap, a `[vim]` section changes the keys Vim reads, for another layout: each line is the key pressed and the key Vim reads for it, a character as written (`"N" = "J"`) or a chord's key (`"ctrl+u" = "ctrl+r"`), and `""` undoes a remap; with the other keymaps the section is ignored. Operators, counts, text objects and `.` follow -- with the lines below, `dm` deletes to the left and `3n` goes down three lines -- and a remap to an arrow, Home or End moves as that key does. A remapped key that `[global]` or `[editor]` also binds, alone or as the start of a chord, is refused: the keymap would read it first, and Vim never see it. So are two spellings of one key, `"N"` and `"shift+n"`, remapped two ways.
+
+```toml
+[vim]
+"m" = "h"
+"n" = "j"
+"e" = "k"
+"i" = "l"
+"j" = "i"
+```
+
 ## SQL editor
 
 | Key | Action |
@@ -65,6 +78,8 @@ Command ids are the palette's. A chord that starts a longer one where both apply
 | Ctrl+Shift+Up / Down | Move the line or selection up or down |
 | Ctrl+E | Edit the document in `$VISUAL` or `$EDITOR` (`ctrl+x ctrl+e` in the Emacs keymap) |
 
+The Emacs keymap moves with Ctrl+A, Ctrl+E, Ctrl+F, Ctrl+B, Ctrl+N, Ctrl+P, Alt+F, Alt+B, Alt+<, Alt+>, Ctrl+V and Alt+V, deletes forward with Ctrl+D and Alt+D, and kills the line with Ctrl+K -- with Shift held too, but for Ctrl+Shift+D and Alt+Shift+F, which duplicate and format. These are the commands `editor.line_start`, `editor.line_end`, `editor.right`, `editor.left`, `editor.down`, `editor.up`, `editor.word_right`, `editor.word_left`, `editor.document_start`, `editor.document_end`, `editor.page_down`, `editor.page_up`, `editor.delete_forward`, `editor.delete_word_forward` and `editor.kill_line`, which any keymap binds in `[editor]`.
+
 The editor underlines what is wrong as you type: a statement that does not parse, and, once the catalog has been read whole, a table or a `alias.column` the database does not have -- never one it simply has not loaded. With the cursor on an underline the status line says what it is. When a run fails and the server says where, that spot is underlined and the cursor goes to it.
 
 A `:name` in a statement asks for its value before the run. Each statement goes to the server with the database's own placeholders (`$1` on Postgres and DuckDB, `?` on MySQL and MariaDB, `?1` on SQLite) and only the values it names.
@@ -73,7 +88,7 @@ Lines starting with a backslash are psql's commands, answered by Dexo from the c
 
 ### Vim mode
 
-With the Vim keymap (Settings), the editor is modal: Normal, Insert, Visual (`v`) and Visual-line (`V`), with the mode on the status line and a block cursor outside Insert. Normal mode takes counts and the motions `h j k l w b e 0 ^ $ gg G`; the operators `d c y` with a motion, or doubled for lines (`dd yy cc`); `x p P u` and Ctrl+R; `i a I A o O` into Insert; `.` to repeat the last change; `/` to search, `n` and `N` for the next and previous match; `:s/old/new/[g]` on the line, `:%s` on the document; `:w`, `:q`, `:wq`, `:x` (which writes only what changed) and `:<line>`. The text objects `iw` and `aw` work after an operator (`diw`, `ciw`) and in Visual mode, where `X`, `D`, `C` and `Y` take whole lines. Every change, an Insert session included, is one undo step, and a count on `.` replaces the change's own. Ctrl chords -- the palette, running a statement, quitting -- work in every mode; Esc then a key typed fast is two keys, as in Vim, not an Alt chord.
+With the Vim keymap (Settings), the editor is modal: Normal, Insert, Visual (`v`) and Visual-line (`V`), with the mode on the status line and a block cursor outside Insert. Normal mode takes counts and the motions `h j k l w b e 0 ^ $ gg G`; the operators `d c y` with a motion, or doubled for lines (`dd yy cc`); `x p P u` and Ctrl+R; `i a I A o O` into Insert; `.` to repeat the last change; `/` to search, `n` and `N` for the next and previous match; `:s/old/new/[g]` on the line, `:%s` on the document; `:w`, `:q`, `:wq`, `:x` (which writes only what changed) and `:<line>`. The text objects `iw` and `aw` work after an operator (`diw`, `ciw`) and in Visual mode, where `X`, `D`, `C` and `Y` take whole lines. Every change, an Insert session included, is one undo step, and a count on `.` replaces the change's own. Ctrl chords -- the palette, running a statement, quitting -- work in every mode; Esc then a key typed fast is two keys, as in Vim, not an Alt chord. Another layout changes the keys Vim reads with a `[vim]` section in `keymap.toml` (see Keymap overlay).
 
 ## Results
 
@@ -101,14 +116,13 @@ For any other object, `i` opens the inspector: its properties, what the connecte
 
 ## Agents
 
-Agents (`Ctrl+G a`, or `Ctrl+Alt+A`) has four views, switched with `1`-`4` or `[` and `]`:
+Agents (`Ctrl+G a`, or `Ctrl+Alt+A`) has three views, switched with `1`-`3` or `[` and `]`:
 
-- **Approvals** lists the writes MCP agents are waiting to make under grants that ask before each write, oldest first, each with what it would do. The picked one is shown as fields -- profile, tool, connection, target, when it was asked and the time it has left -- over its statement in colour. `[a Approve]` asks a second time -- Cancel holds the focus, so an Enter out of habit decides nothing -- and `[d Deny]` refuses; PgUp and PgDn read a long statement, the question open or not. A request decided elsewhere or out of time closes its confirmation and settles nothing, and a write is approved only while its agent still waits for the answer. `[R Revoke all grants]` revokes every grant, which denies their waiting requests too.
+- **Approvals** lists the writes MCP agents are waiting to make, oldest first, each with the time it has left, who asks and what it would do in words -- `update a row in app.public.orders`. The picked one is shown as fields -- profile, what it wants, connection, tables, when it was asked and the time it has left -- over its statement in colour. `[a Approve]` asks once more with Approve focused, so it is `a` then Enter; `[d Deny]` refuses at once. PgUp and PgDn read a long statement, the question open or not. A request decided elsewhere or out of time closes its confirmation and settles nothing, and a write is approved only while its agent still waits for the answer. With nothing waiting, it says which profiles may ask, and for how long.
 - **Activity** is the audit log as a table -- outcome (`✓` ok, `✗` failed, `⊘` refused), time, profile, tool, target, duration and rows -- newest first. `/` searches it, `p` keeps one profile's calls and `o` one outcome; the picked call is shown in full under it.
-- **Profiles** lists the MCP profiles -- enabled or not, how many connections, whether they read SQL, their grants -- beside the picked one's fields and grants. `[e Enable]` or `[e Disable]`; `[c Connections…]` checks the connections it may use (Space checks, Enter saves, Esc keeps them as they were); `[q Read SQL on]` or `off` lets it run read-only SQL or not; `[g Grant…]` makes a grant in that pane, with an "ask before each write" switch; `[r Revoke grants]` revokes its grants and `[x Delete]` deletes it. `[n New]` makes one in Setup.
-- **Setup** points an agent at Dexo: Claude Code, Codex, Cursor, Claude Desktop, Gemini CLI, Windsurf and VS Code are listed as set up and with which profile, found on this machine -- its command on PATH, or its config's folder there -- or not found. The picked one shows its status, the file Setup writes and whether it exists, and its skill file, over the form: a new profile -- its name, the saved Postgres and MySQL connections it may use, and whether it may run read-only SQL -- or one already made, and whether to write the skill file. Enter takes the form; what a row is for is on the status line. `[s Set up]` makes the profile, enables it, and merges Dexo's entry into the agent's file, the old file kept beside it, and lists what it did and what is left: restarting the agent. `[y Copy command]` copies the agent's own command for the same thing, for Claude Code, Codex and Gemini CLI. With no profile yet, Agents opens here, and the palette's Set Up an Agent (MCP)… comes here too.
+- **Profiles** lists the MCP profiles -- enabled or not, the agents that use each, whether it may write -- beside the picked one on one page: its state, what it reads and what it sees, then its connections, each with what it may write there and for how long, and the agents that start Dexo with it. Tab or Right moves into the page, where Up and Down walk its connections and agents and Esc goes back. `[e Enable]` or `[e Disable]`, `[⏎ Edit]` and `[x Delete]` act on the profile; on a connection, `w` opens Writes -- what it may change (rows, the schema, sessions) and for how long -- and `r` takes its writes back at once; on an agent, `a` sets it up again and `y` copies its own command. `[n New]` makes a profile and connects its agent in one form; `a` connects another agent -- Claude Code, Codex, Cursor, Claude Desktop, Gemini CLI, Windsurf or VS Code, those on this machine first -- writing its config with the old file kept beside it. Edit changes the connections it may use, whether it reads SQL, and what it sees: everything, everything except the tables checked, or only those. `[R Stop all writes]` takes every profile's writes back, after asking. With no profile yet, Agents opens here, and the palette's Set Up an Agent (MCP)… comes here too.
 
-A write that starts waiting while you are elsewhere puts its count beside Agents on the top line and says so once. Grants are also made with `dexo mcp grant create`; see [MCP](mcp.md).
+A write that starts waiting while you are elsewhere puts its count beside Agents on the top line and says so once. Write access is also given with `dexo mcp grant create`; see [MCP](mcp.md).
 
 ## Server
 

@@ -103,6 +103,28 @@ impl<'a> CatalogCache<'a> {
         self.load_snapshot(&snapshot_id)
     }
 
+    /// The newest complete snapshot of `connection_id`, whichever database it read, with
+    /// that database's name: what Dexo last saw there, while it is not connected.
+    pub fn load_latest_for_connection(
+        &self,
+        connection_id: &str,
+    ) -> anyhow::Result<Option<(String, Vec<CatalogObject>)>> {
+        let latest: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, database_name FROM catalog_snapshots
+                 WHERE connection_id = ?1 AND complete = 1
+                 ORDER BY created_at DESC LIMIT 1",
+                params![connection_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match latest {
+            Some((id, database)) => Ok(Some((database, self.load_snapshot(&id)?))),
+            None => Ok(None),
+        }
+    }
+
     pub fn load_latest_any(&self) -> anyhow::Result<Vec<CatalogObject>> {
         let snapshot_id: Option<String> = self
             .conn
@@ -277,6 +299,9 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+        let (database, objects) = cache.load_latest_for_connection("c1").unwrap().unwrap();
+        assert_eq!((database.as_str(), objects.len()), ("db", 1));
+        assert!(cache.load_latest_for_connection("c2").unwrap().is_none());
     }
 
     #[test]

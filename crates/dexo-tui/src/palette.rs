@@ -296,6 +296,7 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("backup", "Backup"),
     ("project", "Project"),
     ("mcp", "MCP"),
+    ("plugins", "Plugins"),
     ("recovery", "Recovery"),
     ("settings", "Settings"),
     ("layout", "Layout"),
@@ -713,8 +714,8 @@ mod tests {
     fn palette_exposes_only_curated_commands() {
         let entries = palette_entries(&Model::default());
         let ids: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
-        assert_eq!(entries.len(), 160);
-        assert_eq!(ids.len(), 160);
+        assert_eq!(entries.len(), 163);
+        assert_eq!(ids.len(), 163);
     }
 
     #[test]

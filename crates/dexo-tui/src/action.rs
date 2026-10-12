@@ -8,6 +8,23 @@ use std::sync::Arc;
 use crate::runtime::{OperationId, OperationKey, SessionId};
 use crate::screens::transfer::TransferMode;
 
+/// Where `Action::EditorMove` takes the cursor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EditorMotion {
+    Left,
+    Right,
+    Up,
+    Down,
+    WordLeft,
+    WordRight,
+    LineStart,
+    LineEnd,
+    DocumentStart,
+    DocumentEnd,
+    PageUp,
+    PageDown,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Key(KeyEvent),
@@ -500,29 +517,22 @@ pub enum Action {
     RunExplainAnalyze,
     OpenAdmin,
     OpenMcpProfiles,
-    /// Agents' Setup view: an agent pointed at Dexo's MCP server.
-    OpenMcpSetup,
+    /// An agent pointed at Dexo's MCP server: Connect agent on the picked profile, or New
+    /// profile when there is none.
+    OpenMcpAgentForm,
     ToggleMcpProfile,
     RevokeAllMcpGrants,
-    RevokeProfileGrants,
     McpGrantsRevoked {
         count: usize,
     },
-    /// What saving a profile's access came to.
-    McpProfileSaved {
+    McpStatus {
         message: String,
     },
-    McpRevokeFailed {
-        message: String,
-    },
-    /// `g` in MCP Profiles: a new grant for the selected profile.
-    OpenMcpGrantForm,
-    /// The grant was made: what to say about it.
-    McpGrantCreated {
-        message: String,
-    },
-    McpGrantFailed {
-        message: String,
+    /// Writes for the picked profile.
+    OpenMcpWritesForm,
+    /// What one of Profiles' forms came to: what was done, line by line, or why not.
+    McpFormDone {
+        result: Result<Vec<String>, String>,
     },
     OpenSettings,
     ConfirmResetSettings,
@@ -588,6 +598,15 @@ pub enum Action {
         replace: bool,
     },
     EditorRedo,
+    /// A motion of the plain editor, for a keymap that moves without the arrows: the
+    /// Emacs profile's Ctrl+N, Ctrl+P and the rest.
+    EditorMove(EditorMotion),
+    /// The character after the cursor, or with `word` the word.
+    EditorDeleteForward {
+        word: bool,
+    },
+    /// Emacs's Ctrl+K: to the end of the line, or at the end the line break.
+    EditorKillLine,
     EditorSelectAll,
     AcceptCompletion,
     InsertSnippet,
@@ -595,6 +614,26 @@ pub enum Action {
     SearchHistory,
     ClearHistory,
     HistoryLoaded(Vec<dexo_storage::HistoryRow>),
+    /// The Plugins screen's state, read off the disk and the index.
+    PluginsLoaded(crate::screens::plugins::PluginsSnapshot),
+    /// The Plugins screen on `view`, the index fetched again when `refresh`.
+    ShowPlugins {
+        view: crate::screens::plugins::PluginsView,
+        refresh: bool,
+    },
+    /// The plugin download under way read `done` bytes of `total`.
+    PluginProgress {
+        done: u64,
+        total: Option<u64>,
+    },
+    /// An install, update, removal or switch ended: what to say, or why it failed.
+    PluginWorkDone(Result<String, String>),
+    /// A package from a file was read: what the trust prompt shows, or why it was refused.
+    PluginFileStaged(Result<crate::screens::plugins::StagedInfo, String>),
+    /// The theme pack's first theme becomes the one in use.
+    ApplyPluginTheme {
+        id: String,
+    },
     HistoryPick,
     SnippetsLoaded(Vec<dexo_sql::Snippet>),
     SnippetPick,
@@ -670,15 +709,17 @@ pub enum Action {
     McpProfilesLoaded {
         profiles: Vec<crate::screens::mcp_profiles::McpProfileSummary>,
     },
+    /// A connection's tables for a profile's form, each as its selector; `None`, Dexo never
+    /// read its catalog.
+    ProfileTablesLoaded {
+        connection: String,
+        tables: Option<Vec<String>>,
+    },
     /// What each agent's config says of Dexo, and what an entry would run.
     McpClientsLoaded {
-        clients: Vec<crate::screens::mcp_setup::ClientRow>,
+        clients: Vec<crate::screens::mcp_clients::ClientRow>,
         command: String,
         project: String,
-    },
-    /// What Set up wrote, or why it could not.
-    McpClientSetUp {
-        result: Result<Vec<String>, String>,
     },
     McpAuditLoaded {
         events: Vec<crate::screens::mcp_audit::AuditLine>,
@@ -940,6 +981,8 @@ pub enum Effect {
     SettleApproval {
         id: uuid::Uuid,
         approve: bool,
+        /// Approving also lets what it asked about run without asking from now on.
+        stop_asking: bool,
     },
     /// Whether any agent's write waits for approval, for a toast.
     CheckApprovals,
@@ -1123,12 +1166,22 @@ pub enum Effect {
         target: String,
     },
     LoadMcpProfiles,
+    /// Reads a connection's tables, as Dexo last read its catalog, for a profile's form.
+    LoadProfileTables {
+        connection: String,
+        postgres: bool,
+    },
     /// Reads each agent's config for Dexo's entry.
     LoadMcpClients,
-    /// Makes or enables the profile, then writes the agent's config.
-    SetUpMcpClient {
+    /// Writes an agent's skill file again, for `profile` as it is now.
+    RefreshMcpSkill {
         client: dexo_app::mcp::clients::McpClient,
-        profile: crate::screens::mcp_setup::SetupProfile,
+        profile: String,
+    },
+    /// Writes an agent's config to start Dexo with `profile`, enabling it.
+    ConnectMcpAgent {
+        client: dexo_app::mcp::clients::McpClient,
+        profile: String,
         skill: bool,
     },
     LoadConnectionProfiles,
@@ -1137,19 +1190,18 @@ pub enum Effect {
         name: String,
         enabled: bool,
     },
-    /// A profile's connections, or whether it reads SQL, changed; what is `None` stays.
-    SaveMcpProfileAccess {
-        name: String,
-        connections: Option<Vec<String>>,
-        reads: Option<bool>,
-    },
+    /// New profile or Edit, saved: the profile, and the agent's config for a new one.
+    SaveMcpProfile(crate::screens::mcp_profiles::ProfileSave),
     DeleteMcpProfile {
         name: String,
     },
-    RevokeMcpGrants {
+    /// Takes back a profile's writes on one connection.
+    RevokeMcpWrites {
         profile: String,
+        connection: String,
     },
     RevokeAllMcpGrants,
+    /// Writes, saved: in place of what the profile had on that connection.
     CreateMcpGrant {
         profile: String,
         request: dexo_app::mcp::GrantRequest,
@@ -1162,6 +1214,36 @@ pub enum Effect {
     LoadSnippets,
     CheckpointRecovery(RecoveryCheckpointRequest),
     PersistHistory(PersistHistoryRequest),
+    /// The Plugins screen's state; the index the cache within the day unless `refresh`.
+    LoadPlugins {
+        refresh: bool,
+    },
+    /// Install plugin `id` from the index, or update it.
+    InstallPlugin {
+        id: String,
+        upgrade: bool,
+    },
+    /// Read a package from a file or folder for the trust prompt.
+    StagePluginFile {
+        path: String,
+    },
+    /// Install the package read under `token`: the person trusted it.
+    CommitPluginFile {
+        token: u64,
+    },
+    /// Forget the package read under `token`.
+    DropPluginFile {
+        token: u64,
+    },
+    RemovePlugin {
+        id: String,
+    },
+    SetPluginEnabled {
+        id: String,
+        enabled: bool,
+    },
+    /// Stop the plugin download under way.
+    CancelPluginWork,
     LoadHistory {
         connection_id: Option<String>,
     },

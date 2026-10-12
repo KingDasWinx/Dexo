@@ -18,6 +18,8 @@ pub struct FakeSession {
     keys: Vec<ColumnKeyInfo>,
     catalog: Vec<CatalogObject>,
     hang: bool,
+    fail_on: Option<String>,
+    answers: Vec<(String, Vec<Vec<DbValue>>)>,
 }
 
 impl FakeSession {
@@ -35,6 +37,18 @@ impl FakeSession {
             hang: true,
             ..Self::default()
         }
+    }
+
+    /// `execute` answers a statement holding `fragment` with `rows` instead.
+    pub fn answering(mut self, fragment: &str, rows: Vec<Vec<DbValue>>) -> Self {
+        self.answers.push((fragment.into(), rows));
+        self
+    }
+
+    /// `execute` refuses a statement holding `fragment`, as a server refusing it.
+    pub fn failing_on(mut self, fragment: &str) -> Self {
+        self.fail_on = Some(fragment.into());
+        self
     }
 
     pub fn with_keys(mut self, keys: Vec<ColumnKeyInfo>) -> Self {
@@ -78,7 +92,18 @@ impl Session for FakeSession {
 
     async fn execute(&self, request: QueryRequest) -> Result<QueryStream, DriverError> {
         self.record(format!("execute {}", request.sql));
-        if self.hang {
+        if self
+            .fail_on
+            .as_deref()
+            .is_some_and(|fragment| request.sql.contains(fragment))
+        {
+            return Err(DriverError::new(
+                dexo_driver_api::DriverErrorCategory::Conflict,
+                "duplicate key value violates a unique constraint",
+            ));
+        }
+        // A session setting answers; the query after it is the one that hangs.
+        if self.hang && !request.sql.starts_with("SET ") {
             return Ok(Box::pin(futures_util::stream::pending::<
                 Result<QueryEvent, DriverError>,
             >()));
@@ -88,13 +113,18 @@ impl Session for FakeSession {
         } else {
             request.row_limit as usize
         };
+        let rows = self
+            .answers
+            .iter()
+            .find(|(fragment, _)| request.sql.contains(fragment.as_str()))
+            .map_or(&self.rows, |(_, rows)| rows);
         let events = vec![
             Ok(QueryEvent::Columns(self.column_meta())),
             Ok(QueryEvent::Rows(RowBatch {
-                rows: self.rows.iter().take(limit).cloned().collect(),
+                rows: rows.iter().take(limit).cloned().collect(),
             })),
             Ok(QueryEvent::Finished {
-                rows_affected: Some(self.rows.len() as u64),
+                rows_affected: Some(rows.len() as u64),
             }),
         ];
         Ok(Box::pin(futures_util::stream::iter(events)))

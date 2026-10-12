@@ -20,6 +20,9 @@ const COMMAND_IDS: &[&str] = &[
     "screen.server",
     "screen.compare",
     "screen.history",
+    "screen.plugins",
+    "plugins.install",
+    "plugins.check",
     "screen.previous",
     "screen.list",
     "screen.detail",
@@ -183,6 +186,21 @@ const COMMAND_IDS: &[&str] = &[
     "editor.copy",
     "editor.cut",
     "editor.paste",
+    "editor.left",
+    "editor.right",
+    "editor.up",
+    "editor.down",
+    "editor.word_left",
+    "editor.word_right",
+    "editor.line_start",
+    "editor.line_end",
+    "editor.document_start",
+    "editor.document_end",
+    "editor.page_up",
+    "editor.page_down",
+    "editor.delete_forward",
+    "editor.delete_word_forward",
+    "editor.kill_line",
     "editor.accept_completion",
     "editor.snippet",
     "editor.parameters",
@@ -259,8 +277,8 @@ fn registry_contains_each_command_exactly_once() {
     let specs = dexo_tui::palette::command_specs();
     let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
-    assert_eq!(specs.len(), 188);
-    assert_eq!(actual.len(), 188, "duplicate command id");
+    assert_eq!(specs.len(), 206);
+    assert_eq!(actual.len(), 206, "duplicate command id");
     assert_eq!(actual, expected);
 }
 
@@ -269,7 +287,7 @@ fn registry_contains_each_command_exactly_once() {
 #[test]
 fn palette_shows_only_the_curated_subset() {
     let visible = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
-    assert_eq!(visible.len(), 160);
+    assert_eq!(visible.len(), 163);
 }
 
 /// A category with no display name falls back to the raw prefix, which looks like a

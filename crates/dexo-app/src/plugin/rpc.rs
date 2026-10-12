@@ -1,0 +1,270 @@
+//! The host's end of the plugin protocol: requests out, replies matched back to them by
+//! id. Two threads of its own carry the lines, so no async runtime has to outlive the
+//! plugin -- the CLI's runtimes come and go.
+
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use dexo_plugin_protocol::{
+    self as protocol, CancelRequest, Cursor, Request, Response, RpcError, code, method,
+};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use tokio::sync::oneshot;
+
+use super::lock;
+
+/// Why the conversation ended.
+#[derive(Clone, Debug)]
+pub struct Closed {
+    pub why: String,
+    /// The plugin broke the protocol, rather than going away.
+    pub violation: bool,
+}
+
+#[derive(Debug)]
+pub enum CallError {
+    /// The plugin answered with an error.
+    Remote(RpcError),
+    /// The conversation is over.
+    Closed(Closed),
+    TimedOut,
+}
+
+type Reply = Result<Value, CallError>;
+
+/// What the reading thread and the client share.
+struct Shared {
+    next: AtomicU64,
+    pending: Mutex<HashMap<u64, oneshot::Sender<Reply>>>,
+    closed: Mutex<Option<Closed>>,
+    out: Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>,
+    /// The `query/execute` calls given up on: a cursor answered after that is closed,
+    /// or the plugin keeps it until the session ends. An id whose work the plugin
+    /// dropped stays, eight bytes, until the plugin stops.
+    abandoned: Mutex<HashSet<u64>>,
+}
+
+impl Shared {
+    fn send(&self, line: Vec<u8>) -> bool {
+        lock(&self.out)
+            .as_ref()
+            .is_some_and(|out| out.send(line).is_ok())
+    }
+
+    fn notify(&self, method: &str, params: impl Serialize) {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        if let Ok(line) = encode(id, method, params) {
+            self.send(line);
+        }
+    }
+
+    /// Ends the conversation: every call waiting fails, and so does every later one.
+    /// The first reason given stays.
+    fn shut(&self, closed: Closed) {
+        let mut slot = lock(&self.closed);
+        let closed = slot.get_or_insert(closed).clone();
+        for (_, waiting) in lock(&self.pending).drain() {
+            let _ = waiting.send(Err(CallError::Closed(closed.clone())));
+        }
+    }
+}
+
+pub struct RpcClient {
+    shared: Arc<Shared>,
+}
+
+impl RpcClient {
+    pub fn start(
+        reader: impl Read + Send + 'static,
+        writer: impl Write + Send + 'static,
+    ) -> Arc<Self> {
+        let (out, lines) = std::sync::mpsc::channel::<Vec<u8>>();
+        let shared = Arc::new(Shared {
+            next: AtomicU64::new(1),
+            pending: Mutex::default(),
+            closed: Mutex::default(),
+            out: Mutex::new(Some(out)),
+            abandoned: Mutex::default(),
+        });
+        std::thread::spawn(move || {
+            let mut writer = writer;
+            for line in lines {
+                if writer
+                    .write_all(&line)
+                    .and_then(|()| writer.flush())
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let reading = shared.clone();
+        std::thread::spawn(move || read_replies(BufReader::new(reader), &reading));
+        Arc::new(Self { shared })
+    }
+
+    pub async fn call<R: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: impl Serialize,
+        timeout: Option<Duration>,
+    ) -> Result<R, CallError> {
+        let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
+        let line = encode(id, method, params)?;
+        let (sender, receiver) = oneshot::channel();
+        {
+            // Under the closed lock: a shutdown cannot slip in between the check and
+            // the insert and leave this call waiting for good.
+            let closed = lock(&self.shared.closed);
+            if let Some(closed) = closed.as_ref() {
+                return Err(CallError::Closed(closed.clone()));
+            }
+            lock(&self.shared.pending).insert(id, sender);
+        }
+        if !self.shared.send(line) {
+            self.close(Closed {
+                why: "it exited".into(),
+                violation: false,
+            });
+        }
+        let mut waiting = Waiting {
+            client: self,
+            id,
+            execute: method == method::QUERY_EXECUTE,
+            answered: false,
+        };
+        let reply = match timeout {
+            None => receiver.await,
+            Some(limit) => match tokio::time::timeout(limit, receiver).await {
+                Ok(reply) => reply,
+                Err(_) => return Err(CallError::TimedOut),
+            },
+        };
+        waiting.answered = true;
+        let value = reply.map_err(|_| {
+            CallError::Closed(Closed {
+                why: "it exited".into(),
+                violation: false,
+            })
+        })??;
+        serde_json::from_value(value).map_err(|error| {
+            CallError::Remote(RpcError::new(
+                code::INTERNAL,
+                format!("an answer this Dexo cannot read: {error}"),
+            ))
+        })
+    }
+
+    /// Sends a request whose answer nobody waits for: what a dropped result or session
+    /// sends on its way out, outside any runtime.
+    pub fn notify(&self, method: &str, params: impl Serialize) {
+        self.shared.notify(method, params);
+    }
+
+    /// Ends the conversation. Waiting calls fail with `closed`, and the plugin's stdin
+    /// closes, which a plugin takes as the time to exit.
+    pub fn close(&self, closed: Closed) {
+        self.shared.shut(closed);
+        lock(&self.shared.out).take();
+    }
+
+    pub fn closed(&self) -> Option<Closed> {
+        lock(&self.shared.closed).clone()
+    }
+}
+
+/// A call being waited for. Given up on -- timed out, or its future dropped -- it tells
+/// the plugin, which drops the work: a built-in driver's work stops with its future.
+struct Waiting<'a> {
+    client: &'a RpcClient,
+    id: u64,
+    execute: bool,
+    answered: bool,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        if !self.answered {
+            let shared = &self.client.shared;
+            if self.execute {
+                lock(&shared.abandoned).insert(self.id);
+            }
+            lock(&shared.pending).remove(&self.id);
+            self.client
+                .notify(method::CANCEL_REQUEST, CancelRequest { id: self.id });
+        }
+    }
+}
+
+fn read_replies(mut reader: impl BufRead, shared: &Shared) {
+    let mut line = Vec::new();
+    let closed = loop {
+        match protocol::read_line(&mut reader, &mut line) {
+            Ok(false) => {
+                break Closed {
+                    why: "it exited".into(),
+                    violation: false,
+                };
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                break Closed {
+                    why: format!("it broke the protocol: {error}"),
+                    violation: true,
+                };
+            }
+            Err(error) => {
+                break Closed {
+                    why: format!("its output could not be read: {error}"),
+                    violation: false,
+                };
+            }
+            Ok(true) if line.is_empty() => {}
+            Ok(true) => match serde_json::from_slice::<Response>(&line) {
+                Ok(response) => {
+                    let waiting = lock(&shared.pending).remove(&response.id);
+                    if let Some(waiting) = waiting {
+                        let _ = waiting.send(match response.error {
+                            Some(error) => Err(CallError::Remote(error)),
+                            None => Ok(response.result.unwrap_or(Value::Null)),
+                        });
+                    } else if lock(&shared.abandoned).remove(&response.id)
+                        && let Some(cursor) = response
+                            .result
+                            .as_ref()
+                            .and_then(|result| result.get("cursor"))
+                            .and_then(Value::as_str)
+                    {
+                        shared.notify(
+                            method::QUERY_CLOSE,
+                            Cursor {
+                                cursor: cursor.to_string(),
+                            },
+                        );
+                    }
+                }
+                Err(_) => {
+                    break Closed {
+                        why: "it wrote something that is not the plugin protocol".into(),
+                        violation: true,
+                    };
+                }
+            },
+        }
+    };
+    shared.shut(closed);
+}
+
+fn encode(id: u64, method: &str, params: impl Serialize) -> Result<Vec<u8>, CallError> {
+    let internal = |error: serde_json::Error| {
+        CallError::Remote(RpcError::new(code::INTERNAL, error.to_string()))
+    };
+    let request = Request::new(id, method, params).map_err(internal)?;
+    let mut line = serde_json::to_vec(&request).map_err(internal)?;
+    line.push(b'\n');
+    Ok(line)
+}

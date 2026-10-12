@@ -1,4 +1,5 @@
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Capability {
     Catalog,
     Query,
@@ -15,10 +16,11 @@ pub enum Capability {
     Backup,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CapabilityState {
     pub capability: Capability,
     pub available: bool,
+    #[serde(default)]
     reason: Option<String>,
 }
 

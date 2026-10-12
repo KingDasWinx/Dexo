@@ -250,5 +250,5 @@ fn the_header_lists_compare_only_while_on_it() {
     let mut model = compared();
     let frame = paint(&mut model);
     let header = frame.lines().next().unwrap_or_default();
-    assert!(header.contains("History [Compare]"), "{header}");
+    assert!(header.contains("Plugins [Compare]"), "{header}");
 }

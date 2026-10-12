@@ -41,6 +41,17 @@ jobs:
         env:
           DEXO_IT_IMAGE: ${{ matrix.image }}
 
+  duckdb-plugin:
+    name: duckdb through its plugin executable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: 1.93.1
+      - name: DuckDB's contract through the plugin
+        run: cargo test -p dexo-driver-duckdb --test through_plugin --test manifest
+
   live:
     name: live ${{ matrix.suite }}
     runs-on: ubuntu-latest

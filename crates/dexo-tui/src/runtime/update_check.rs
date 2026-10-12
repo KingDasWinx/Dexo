@@ -11,23 +11,40 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// The response is a redirect with no body; anything this large is not the answer.
 const MAX_RESPONSE: usize = 16 * 1024;
 
-/// Looks for a newer release in the background and reports one as an action. Off
-/// when the user turned it off, or when `DEXO_NO_UPDATE_CHECK` is set (scripts, CI).
-/// Every failure is silent: being offline is not the user's problem to read about.
+/// Looks for a newer release in the background and reports one as an action, then
+/// reads the plugin index -- the cache within the day -- for the plugins' updates and
+/// the drivers the connection form offers. Off when the user turned it off, or when
+/// `DEXO_NO_UPDATE_CHECK` is set (scripts, CI). Every failure is silent: being offline
+/// is not the user's problem to read about.
 pub fn spawn(data_dir: PathBuf, action_tx: tokio::sync::mpsc::Sender<Action>) {
     tokio::spawn(async move {
+        if !allowed(&data_dir) {
+            return;
+        }
         if let Some(action) = check(&data_dir).await {
             let _ = action_tx.send(action).await;
+        }
+        let plugins = tokio::task::spawn_blocking(move || {
+            crate::runtime::plugin_manager::snapshot(
+                &data_dir,
+                &dexo_app::plugin::index::IndexSource::from_env(),
+                false,
+            )
+        })
+        .await;
+        if let Ok(snapshot) = plugins {
+            let _ = action_tx.send(Action::PluginsLoaded(snapshot)).await;
         }
     });
 }
 
+/// Off when the user turned it off, or when `DEXO_NO_UPDATE_CHECK` is set.
+fn allowed(data_dir: &Path) -> bool {
+    std::env::var_os("DEXO_NO_UPDATE_CHECK").is_none()
+        && dexo_app::settings::load_settings(data_dir).update_check
+}
+
 async fn check(data_dir: &Path) -> Option<Action> {
-    if std::env::var_os("DEXO_NO_UPDATE_CHECK").is_some()
-        || !dexo_app::settings::load_settings(data_dir).update_check
-    {
-        return None;
-    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?

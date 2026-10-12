@@ -1,0 +1,27 @@
+[package]
+name = "dexo-plugin-testbin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+async-trait.workspace = true
+dexo-driver-api = { path = "../dexo-driver-api" }
+dexo-driver-sqlite = { path = "../dexo-driver-sqlite" }
+dexo-plugin-protocol = { path = "../dexo-plugin-protocol" }
+dexo-plugin-sdk = { path = "../dexo-plugin-sdk" }
+serde_json.workspace = true
+
+[dev-dependencies]
+dexo-app = { path = "../dexo-app" }
+dexo-test-support = { path = "../dexo-test-support" }
+futures-util = "0.3"
+secrecy.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

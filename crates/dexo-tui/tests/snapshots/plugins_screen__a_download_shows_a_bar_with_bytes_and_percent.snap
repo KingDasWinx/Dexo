@@ -1,0 +1,34 @@
+---
+source: crates/dexo-tui/tests/plugins_screen.rs
+expression: shown
+---
+ Workbench  Connections  Agents  Server  History [Plugins 1]  default  no connection  —                                 
+[1 Installed]  2 Available  / search                        [t Type: all]                                               
+┌▸ Installed (2)─────────────────────────────────┐┌  DuckDB────────────────────────────────────────────────────────────┐
+│ [r Refresh]  [f Install from file…]            ││ [u Update to 1.1.0]  [e Disable]  [x Remove…]                      │
+│                                                ││                                                                    │
+│> ↑ DuckDB  driver  1.0.0                       ││ kind       driver                                                  │
+│  ○ Mine    theme   0.1.0  local                ││ installed  1.0.0                                                   │
+│                                                ││ newest     1.1.0                                                   │
+│                                                ││ author     KingDasWinx                                             │
+│                                                ││ license    MIT                                                     │
+│                                                ││ requires   Dexo 1.5.0 or newer                                     │
+│                                                ││ protocol   1                                                       │
+│                                                ││ download   26.5 MB                                                 │
+│                                                ││ origin     official, signed                                        │
+│                                                ││ drivers    duckdb                                                  │
+│                                                ││                                                                    │
+│                                                ││ The DuckDB plugin                                                  │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││                                                                    │
+│                                                ││Updating duckdb [█████░░░░░] 13.2 MB of 26.5 MB · 50%               │
+└────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────┘
+Plugins  Esc cancels the download                                                                             Ctrl+P  F1
